@@ -48,3 +48,4 @@ Scanning runs via Vercel cron (`/api/scan` every 15 min) or the dashboard's **Sc
 - `/api/ask-ai` — Gemini chart read from a browser-captured screenshot
 - `/api/vision/validate` — rendering QA: Gemini verifies drawn overlays match engine coordinates
 - `/api/telegram/test` — POST a wiring-test message
+# dts
