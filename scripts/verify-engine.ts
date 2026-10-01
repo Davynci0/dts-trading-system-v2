@@ -1,0 +1,420 @@
+/**
+ * Stage 4–6 + 9 verification: deterministic synthetic-chart tests.
+ * Run: npx tsx scripts/verify-engine.ts
+ */
+import type { Candle } from "../lib/types";
+import { detectPivots, significantPivots } from "../lib/analysis/pivots";
+import { atr } from "../lib/analysis/indicators";
+import { detectZones, detectZoneEntry, ZONE_ENTRY_WINDOW } from "../lib/analysis/zones";
+import { detectTrendlines, trendlineTouch, lineValueAt, lineValueAtTime } from "../lib/analysis/trendlines";
+import { classifyStructure, detectStructureEvent } from "../lib/analysis/structure";
+import { findFibSetup, inGoldenZone } from "../lib/analysis/fibonacci";
+import { findSetForgetSetup, setForgetEntry } from "../lib/analysis/setForget";
+import { scoreSetup, type ScoringContext } from "../lib/analysis/scoring";
+import { runBacktest } from "../lib/backtest/engine";
+import { analyzeTopDown, topDownAgrees } from "../lib/analysis/topDown";
+
+function mk(i: number, o: number, h: number, l: number, c: number): Candle {
+  return { time: 1_700_000_000 + i * 900, open: o, high: h, low: l, close: c, volume: 1 };
+}
+
+let failures = 0;
+function check(name: string, cond: boolean, detail: string) {
+  console.log(`${cond ? "PASS" : "FAIL"}  ${name}  (${detail})`);
+  if (!cond) failures++;
+}
+
+// ============ Stage 4: zones ============
+// 0-19 flat ~1.1000; 20-21 tight base; 22 bullish impulse; 23-45 away; 46 re-entry; 48 close-through
+const Z: Candle[] = [];
+for (let i = 0; i < 20; i++) Z.push(mk(i, 1.1, 1.1003, 1.0998, 1.1));
+Z.push(mk(20, 1.1, 1.1003, 1.0998, 1.1001));
+Z.push(mk(21, 1.1001, 1.1003, 1.0998, 1.1));
+Z.push(mk(22, 1.1002, 1.1065, 1.1, 1.1062)); // bullish impulse
+for (let i = 23; i <= 45; i++) Z.push(mk(i, 1.1055, 1.1059, 1.1051, 1.1055));
+Z.push(mk(46, 1.105, 1.1052, 1.1002, 1.1008)); // dip into zone (touch)
+Z.push(mk(47, 1.1008, 1.1012, 1.1004, 1.101));
+Z.push(mk(48, 1.101, 1.1011, 1.0994, 1.0995)); // close through bottom → invalidated
+for (let i = 49; i < 60; i++) Z.push(mk(i, 1.0995, 1.0997, 1.0992, 1.0995));
+
+const zones = detectZones(Z);
+const demand = zones.find((z) => z.kind === "demand");
+console.log("\n[zones]", zones.map((z) => `${z.kind} ${z.bottom}-${z.top} touches=${z.touches} active=${z.active}`).join(" | "));
+check("zones: demand zone detected", !!demand, demand ? `${demand.bottom}-${demand.top}` : "none");
+if (demand) {
+  check("zones: box spans base candles", demand.top === 1.1003 && demand.bottom === 1.0998, `${demand.bottom}-${demand.top}`);
+  check("zones: re-entry counted as touch", demand.touches === 1, `touches=${demand.touches}`);
+  check("zones: invalidated on close-through", !demand.active && demand.invalidatedIndex === 48, `inv@${demand.invalidatedIndex}`);
+}
+
+// ============ Stage 5.1: trendlines ============
+// descending resistance through pivot highs (10,1.1100) (25,1.1080) (40,1.1060); touch at last candle
+const anchors: [number, number][] = [
+  [10, 1.11],
+  [25, 1.108],
+  [40, 1.106],
+];
+const slope = (anchors[1][1] - anchors[0][1]) / (anchors[1][0] - anchors[0][0]);
+const lineAt = (i: number) => anchors[0][1] + slope * (i - anchors[0][0]);
+const T: Candle[] = [];
+for (let i = 0; i < 60; i++) {
+  const isAnchor = anchors.find(([ai]) => ai === i);
+  const distNearest = Math.min(...anchors.map(([ai]) => Math.abs(ai - i)));
+  const h = isAnchor ? isAnchor[1] : lineAt(i) - 0.0002 * distNearest;
+  const l = h - 0.0004;
+  T.push(mk(i, l + 0.0001, h, l, l + 0.0001));
+}
+// last candle: high exactly on the extended line → touch
+const lastH = lineAt(59);
+T[59] = mk(59, lastH - 0.0003, lastH, lastH - 0.0004, lastH - 0.0003);
+
+const pivotsT = detectPivots(T);
+const atrT = atr(T)!;
+const lines = detectTrendlines(T, pivotsT, atrT);
+const resistance = lines.find((l) => l.kind === "resistance");
+console.log("\n[trendlines]", lines.map((l) => `${l.kind} touches=${l.touches} anchors=${l.anchors.map((a) => a.index).join(",")}`).join(" | "));
+check("trendlines: resistance line found", !!resistance, resistance ? `${resistance.touches} touches` : "none");
+if (resistance) {
+  check("trendlines: >= 3 touches", resistance.touches >= 3, `${resistance.touches}`);
+  check(
+    "trendlines: line passes through real pivots",
+    resistance.anchors.every((p) => Math.abs(p.price - lineValueAt(resistance, p.index)) < 1e-9),
+    "anchors on line"
+  );
+  const touch = trendlineTouch(T, lines, atrT);
+  check("trendlines: touch trigger fires short", touch?.direction === "short", touch ? touch.direction : "no trigger");
+
+  const narrow = detectTrendlines(T, pivotsT, atrT, false, 50).find((l) => l.kind === "resistance");
+  const wide = detectTrendlines(T, pivotsT, atrT, false, 55).find((l) => l.kind === "resistance");
+  check(
+    "trendlines: origin remains stable when lookback changes",
+    narrow?.origin.index === wide?.origin.index && narrow?.definitionAnchor.index === wide?.definitionAnchor.index,
+    `${narrow?.origin.index ?? "none"}->${narrow?.definitionAnchor.index ?? "none"} / ${wide?.origin.index ?? "none"}->${wide?.definitionAnchor.index ?? "none"}`
+  );
+}
+
+// ============ Top-down: Weekly/Daily bias, H4 action line ============
+const U: Candle[] = [];
+const uptrendPoints: [number, number][] = [
+  [0, 1.01], [5, 1.0], [10, 1.02], [15, 1.005], [20, 1.03], [25, 1.01],
+  [30, 1.04], [35, 1.015], [40, 1.05], [45, 1.02], [50, 1.06], [55, 1.025], [60, 1.07],
+];
+for (let i = 0; i <= 60; i++) {
+  let price = uptrendPoints[0][1];
+  for (let point = 0; point < uptrendPoints.length - 1; point++) {
+    const [x0, y0] = uptrendPoints[point];
+    const [x1, y1] = uptrendPoints[point + 1];
+    if (i >= x0 && i <= x1) {
+      price = y0 + ((y1 - y0) / (x1 - x0)) * (i - x0);
+      break;
+    }
+  }
+  U.push(mk(i, price, price + 0.0002, price - 0.0002, price));
+}
+const topDownU = analyzeTopDown({ weekly: U, daily: U, h4: U });
+const actionU = topDownU.actionLine;
+console.log(
+  "\n[top-down]",
+  `bias=${topDownU.bias} action=${actionU?.kind ?? "none"} origin=${actionU?.origin.index ?? "none"}`
+);
+check("top-down: W/D establishes bullish bias", topDownU.bias === "bullish", topDownU.bias);
+check("top-down: bullish action is H4 support", actionU?.kind === "support", actionU?.kind ?? "none");
+if (actionU) {
+  check("top-down: action begins from true lower low", actionU.origin.index === 5, `origin=${actionU.origin.index}`);
+  check(
+    "top-down: time projection remains straight through defining pivots",
+    Math.abs(lineValueAtTime(actionU, actionU.origin.time) - actionU.origin.price) < 1e-9 &&
+      Math.abs(lineValueAtTime(actionU, actionU.definitionAnchor.time) - actionU.definitionAnchor.price) < 1e-9,
+    `${actionU.origin.index}->${actionU.definitionAnchor.index}`
+  );
+}
+check("top-down: blocks countertrend shorts", !topDownAgrees(topDownU, "short"), "short rejected");
+const opposingH4 = U.map((c, index) =>
+  mk(index, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)
+);
+const topDownOpposed = analyzeTopDown({ weekly: U, daily: U, h4: opposingH4 });
+check(
+  "top-down: blocks a bullish setup while H4 is bearish",
+  !topDownAgrees(topDownOpposed, "long"),
+  `H4=${topDownOpposed.h4}`
+);
+
+// ============ Trendline origin fix: must begin from the TRUE highest high ============
+// An isolated true peak (idx 35, 1.1080) plus an unrelated ascending triple
+// (idx 5/15/25) that also satisfies 3 touches on its own line. The old
+// algorithm picked whichever pair had the most touches, so it could return
+// the ascending triple while ignoring the actual highest high entirely.
+const O: Candle[] = [];
+const originAnchors: [number, number][] = [
+  [0, 1.095], [5, 1.1], [10, 1.095], [15, 1.101], [20, 1.095],
+  [25, 1.102], [30, 1.095], [35, 1.108], [40, 1.095], [45, 1.106],
+  [50, 1.095], [55, 1.104], [60, 1.095],
+];
+for (let i = 0; i <= 60; i++) {
+  let p = 1.095;
+  for (let s = 0; s < originAnchors.length - 1; s++) {
+    const [x0, y0] = originAnchors[s];
+    const [x1, y1] = originAnchors[s + 1];
+    if (i >= x0 && i <= x1) {
+      p = y0 + ((y1 - y0) / (x1 - x0)) * (i - x0);
+      break;
+    }
+  }
+  O.push(mk(i, p, p, p - 0.0003, p));
+}
+const pivotsO = detectPivots(O);
+const atrO = atr(O)!;
+const resistanceO = detectTrendlines(O, pivotsO, atrO).find((l) => l.kind === "resistance");
+console.log(
+  "\n[trendline origin]",
+  resistanceO ? `touches=${resistanceO.touches} anchors=${resistanceO.anchors.map((a) => a.index).join(",")}` : "none"
+);
+check("trendline origin: resistance found", !!resistanceO, resistanceO ? `${resistanceO.touches} touches` : "none");
+if (resistanceO) {
+  check(
+    "trendline origin: includes the true highest high (idx 35, 1.1080)",
+    resistanceO.anchors.some((a) => a.index === 35),
+    resistanceO.anchors.map((a) => a.index).join(",")
+  );
+  check(
+    "trendline origin: rejects the unrelated ascending triple (5,15,25)",
+    !["5", "15", "25"].every((idx) => resistanceO.anchors.some((a) => a.index === Number(idx))),
+    resistanceO.anchors.map((a) => a.index).join(",")
+  );
+}
+
+// ============ Stage 5.2: market structure + BOS ============
+// lows (10,1.1000) (30,1.1020); highs (20,1.1040) (40,1.1060) → uptrend;
+// pullback 41-58 (no new pivots), then the LAST candle (59) closes above the swing high → BOS long
+const S: Candle[] = [];
+const zig: [number, number][] = [
+  [0, 1.101],
+  [10, 1.1],
+  [20, 1.104],
+  [30, 1.102],
+  [40, 1.106],
+];
+for (let i = 0; i < 60; i++) {
+  let p = 1.103;
+  for (let s = 0; s < zig.length - 1; s++) {
+    if (i >= zig[s][0] && i <= zig[s + 1][0]) {
+      const [x0, y0] = zig[s];
+      const [x1, y1] = zig[s + 1];
+      p = y0 + ((y1 - y0) / (x1 - x0)) * (i - x0);
+      break;
+    }
+  }
+  if (i > 40) p = 1.106 - (i - 40) * 0.0001; // mild monotone pullback, no new pivots
+  S.push(mk(i, p - 0.0001, p + 0.0003, p - 0.0003, p));
+}
+// last swing high = candle 40 at 1.1063 (p 1.106 + 0.0003 wick); last candle breaks it
+S[59] = mk(59, 1.1042, 1.1068, 1.1041, 1.1066);
+
+const pivotsS = detectPivots(S);
+const state = classifyStructure(pivotsS);
+const event = detectStructureEvent(S, pivotsS, []);
+console.log("\n[structure] state=%s event=%o", state, event);
+check("structure: uptrend classified (HH+HL)", state === "uptrend", state);
+check("structure: BOS long detected", event?.type === "bos" && event.direction === "long", event ? `${event.type} ${event.direction} @${event.level}` : "none");
+
+// ============ Supply/demand zone strategy ============
+// tight base at 20-21, bullish impulse at 22, price away 23-39, then returns
+// into the zone at 40-42; candle 42 is a bullish pin bar inside the zone
+const D: Candle[] = [];
+for (let i = 0; i < 20; i++) D.push(mk(i, 1.1, 1.1003, 1.0998, 1.1));
+D.push(mk(20, 1.1, 1.1003, 1.0998, 1.1001));
+D.push(mk(21, 1.1001, 1.1003, 1.0998, 1.1));
+D.push(mk(22, 1.1002, 1.1065, 1.1, 1.1062)); // impulse
+for (let i = 23; i <= 39; i++) D.push(mk(i, 1.1055, 1.1059, 1.1051, 1.1055));
+D.push(mk(40, 1.1055, 1.1056, 1.1, 1.1008)); // into the zone
+D.push(mk(41, 1.1008, 1.101, 1.0999, 1.1004)); // still inside
+D.push(mk(42, 1.1004, 1.1009, 1.0995, 1.1007)); // bullish pin bar inside (lower wick 3× body)
+
+const zonesD = detectZones(D);
+const entryD = detectZoneEntry(D, zonesD);
+console.log("\n[zones strategy]", entryD ? `${entryD.direction} zone ${entryD.zone.bottom}-${entryD.zone.top} inside=${entryD.candlesInside} touches=${entryD.zone.touches}` : "no entry");
+check("zones: entry detected on return to demand zone", entryD?.direction === "long", entryD ? `${entryD.direction} inside=${entryD.candlesInside}` : "none");
+if (entryD) {
+  check("zones: visit is fresh (inside ≤ window)", entryD.candlesInside >= 1 && entryD.candlesInside <= ZONE_ENTRY_WINDOW, `inside=${entryD.candlesInside}`);
+
+  const ctxD: ScoringContext = {
+    instrument: "EUR_USD",
+    candles: D,
+    htfCandles: D,
+    pivots: detectPivots(D),
+    atrValue: atr(D)!,
+    zones: zonesD,
+    trendlines: [],
+    structureEvent: null,
+    fib: null,
+  };
+  const scoredD = scoreSetup("zones", ctxD, null);
+  console.log("[zones scoring]", scoredD.count, JSON.stringify(scoredD.confirmations));
+  check("zones: rejection candle detected in zone", scoredD.confirmations["Rejection candle in zone"] === true, "pin bar");
+  check("zones: freshness confirmed (1 touch ≤ 2)", scoredD.confirmations["Zone fresh (few touches)"] === true, `touches=${entryD.zone.touches}`);
+  check("zones: fires at 4/5 without vision", scoredD.fired && scoredD.count === 4, `count=${scoredD.count}`);
+  check("zones: vision adds 5th point", scoreSetup("zones", ctxD, true).count === 5, "5/5 with vision");
+}
+
+// stale visit: price parked inside the zone beyond the entry window → no trigger
+const Dstale = [...D, mk(43, 1.1006, 1.1008, 1.1001, 1.1005), mk(44, 1.1005, 1.1007, 1.1002, 1.1003)];
+check("zones: stale visit lapses (no trigger after 5 candles inside)", detectZoneEntry(Dstale, detectZones(Dstale)) === null, "candlesInside > window");
+
+// ============ Stage 5.3 + 6: fib golden zone + scoring ============
+// swing low (10,1.1000) → swing high (40,1.1100), retrace into golden zone at 55 with pin-bar rejection
+const F: Candle[] = [];
+for (let i = 0; i < 60; i++) {
+  let p: number;
+  if (i <= 10) p = 1.104 - (1.104 - 1.1) * (i / 10);
+  else if (i <= 40) p = 1.1 + 0.01 * ((i - 10) / 30);
+  else p = 1.11 - 0.008 * ((i - 40) / 19); // retrace toward ~1.102
+  F.push(mk(i, p - 0.0001, p + 0.00025, p - 0.00025, p));
+}
+// golden zone: 1.11 - 0.618*0.01 = 1.10382 .. 1.11 - 0.786*0.01 = 1.10214
+// last candle: bullish pin bar inside the zone
+F[59] = mk(59, 1.1038, 1.104, 1.102, 1.1037);
+
+const pivotsF = detectPivots(F);
+const atrF = atr(F)!;
+const fib = findFibSetup(F, pivotsF, atrF);
+console.log("\n[fib]", fib ? `${fib.direction} zone ${fib.goldenBottom.toFixed(5)}-${fib.goldenTop.toFixed(5)}` : "none");
+check("fib: long setup found on the retracement", fib?.direction === "long", fib ? fib.direction : "none");
+if (fib) {
+  // expected bounds from the ACTUAL pivot prices (zig price ± 0.00025 wick):
+  // swing high 1.11025, swing low 1.09975
+  const hi = 1.11025;
+  const lo = 1.09975;
+  check(
+    "fib: golden zone = 61.8-78.6% of swing",
+    Math.abs(fib.goldenTop - (hi - 0.618 * (hi - lo))) < 1e-9 &&
+      Math.abs(fib.goldenBottom - (hi - 0.786 * (hi - lo))) < 1e-9,
+    `${fib.goldenBottom.toFixed(5)}-${fib.goldenTop.toFixed(5)}`
+  );
+  check("fib: last candle inside golden zone", inGoldenZone(F, fib), "inGoldenZone");
+
+  const ctx: ScoringContext = {
+    instrument: "EUR_USD",
+    candles: F,
+    htfCandles: F,
+    pivots: pivotsF,
+    atrValue: atrF,
+    zones: detectZones(F),
+    trendlines: [],
+    structureEvent: null,
+    fib,
+  };
+  const noVision = scoreSetup("fibonacci", ctx, null);
+  console.log("[scoring] fib noVision:", noVision.count, JSON.stringify(noVision.confirmations));
+  check("scoring: trigger present", noVision.hasTrigger, `count=${noVision.count}`);
+  check("scoring: rejection candle detected", noVision.confirmations["Rejection candle in zone"] === true, "pin bar");
+  check("scoring: fires at 3/5 without vision", noVision.fired && noVision.count === 3, `count=${noVision.count}`);
+  const withVision = scoreSetup("fibonacci", ctx, true);
+  check("scoring: vision adds the 5th point (high confidence)", withVision.count === 4, `count=${withVision.count}`);
+  const visionNo = scoreSetup("fibonacci", ctx, false);
+  check("scoring: vision NO does not add a point", visionNo.count === 3, `count=${visionNo.count}`);
+}
+
+// ============ Alex G set & forget: untested AOI first touch ============
+// pivot low(10,1.10) → swing high(20,1.11) → pullback low(28,1.106) →
+// impulse higher high(40,1.12) that BREAKS the 1.11 swing high. AOI = 50–61.8%
+// retrace of the 1.10→1.12 leg = 1.10764–1.11. Price holds above the AOI after
+// the leg until the LAST candle dips in for the first time.
+const G: Candle[] = [];
+const gPts: [number, number][] = [
+  [0, 1.105], [10, 1.1], [20, 1.11], [28, 1.106], [40, 1.12], [55, 1.118],
+];
+for (let i = 0; i <= 55; i++) {
+  let p = 1.105;
+  for (let s = 0; s < gPts.length - 1; s++) {
+    const [x0, y0] = gPts[s];
+    const [x1, y1] = gPts[s + 1];
+    if (i >= x0 && i <= x1) {
+      p = y0 + ((y1 - y0) / (x1 - x0)) * (i - x0);
+      break;
+    }
+  }
+  if (i > 40) p = Math.max(p, 1.1105); // hold above the AOI after the leg
+  G.push(mk(i, p - 0.0001, p + 0.0002, p - 0.0002, p));
+}
+// last candle dips into the AOI (low reaches 1.109) — first touch
+G[55] = mk(55, 1.1105, 1.1108, 1.109, 1.1095);
+
+const pivotsG = detectPivots(G);
+const atrG = atr(G)!;
+const sf = findSetForgetSetup(G, pivotsG, atrG);
+console.log("\n[setforget]", sf ? `${sf.direction} AOI ${sf.aoiBottom.toFixed(5)}-${sf.aoiTop.toFixed(5)} tested=${sf.tested}` : "none");
+check("setforget: long AOI setup found", sf?.direction === "long", sf ? sf.direction : "none");
+if (sf) {
+  // actual pivots carry the ±0.0002 wick: high 1.1204, low 1.0998, range 0.0206
+  // AOI top = 1.1204 - 0.5·0.0206 = 1.1101; bottom = 1.1204 - 0.618·0.0206 = 1.10767
+  check("setforget: AOI is 50–61.8% of the leg", Math.abs(sf.aoiTop - 1.1101) < 1e-4 && Math.abs(sf.aoiBottom - 1.10767) < 1e-4, `${sf.aoiBottom.toFixed(5)}-${sf.aoiTop.toFixed(5)}`);
+  const entry = setForgetEntry(G, sf);
+  check("setforget: first touch fires (untested AOI)", entry?.direction === "long", entry ? "long" : "no entry");
+  // after a visit, the AOI is spent → no trigger
+  const gVisited = [...G, mk(56, 1.1095, 1.11, 1.1092, 1.1098)];
+  const sf2 = findSetForgetSetup(gVisited, detectPivots(gVisited), atr(gVisited)!);
+  check("setforget: spent AOI does not re-trigger", setForgetEntry(gVisited, sf2) === null, "tested");
+}
+
+// ============ Single strategy can fire without top-down veto ============
+// Reuse the zones firing context (3 non-HTF confirmations); a bearish top-down
+// bias must NOT block it — top-down is a confirmation point, not a veto.
+{
+  const bearishTopDown = analyzeTopDown({
+    weekly: D.map((c, i) => mk(i, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)),
+    daily: D.map((c, i) => mk(i, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)),
+    h4: D.map((c, i) => mk(i, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)),
+  });
+  const ctxSolo: ScoringContext = {
+    instrument: "EUR_USD",
+    candles: D,
+    htfCandles: D,
+    pivots: detectPivots(D),
+    atrValue: atr(D)!,
+    zones: detectZones(D),
+    trendlines: [],
+    structureEvent: null,
+    fib: null,
+    topDown: bearishTopDown,
+  };
+  const solo = scoreSetup("zones", ctxSolo, null);
+  check("solo fire: fires despite opposing top-down", solo.fired && solo.count >= 3, `count=${solo.count} topDownAligned=${solo.topDownAligned}`);
+  check("solo fire: topDownAligned false but fired true (no veto)", solo.fired && !solo.topDownAligned, "no veto");
+}
+
+// ============ Stage 9: backtest engine smoke ============
+// seeded sine-wave series with structure; assert no crash + consistent metrics
+let seed = 42;
+const rand = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+const B: Candle[] = [];
+let price = 1.1;
+for (let i = 0; i < 600; i++) {
+  const wave = Math.sin(i / 9) * 0.0007;
+  const noise = (rand() - 0.5) * 0.0003;
+  const next = 1.1 + 0.004 * Math.sin(i / 45) + wave + noise;
+  const h = Math.max(price, next) + 0.0002;
+  const l = Math.min(price, next) - 0.0002;
+  B.push(mk(i, price, h, l, next));
+  price = next;
+}
+const report = runBacktest({ pair: "EUR_USD", timeframe: "M15", candles: B, htfCandles: B });
+const comb = report.scopes.combined;
+console.log("\n[backtest] trades IS=%d OOS=%d", comb.inSample.trades, comb.outOfSample.trades);
+check("backtest: runs without crashing", report.candles === 600, `${report.candles} candles`);
+check("backtest: scopes present", ["combined", "strategy:trendline", "strategy:structure", "strategy:fibonacci"].every((k) => report.scopes[k]), Object.keys(report.scopes).join(","));
+check("backtest: metrics consistent", comb.inSample.wins <= comb.inSample.trades && comb.inSample.confidence3 + comb.inSample.confidence4 <= comb.inSample.trades + 1, "buckets ≤ trades");
+check("backtest: limitation noted", report.limitation.includes("4 non-AI"), "vision exclusion documented");
+
+// ============ significantPivots: zigzag keeps real swings, collapses noise ============
+{
+  const P = (index: number, kind: "high" | "low", price: number) => ({ index, time: 1000 + index, kind, price });
+  const rising = significantPivots([P(20, "low", 1.0955), P(30, "high", 1.104), P(35, "low", 1.099), P(40, "high", 1.115)], 0.002);
+  check("significantPivots: rising structure keeps every swing", rising.map((x) => x.kind).join(",") === "low,high,low,high", rising.map((x) => x.kind).join(","));
+  const noise = significantPivots([P(1, "low", 1.1), P(5, "high", 1.1004), P(9, "low", 1.0999), P(15, "high", 1.12)], 0.002);
+  check("significantPivots: sub-0.5-ATR wiggles collapse", noise.length === 2 && noise[0].price === 1.0999 && noise[1].price === 1.12, noise.map((x) => x.price).join(","));
+  const alt = significantPivots([P(1, "low", 1.09), P(5, "low", 1.085), P(9, "high", 1.1)], 0.002);
+  check("significantPivots: consecutive same-kind pivots keep the extreme", alt.length === 2 && alt[0].price === 1.085, alt.map((x) => x.price).join(","));
+}
+
+console.log(failures === 0 ? "\nALL ENGINE TESTS PASSED" : `\n${failures} TEST(S) FAILED`);
+process.exit(failures === 0 ? 0 : 1);

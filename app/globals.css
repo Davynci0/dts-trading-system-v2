@@ -1,8 +1,9 @@
 @import "tailwindcss";
 
+/* Trading UI is dark-only; no light scheme. */
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #0a0c10;
+  --foreground: #e5e7eb;
 }
 
 @theme inline {
@@ -12,12 +13,6 @@
   --font-mono: var(--font-geist-mono);
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
-  }
-}
 
 body {
   background: var(--background);

@@ -1,36 +1,50 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# DTS — Forex Trading System
 
-## Getting Started
+Signal-only forex system. Three deterministic strategies (trendline bounce, market
+structure, fibonacci golden zone) score a 5-point confirmation checklist; a signal
+fires at 3/5+. Telegram is the single alert channel. The user reviews each signal
+and executes manually — the system never places trades.
 
-First, run the development server:
+**Stack:** Next.js (App Router, single deployable on Vercel) · OANDA v20 (data) ·
+Supabase (auth + persistence) · Telegram Bot API (alerts) · Gemini 3 Flash (vision checks, Stage 7).
+
+## Setup
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.local.example .env.local   # fill in OANDA / Supabase / Telegram / Gemini values
+npm install
+npm run dev                        # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+Run `supabase/schema.sql` in the Supabase SQL editor once to create the tables.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Build order (per project spec)
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+All stages built and verified:
 
-## Learn More
+1. ~~Scaffold, Supabase setup, OANDA data, basic chart, Telegram test message~~ ✅
+2. ~~Dashboard UI, signal feed UI, backtest results UI~~ ✅
+3. ~~Structure-based stop/TP + risk sanity check~~ ✅ (`lib/analysis/`, verify: `npx tsx scripts/verify-risk.ts`)
+4. ~~Zone-box detection and invalidation~~ ✅ (`lib/analysis/zones.ts`)
+5. ~~Strategy core-trigger engines~~ ✅ (`trendlines.ts`, `structure.ts`, `fibonacci.ts`)
+6. ~~Confirmation scoring, 3/5 threshold, signal persistence~~ ✅ (`scoring.ts`, `lib/engine/scanner.ts`)
+7. ~~Vision AI (Gemini 3 Flash, direct API): confirmation #5, Ask AI, rendering validation~~ ✅ (`lib/vision/`, model `gemini-3-flash-preview`)
+8. ~~Telegram flow: watching / updates / signals / skipped-for-risk~~ ✅ (`lib/telegram.ts`)
+9. ~~Backtesting engine~~ ✅ (`lib/backtest/engine.ts` — no lookahead, spread+slippage, conservative same-candle SL-first, 70/30 walk-forward)
 
-To learn more about Next.js, take a look at the following resources:
+Verification: `npx tsx scripts/verify-risk.ts` and `npx tsx scripts/verify-engine.ts` (37 checks total).
+Scanning runs via Vercel cron (`/api/scan` every 15 min) or the dashboard's **Scan now** button.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Routes
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+- `/` — dashboard: interactive chart (zoom/pan/crosshair, timeframe switcher), live confirmation tracker, signal feed, Ask AI, Scan now
+- `/backtests` — combined + per-strategy + per-pair metrics, in-sample vs walk-forward OOS
+- `/login` — Supabase auth
+- `/api/candles` — OANDA candle proxy (key stays server-side)
+- `/api/scan` — run the engine (GET = Vercel cron, POST = manual)
+- `/api/signals`, `/api/setups` — live feed + confirmation state
+- `/api/risk/preview` — Stage 3 risk engine check (SL/TP/sizing from live structure)
+- `/api/backtest/run`, `/api/backtests/latest` — backtesting
+- `/api/ask-ai` — Gemini chart read from a browser-captured screenshot
+- `/api/vision/validate` — rendering QA: Gemini verifies drawn overlays match engine coordinates
+- `/api/telegram/test` — POST a wiring-test message
