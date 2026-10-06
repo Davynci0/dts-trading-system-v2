@@ -454,6 +454,23 @@ check("backtest: limitation noted", report.limitation.includes("4 non-AI"), "vis
   check("supersede: a trade going against it reports pips toward the stop", !!flip?.text.includes("against it"), "against it");
 
   check("supersede: formatAge", formatAge(5) === "5h" && formatAge(24) === "1d" && formatAge(53) === "2d 5h", `${formatAge(5)} ${formatAge(24)} ${formatAge(53)}`);
+
+  check(
+    "supersede: each factor is marked and the verdict names what decided it",
+    !!stalled?.text.includes("✓ It has stalled") && !!stalled.text.includes("(it has stalled, better payoff, more confirmations, structure agrees)"),
+    (stalled?.text.split("\n").pop() ?? "").slice(0, 110)
+  );
+  check("supersede: a working trade shows a ✗ mark", !!working?.text.includes("✗ It is working"), "✗ present");
+
+  // the real USD/JPY case: a 183-pip swing was retired for a 41-pip setup. That is now blocked.
+  const jpy: OpenTrade = { id: "j", created_at: new Date(now - 5 * DAY).toISOString(), direction: "short", entry: 158.276, stop_loss: 159.16, take_profit: 156.375, confidence: 4, strategy: "fibonacci" };
+  const jpyNew: NewSetup = { direction: "short", rMultiple: 2.96, riskPips: 14, rewardPips: 41, confidence: 4, label: "Fibonacci Retracement", aligned: true };
+  const jpyCmp = compareTrades({ old: jpy, oldLabel: "Fibonacci Retracement", oldAligned: true, next: jpyNew, price: 158.206, pip: 0.01, now });
+  check("supersede: a swing is not swapped for a much smaller same-direction setup", jpyCmp?.replace === false && !!jpyCmp.text.includes("swap a swing trade for a smaller one"), `${jpyCmp?.replace} ${jpyCmp?.points}/4`);
+  const jpyBig = compareTrades({ old: jpy, oldLabel: "Fibonacci Retracement", oldAligned: true, next: { ...jpyNew, rewardPips: 160, riskPips: 50, rMultiple: 3.2 }, price: 158.206, pip: 0.01, now });
+  check("supersede: the same pair is replaceable when the new setup is comparable in size", jpyBig?.replace === true, `${jpyBig?.replace} ${jpyBig?.points}/4`);
+  const flipSmall = compareTrades({ old: jpy, oldLabel: "Fibonacci Retracement", oldAligned: false, next: { ...jpyNew, direction: "long", rewardPips: 41, aligned: true }, price: 158.206, pip: 0.01, now });
+  check("supersede: the size guard does not block a reversal", !!flipSmall && !flipSmall.text.includes("swap a swing trade"), "opposite direction exempt");
 }
 
 console.log(failures === 0 ? "\nALL ENGINE TESTS PASSED" : `\n${failures} TEST(S) FAILED`);

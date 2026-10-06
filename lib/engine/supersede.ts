@@ -4,8 +4,12 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 export const STALE_AFTER_HOURS = 24;
 /** A trade at least this far to its target is working; never retire it. */
 const WORKING_PROGRESS = 0.5;
+/** Below this the old trade has not made real progress. */
+const STALLED_PROGRESS = 0.33;
 /** Points the new setup needs, out of 4 factors, to retire the old trade. */
 const REPLACE_POINTS = 2;
+/** A same-direction setup aiming for less than this share of what the old trade still offers is a downgrade. */
+const MIN_SIZE_SHARE = 0.5;
 
 export interface OpenTrade {
   id: string;
@@ -47,9 +51,12 @@ const dir = (d: "long" | "short") => d.toUpperCase();
 
 /**
  * Compare a stale open trade with a freshly fired setup on the same pair.
- * Four factors, one point each way: the payoff still available from the
- * current price, whether the old trade has stalled, confirmations, and
- * top-down alignment. Returns null when the old trade has already reached
+ * Four factors, one point each way: whether the old trade has stalled, the
+ * payoff still available from the current price, confirmations, and top-down
+ * alignment. Each line is marked ✓ (favours the new setup), ✗ (favours the
+ * old one) or = (neutral) so the verdict can be checked. A trade that is
+ * working is never retired, and neither is a swing trade for a much smaller
+ * same-direction setup. Returns null when the old trade has already reached
  * TP or SL (the outcome scorer settles those).
  */
 export function compareTrades(opts: {
@@ -77,62 +84,78 @@ export function compareTrades(opts: {
   const remainingR = toTp / toSl;
 
   let points = 0;
+  const favours: string[] = [];
   const lines: string[] = [];
+  const mark = (m: "✓" | "✗" | "=", text: string, name?: string) => {
+    if (m === "✓") {
+      points += 1;
+      if (name) favours.push(name);
+    } else if (m === "✗") {
+      points -= 1;
+    }
+    lines.push(`${m} ${text}`);
+  };
 
-  // 1. progress / stalled
   const movePips = Math.abs(moved) / pip;
-  if (moved >= 0) {
-    lines.push(
-      `Old trade: open ${formatAge(ageHours)}, price is ${movePips.toFixed(0)} pips in its favour, ${Math.round(progress * 100)}% of the way to its target.`
-    );
-  } else {
-    lines.push(
-      `Old trade: open ${formatAge(ageHours)}, price is ${movePips.toFixed(0)} pips against it, ${Math.round((-moved / stopSpan) * 100)}% of the way to its stop.`
-    );
-  }
-  if (progress < 0.33) {
-    points += 1;
-    lines.push("It has stalled: it has not made real progress toward its target.");
-  } else if (progress >= WORKING_PROGRESS) {
-    points -= 1;
-    lines.push("It is working: more than half way to its target.");
-  }
+  lines.push(
+    moved >= 0
+      ? `Old trade: open ${formatAge(ageHours)}, price is ${movePips.toFixed(0)} pips in its favour, ${Math.round(progress * 100)}% of the way to its target.`
+      : `Old trade: open ${formatAge(ageHours)}, price is ${movePips.toFixed(0)} pips against it, ${Math.round((-moved / stopSpan) * 100)}% of the way to its stop.`
+  );
+
+  // 1. has the old trade made real progress?
+  if (progress < STALLED_PROGRESS) mark("✓", "It has stalled: no real progress toward its target.", "it has stalled");
+  else if (progress >= WORKING_PROGRESS) mark("✗", "It is working: more than half way to its target.");
+  else mark("=", "It has made some progress, which neither helps nor hurts the case.");
 
   // 2. payoff available from the current price
-  lines.push(
-    `From today's price the old trade would risk ${(toSl / pip).toFixed(0)} pips to make ${(toTp / pip).toFixed(0)} pips (${remainingR.toFixed(1)}R). The new setup risks ${next.riskPips.toFixed(0)} pips to make ${next.rewardPips.toFixed(0)} pips (${next.rMultiple.toFixed(1)}R).`
-  );
-  if (next.rMultiple - remainingR >= 0.5) points += 1;
-  else if (remainingR - next.rMultiple >= 0.5) points -= 1;
+  const payoff = `From today's price the old trade would risk ${(toSl / pip).toFixed(0)} pips to make ${(toTp / pip).toFixed(0)} pips (${remainingR.toFixed(1)}R). The new setup risks ${next.riskPips.toFixed(0)} pips to make ${next.rewardPips.toFixed(0)} pips (${next.rMultiple.toFixed(1)}R).`;
+  if (next.rMultiple - remainingR >= 0.5) mark("✓", payoff, "better payoff");
+  else if (remainingR - next.rMultiple >= 0.5) mark("✗", payoff);
+  else mark("=", payoff);
 
   // 3. confirmations
-  lines.push(`Confirmations: ${old.confidence}/5 on the old setup against ${next.confidence}/5 now.`);
-  if (next.confidence - old.confidence >= 1) points += 1;
-  else if (old.confidence - next.confidence >= 1) points -= 1;
+  const conf = `Confirmations: ${old.confidence}/5 on the old setup against ${next.confidence}/5 now.`;
+  if (next.confidence - old.confidence >= 1) mark("✓", conf, "more confirmations");
+  else if (old.confidence - next.confidence >= 1) mark("✗", conf);
+  else mark("=", conf);
 
   // 4. top-down alignment
   if (next.aligned && !oldAligned) {
-    points += 1;
-    lines.push("Weekly, Daily and H4 structure now agree with the new setup but no longer with the old one.");
+    mark("✓", "Weekly, Daily and H4 structure now agree with the new setup but no longer with the old one.", "structure agrees");
   } else if (!next.aligned && oldAligned) {
-    points -= 1;
-    lines.push("Weekly, Daily and H4 structure still agree with the old trade but not with the new setup.");
+    mark("✗", "Weekly, Daily and H4 structure still agree with the old trade but not with the new setup.");
   } else {
-    lines.push(
+    mark(
+      "=",
       next.aligned
         ? "Top-down structure agrees with both, so it does not separate them."
         : "Top-down structure agrees with neither, so it does not separate them."
     );
   }
 
+  // never trade a swing for a much smaller setup in the same direction
   const opposite = old.direction !== next.direction;
-  const replace = points >= REPLACE_POINTS && progress < WORKING_PROGRESS;
+  const downgrade = !opposite && next.rewardPips < MIN_SIZE_SHARE * (toTp / pip);
+  if (downgrade) {
+    lines.push(
+      `✗ Size: the new setup aims for ${next.rewardPips.toFixed(0)} pips but the old trade still has ${(toTp / pip).toFixed(0)} pips available, so replacing it would swap a swing trade for a smaller one.`
+    );
+  }
+
+  const working = progress >= WORKING_PROGRESS;
+  const replace = points >= REPLACE_POINTS && !working && !downgrade;
   const head = `${next.label} ${dir(next.direction)} compared with the open ${oldLabel} ${dir(old.direction)}${opposite ? " (opposite direction)" : ""}:`;
-  const verdict = replace
-    ? `Verdict: ${points} of 4 factors favour the new setup, so the old trade is retired. It stays tracked so we can check whether this call was right.`
-    : progress >= WORKING_PROGRESS
-      ? "Verdict: the old trade is working, so it stays open and this is shown as an additional setup."
-      : `Verdict: only ${points} of 4 factors favour the new setup, not enough to retire the old trade. Shown as an additional setup.`;
+  let verdict: string;
+  if (replace) {
+    verdict = `Verdict: ${points} of 4 factors favour the new setup (${favours.join(", ")}), so the old trade is retired. It stays tracked so we can check whether this call was right.`;
+  } else if (working) {
+    verdict = "Verdict: the old trade is working, so it stays open and this is shown as an additional setup.";
+  } else if (downgrade) {
+    verdict = "Verdict: the new setup targets much less than the old trade still offers, so the old trade stays open and this is shown as an additional setup.";
+  } else {
+    verdict = `Verdict: only ${Math.max(points, 0)} of 4 factors favour the new setup, not enough to retire the old trade. Shown as an additional setup.`;
+  }
 
   return { replace, points, text: [head, ...lines.map((l) => `- ${l}`), verdict].join("\n") };
 }
