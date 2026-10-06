@@ -7,6 +7,15 @@ import { pipSize } from "@/lib/analysis/confirmations";
 const fmtPips = (price: number, pair: string) => (price / pipSize(pair)).toFixed(1);
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+const STALE_HOURS = 24;
+const fmtAge = (iso: string) => {
+  const h = (Date.now() - new Date(iso).getTime()) / 3_600_000;
+  if (h < 24) return `${Math.max(1, Math.round(h))}h`;
+  const d = Math.floor(h / 24);
+  const rest = Math.round(h - d * 24);
+  return rest > 0 ? `${d}d ${rest}h` : `${d}d`;
+};
+const ageHours = (iso: string) => (Date.now() - new Date(iso).getTime()) / 3_600_000;
 
 /** Per-strategy outcome record, split by status: "would the skip have won?" is
  * the skip success rate; active-signal win rate is the live score. */
@@ -14,6 +23,7 @@ function successStats(signals: Signal[]) {
   const by = new Map<string, { firedWin: number; firedLoss: number; skipWin: number; skipLoss: number }>();
   for (const s of signals) {
     if (s.outcome !== "win" && s.outcome !== "loss") continue;
+    if (s.superseded_by) continue; // retired trades are not the trade you were told to take
     const b = by.get(s.strategy) ?? { firedWin: 0, firedLoss: 0, skipWin: 0, skipLoss: 0 };
     if (s.status === "skipped") {
       if (s.outcome === "win") b.skipWin++;
@@ -86,13 +96,19 @@ export default function SignalFeed() {
         </p>
       )}
       <ul className="space-y-2">
-        {signals?.map((s) => (
+        {signals?.map((s) => {
+          const replacement = s.superseded_by ? signals.find((x) => x.id === s.superseded_by) : undefined;
+          const open = !s.outcome && s.status === "active" && !s.superseded_by && s.stop_loss > 0;
+          const stale = open && ageHours(s.created_at) >= STALE_HOURS;
+          return (
           <li
             key={s.id}
             className={`rounded border p-2 text-xs ${
-              s.status === "skipped"
-                ? "border-amber-900/60 bg-amber-950/30"
-                : "border-neutral-800 bg-neutral-950"
+              s.superseded_by
+                ? "border-neutral-800 bg-neutral-950 opacity-60"
+                : s.status === "skipped"
+                  ? "border-amber-900/60 bg-amber-950/30"
+                  : "border-neutral-800 bg-neutral-950"
             }`}
           >
             <div className="flex justify-between">
@@ -108,6 +124,31 @@ export default function SignalFeed() {
                 {s.status === "skipped" ? " · SKIPPED" : ""}
               </span>
             </div>
+            {s.replace_reason && (
+              <div
+                className={`mt-1 whitespace-pre-line rounded border p-2 leading-relaxed ${
+                  s.replaces
+                    ? "border-violet-800/60 bg-violet-950/30 text-violet-200"
+                    : "border-neutral-700 bg-neutral-900 text-neutral-300"
+                }`}
+              >
+                <div className="mb-1 font-semibold">
+                  {s.replaces ? "↻ Replaces your stale open trade — why this one is better" : "Compared with your open trade"}
+                </div>
+                {s.replace_reason}
+              </div>
+            )}
+            {s.superseded_by && (
+              <div className="mt-1 text-violet-300">
+                ↻ Retired {s.superseded_at ? fmtTime(s.superseded_at) : ""} — replaced by{" "}
+                {replacement ? `the ${replacement.direction.toUpperCase()} from ${fmtTime(replacement.created_at)}` : "a newer setup"}. Still tracked to check that call.
+              </div>
+            )}
+            {stale && (
+              <div className="mt-1 text-amber-400">
+                Open {fmtAge(s.created_at)} without reaching TP or SL — will be replaced if a clearly better setup appears.
+              </div>
+            )}
             {s.stop_loss > 0 && s.take_profit > 0 && (
               <div className="mt-1 font-mono text-neutral-400">
                 E {s.entry} · SL {s.stop_loss} · TP {s.take_profit}
@@ -159,7 +200,8 @@ export default function SignalFeed() {
               <div className="mt-1 text-neutral-500">AI: {s.vision_note}</div>
             )}
           </li>
-        ))}
+          );
+        })}
       </ul>
     </div>
   );

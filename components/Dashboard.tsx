@@ -74,7 +74,10 @@ export default function Dashboard() {
 
   const shownOverlay = useMemo<OverlayData>(() => {
     const barAt = (epochSec: number) => [...candles].reverse().find((c) => c.time <= epochSec) ?? candles[0];
-    const pending = pairSignals.find((s) => !s.outcome) ?? null;
+    const pending =
+      pairSignals.find((s) => !s.outcome && !s.superseded_by && s.status === "active") ??
+      pairSignals.find((s) => !s.outcome && !s.superseded_by) ??
+      null;
     let position: OverlayData["position"] = null;
     if (pending && candles.length > 0) {
       const pip = pipSize(pending.pair);

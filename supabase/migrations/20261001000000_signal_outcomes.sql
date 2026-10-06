@@ -14,3 +14,10 @@ alter table public.signals
   add column if not exists outcome_price double precision,
   add column if not exists sl_basis text,
   add column if not exists tp_basis text;
+
+-- stale open trades retired by a newer, better setup on the same pair
+alter table public.signals
+  add column if not exists replaces uuid references public.signals (id) on delete set null,
+  add column if not exists replace_reason text,
+  add column if not exists superseded_by uuid references public.signals (id) on delete set null,
+  add column if not exists superseded_at timestamptz;

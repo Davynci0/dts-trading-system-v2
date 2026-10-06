@@ -16,6 +16,9 @@ import { analyzeTopDown } from "@/lib/analysis/topDown";
 import { significantPivots } from "@/lib/analysis/pivots";
 import { buildSetupKey } from "@/lib/analysis/setupKey";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
+import { compareTrades, findStaleOpenTrades, retireTrades } from "@/lib/engine/supersede";
+import { topDownAgrees } from "@/lib/analysis";
+import { pipSize } from "@/lib/analysis/confirmations";
 import { renderSetupPng } from "@/lib/vision/chartRender";
 import { geminiSetupVerdict, geminiArbitrate } from "@/lib/vision/gemini";
 import { setupVerdictPrompt, arbitrationPrompt } from "@/lib/vision/prompts";
@@ -529,6 +532,8 @@ async function reconcileAndSignal(args: {
       : STRATEGY_LABELS[primary.strategy];
 
   const risk = primary.risk;
+  let replaceReason: string | null = null;
+  let replacedIds: string[] = [];
   if (risk.ok) {
     const L = risk.levels;
     const confidence = Math.max(...winners.map((f) => f.scored.count));
@@ -541,22 +546,60 @@ async function reconcileAndSignal(args: {
       .join(" ") || null;
 
     if (supabase) {
-      await supabase.from("signals").insert({
-        pair,
-        direction: winnerSide,
-        strategy: primary.strategy,
-        entry: L.entry,
-        stop_loss: L.stopLoss,
-        take_profit: L.takeProfit,
-        sl_basis: L.stopBasis,
-        tp_basis: L.targetBasis,
-        r_multiple: L.rMultiple,
-        confidence,
-        confirmations: primary.scored.confirmations,
-        vision_note: note,
-        confluence_strategies: confluence,
-        status: "active",
-      });
+      // A stale open trade on this pair is compared with the new setup; if the
+      // new one is clearly better the old one is retired, with the reasons stored.
+      const price = candles[candles.length - 1].close;
+      const pip = pipSize(pair);
+      const stale = await findStaleOpenTrades(supabase, pair);
+      const retire: string[] = [];
+      const explanations: string[] = [];
+      for (const old of stale) {
+        const cmp = compareTrades({
+          old,
+          oldLabel: STRATEGY_LABELS[old.strategy as StrategyId] ?? old.strategy,
+          oldAligned: ctx.topDown ? topDownAgrees(ctx.topDown, old.direction) : true,
+          next: {
+            direction: winnerSide,
+            rMultiple: L.rMultiple,
+            riskPips: L.riskPips,
+            rewardPips: L.rewardPips,
+            confidence,
+            label: confluenceLabel,
+            aligned: ctx.topDown ? topDownAgrees(ctx.topDown, winnerSide) : true,
+          },
+          price,
+          pip,
+        });
+        if (!cmp) continue;
+        explanations.push(cmp.text);
+        if (cmp.replace) retire.push(old.id);
+      }
+      replaceReason = explanations.length ? explanations.join("\n\n") : null;
+      replacedIds = retire;
+
+      const { data: inserted } = await supabase
+        .from("signals")
+        .insert({
+          pair,
+          direction: winnerSide,
+          strategy: primary.strategy,
+          entry: L.entry,
+          stop_loss: L.stopLoss,
+          take_profit: L.takeProfit,
+          sl_basis: L.stopBasis,
+          tp_basis: L.targetBasis,
+          r_multiple: L.rMultiple,
+          confidence,
+          confirmations: primary.scored.confirmations,
+          vision_note: note,
+          confluence_strategies: confluence,
+          status: "active",
+          replaces: retire[0] ?? null,
+          replace_reason: replaceReason,
+        })
+        .select("id")
+        .single();
+      if (inserted?.id) await retireTrades(supabase, retire, inserted.id);
     }
     if (sendTelegrams) {
       await sendFinalSignal({
@@ -575,6 +618,8 @@ async function reconcileAndSignal(args: {
         visionNote: note,
         positionUnits: L.positionUnits,
         riskAmount: L.riskAmount,
+        comparison: replaceReason,
+        replacedCount: replacedIds.length,
       }).catch(() => undefined);
     }
     events.push({
@@ -582,7 +627,7 @@ async function reconcileAndSignal(args: {
       timeframe: tf,
       strategy: primary.strategy,
       kind: "signal",
-      detail: `${winnerSide} ${confidence}/5 R${L.rMultiple.toFixed(2)}${winners.length > 1 ? ` ×${winners.length} confluence` : ""}`,
+      detail: `${winnerSide} ${confidence}/5 R${L.rMultiple.toFixed(2)}${winners.length > 1 ? ` ×${winners.length} confluence` : ""}${replacedIds.length ? ` · retired ${replacedIds.length} stale trade(s)` : ""}`,
     });
   } else {
     // Skipped for risk: still record the position that WOULD have been taken

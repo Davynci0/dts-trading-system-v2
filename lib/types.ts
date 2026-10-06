@@ -36,6 +36,12 @@ export interface Signal {
   /** the market structure each level is anchored to */
   sl_basis: string | null;
   tp_basis: string | null;
+  /** the stale open trade this setup retired, and the detailed comparison */
+  replaces: string | null;
+  replace_reason: string | null;
+  /** set when a newer, better setup on the same pair retired this one */
+  superseded_by: string | null;
+  superseded_at: string | null;
 }
 
 export const PAIRS = ["XAU_USD", "EUR_USD", "GBP_USD", "USD_JPY"] as const;

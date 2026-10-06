@@ -25,7 +25,12 @@ create table if not exists public.signals (
   -- price at which TP/SL was hit, and the market structure each level was anchored to
   outcome_price double precision,
   sl_basis text,
-  tp_basis text
+  tp_basis text,
+  -- a stale open trade retired by a newer, better setup on the same pair
+  replaces uuid references public.signals (id) on delete set null,
+  replace_reason text,
+  superseded_by uuid references public.signals (id) on delete set null,
+  superseded_at timestamptz
 );
 
 -- One row per backtest execution (Section 7).

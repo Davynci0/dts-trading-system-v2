@@ -4,6 +4,7 @@
  */
 import type { Candle } from "../lib/types";
 import { detectPivots, significantPivots } from "../lib/analysis/pivots";
+import { compareTrades, formatAge, type OpenTrade, type NewSetup } from "../lib/engine/supersede";
 import { atr } from "../lib/analysis/indicators";
 import { detectZones, detectZoneEntry, ZONE_ENTRY_WINDOW } from "../lib/analysis/zones";
 import { detectTrendlines, trendlineTouch, lineValueAt, lineValueAtTime } from "../lib/analysis/trendlines";
@@ -414,6 +415,45 @@ check("backtest: limitation noted", report.limitation.includes("4 non-AI"), "vis
   check("significantPivots: sub-0.5-ATR wiggles collapse", noise.length === 2 && noise[0].price === 1.0999 && noise[1].price === 1.12, noise.map((x) => x.price).join(","));
   const alt = significantPivots([P(1, "low", 1.09), P(5, "low", 1.085), P(9, "high", 1.1)], 0.002);
   check("significantPivots: consecutive same-kind pivots keep the extreme", alt.length === 2 && alt[0].price === 1.085, alt.map((x) => x.price).join(","));
+}
+
+// ============ supersede: a stale open trade vs a fresh setup ============
+{
+  const now = Date.UTC(2026, 9, 6, 12, 0, 0);
+  const DAY = 86_400_000;
+  const oldTrade: OpenTrade = {
+    id: "old",
+    created_at: new Date(now - 6 * DAY).toISOString(),
+    direction: "long",
+    entry: 1.1,
+    stop_loss: 1.095,
+    take_profit: 1.115,
+    confidence: 3,
+    strategy: "fibonacci",
+  };
+  const better: NewSetup = { direction: "long", rMultiple: 3, riskPips: 40, rewardPips: 120, confidence: 4, label: "Market Structure", aligned: true };
+  const run = (price: number, next: NewSetup, oldAligned = false, old = oldTrade) =>
+    compareTrades({ old, oldLabel: "Fibonacci Retracement", oldAligned, next, price, pip: 0.0001, now });
+
+  const stalled = run(1.101, better);
+  check("supersede: stalled trade is replaced by a clearly better setup", stalled?.replace === true && stalled.points === 4, `${stalled?.replace} ${stalled?.points}/4`);
+  check("supersede: explanation uses the real payoff numbers", !!stalled?.text.includes("risk 60 pips to make 140 pips") && !!stalled.text.includes("3.0R"), (stalled?.text.split("\n")[2] ?? "").slice(0, 80));
+  check("supersede: explanation states age and confirmations", !!stalled?.text.includes("open 6d") && !!stalled.text.includes("3/5 on the old setup against 4/5"), "age + confirmations present");
+
+  const working = run(1.109, better);
+  check("supersede: a trade past halfway is never retired", working?.replace === false && !!working.text.includes("working"), `${working?.replace}`);
+
+  const weaker = run(1.101, { ...better, rMultiple: 1.8, confidence: 3 }, true);
+  check("supersede: a worse setup does not replace it", weaker?.replace === false, `${weaker?.replace} ${weaker?.points}/4`);
+
+  check("supersede: nothing to compare once TP is reached", run(1.116, better) === null, "null");
+  check("supersede: nothing to compare once SL is reached", run(1.094, better) === null, "null");
+
+  const flip = run(1.098, { ...better, direction: "short" });
+  check("supersede: an opposite-direction setup is labelled as such", !!flip?.text.includes("(opposite direction)"), flip?.text.split("\n")[0] ?? "none");
+  check("supersede: a trade going against it reports pips toward the stop", !!flip?.text.includes("against it"), "against it");
+
+  check("supersede: formatAge", formatAge(5) === "5h" && formatAge(24) === "1d" && formatAge(53) === "2d 5h", `${formatAge(5)} ${formatAge(24)} ${formatAge(53)}`);
 }
 
 console.log(failures === 0 ? "\nALL ENGINE TESTS PASSED" : `\n${failures} TEST(S) FAILED`);

@@ -70,10 +70,18 @@ export async function sendFinalSignal(opts: {
   visionNote: string | null;
   positionUnits: number;
   riskAmount: number;
+  /** comparison with a stale open trade on the same pair, when there is one */
+  comparison?: string | null;
+  replacedCount?: number;
 }): Promise<void> {
   const confidence = opts.confidence >= 4 ? "HIGH ★" : "standard";
   await sendTelegramMessage(
     [
+      opts.replacedCount
+        ? `🔄 *NEW SETUP REPLACES YOUR STALE OPEN TRADE*`
+        : opts.comparison
+          ? `🆕 *NEW SETUP (your open trade stays)*`
+          : null,
       `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (${opts.strategy})`,
       `Entry \`${opts.entry}\`  SL \`${opts.stopLoss}\`  TP \`${opts.takeProfit}\``,
       `Risk *${opts.riskPips.toFixed(1)} pips* → Target *${opts.rewardPips.toFixed(1)} pips*`,
@@ -81,6 +89,7 @@ export async function sendFinalSignal(opts: {
       `R:R *${opts.rMultiple.toFixed(2)}* · Confidence *${confidence}* (${opts.confidence}/5)`,
       `Size: ${opts.positionUnits.toLocaleString()} units (risk $${opts.riskAmount.toFixed(0)}, 1%)`,
       opts.visionNote ? `🤖 Vision AI: ${opts.visionNote}` : null,
+      opts.comparison ? `\n${opts.comparison.replace(/[_*`\[]/g, " ")}` : null,
       `_Signal only — review and execute manually._`,
     ]
       .filter(Boolean)
