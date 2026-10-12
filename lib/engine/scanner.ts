@@ -22,12 +22,7 @@ import { pipSize } from "@/lib/analysis/confirmations";
 import { renderSetupPng } from "@/lib/vision/chartRender";
 import { geminiSetupVerdict, geminiArbitrate } from "@/lib/vision/gemini";
 import { setupVerdictPrompt, arbitrationPrompt } from "@/lib/vision/prompts";
-import {
-  sendWatchingAlert,
-  sendConfirmationUpdate,
-  sendFinalSignal,
-  sendSkippedForRisk,
-} from "@/lib/telegram";
+import { sendFinalSignal } from "@/lib/telegram";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /** HTF used for the trend/structure agreement check per timeframe. */
@@ -236,31 +231,15 @@ export async function runScan(opts: {
           const scored: ScoreResult =
             visionOk === null ? firstPass : scoreSetup(strategy, ctx, visionOk);
 
-          // --- watching + confirmation-update alerts (per strategy) ---
+          // --- feed events only; Telegram is reserved for the actionable trade ---
           const now = Math.floor(Date.now() / 1000);
-          const met = Object.entries(scored.confirmations)
-            .filter(([, v]) => v)
-            .map(([k]) => k);
 
-          if (!prior && sendTelegrams) {
-            await sendWatchingAlert({
-              pair,
-              direction: scored.direction,
-              strategy: STRATEGY_LABELS[strategy],
-              triggerDescription: triggerDescription(scored),
-            }).catch(() => undefined);
+          if (!prior) {
             events.push({ pair, timeframe: tf, strategy, kind: "watching", detail: triggerDescription(scored) });
           }
 
           if (!scored.fired) {
-            if (prior && scored.count !== prior.count && sendTelegrams) {
-              await sendConfirmationUpdate({
-                pair,
-                direction: scored.direction,
-                strategy: STRATEGY_LABELS[strategy],
-                count: scored.count,
-                met,
-              }).catch(() => undefined);
+            if (prior && scored.count !== prior.count) {
               events.push({ pair, timeframe: tf, strategy, kind: "update", detail: `${scored.count}/5` });
             }
           } else if (!prior?.signaled) {
@@ -652,14 +631,6 @@ async function reconcileAndSignal(args: {
         status: "skipped",
         skip_reason: risk.reason,
       });
-    }
-    if (sendTelegrams) {
-      await sendSkippedForRisk({
-        pair,
-        direction: winnerSide,
-        strategy: confluenceLabel,
-        reason: risk.reason,
-      }).catch(() => undefined);
     }
     events.push({ pair, timeframe: tf, strategy: primary.strategy, kind: "skipped", detail: risk.reason });
   }
