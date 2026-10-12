@@ -160,6 +160,26 @@ export function compareTrades(opts: {
   return { replace, points, text: [head, ...lines.map((l) => `- ${l}`), verdict].join("\n") };
 }
 
+/** Any open, never-retired active trade on this pair, at any age. */
+export async function findOpenTrades(
+  supabase: ReturnType<typeof createAdminClient>,
+  pair: string
+): Promise<OpenTrade[]> {
+  if (!supabase) return [];
+  const { data, error } = await supabase
+    .from("signals")
+    .select("id, created_at, direction, entry, stop_loss, take_profit, confidence, strategy")
+    .eq("pair", pair)
+    .eq("status", "active")
+    .is("outcome", null)
+    .is("superseded_by", null)
+    .gt("stop_loss", 0)
+    .order("created_at", { ascending: true })
+    .limit(5);
+  if (error || !data) return [];
+  return data as OpenTrade[];
+}
+
 /** Open, never-retired active trades on this pair older than the stale threshold. */
 export async function findStaleOpenTrades(
   supabase: ReturnType<typeof createAdminClient>,
