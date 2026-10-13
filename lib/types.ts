@@ -48,7 +48,7 @@ export const PAIRS = ["XAU_USD", "EUR_USD", "GBP_USD", "USD_JPY"] as const;
 
 export type Pair = (typeof PAIRS)[number];
 
-export const TIMEFRAMES = ["M5", "M15", "H1", "H4", "D"] as const;
+export const TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D"] as const;
 export type Timeframe = (typeof TIMEFRAMES)[number];
 
 export const STRATEGIES: { id: StrategyId; label: string }[] = [

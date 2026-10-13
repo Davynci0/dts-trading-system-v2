@@ -11,7 +11,7 @@ function parseParams(req: NextRequest, body: Record<string, unknown> | null) {
   const pairs = (rawPairs?.length ? rawPairs : PAIRS).filter((p): p is Pair =>
     (PAIRS as readonly string[]).includes(p)
   );
-  const timeframes = (rawTfs?.length ? rawTfs : ["H1", "H4"]).filter((t): t is Timeframe =>
+  const timeframes = (rawTfs?.length ? rawTfs : ["M15", "M30"]).filter((t): t is Timeframe =>
     (TIMEFRAMES as readonly string[]).includes(t)
   );
   return { pairs, timeframes };
@@ -28,7 +28,7 @@ async function handle(req: NextRequest, body: Record<string, unknown> | null) {
   return NextResponse.json(summary);
 }
 
-/** GET — Vercel cron entry point (full scan: all pairs, H1 + H4). */
+/** GET — Vercel cron entry point (full scan: all pairs, M15 + M30). */
 export async function GET(req: NextRequest) {
   return handle(req, null);
 }

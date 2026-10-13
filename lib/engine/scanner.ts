@@ -24,7 +24,7 @@ import { sendFinalSignal } from "@/lib/telegram";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 /** HTF used for the trend/structure agreement check per timeframe. */
-const HTF_OF: Record<Timeframe, string> = { M5: "M15", M15: "H1", H1: "H4", H4: "D", D: "W" };
+const HTF_OF: Record<Timeframe, string> = { M5: "M15", M15: "H1", M30: "H4", H1: "H4", H4: "D", D: "W" };
 
 const STRATEGY_LABELS: Record<StrategyId, string> = {
   trendline: "Trendline Touch & Bounce",

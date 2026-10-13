@@ -31,7 +31,7 @@ interface TopDownSummary {
 
 export default function Dashboard() {
   const [pair, setPair] = useState<Pair>("XAU_USD");
-  const [timeframe, setTimeframe] = useState<Timeframe>("H4");
+  const [timeframe, setTimeframe] = useState<Timeframe>("M15");
   const [candles, setCandles] = useState<Candle[]>([]);
   const [liveCandle, setLiveCandle] = useState<Candle | null>(null);
   const [overlay, setOverlay] = useState<OverlayData>(EMPTY_OVERLAY);
