@@ -44,7 +44,7 @@ export interface Signal {
   superseded_at: string | null;
 }
 
-export const PAIRS = ["XAU_USD", "EUR_USD", "GBP_USD", "USD_JPY"] as const;
+export const PAIRS = ["XAU_USD"] as const;
 
 export type Pair = (typeof PAIRS)[number];
 
