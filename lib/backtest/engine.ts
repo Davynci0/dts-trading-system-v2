@@ -22,6 +22,14 @@ const WARMUP = 80;
 const MAX_HOLD_CANDLES = 100;
 const OUT_OF_SAMPLE_FRACTION = 0.3; // last 30% = walk-forward segment
 
+/** Standard lot sizes in units. 0.1 lot = 10,000 units for most brokers. */
+export const LOT_SIZES: Record<string, number> = {
+  "0.01": 1000,
+  "0.1": 10000,
+  "1": 100000,
+};
+const ALL_STRATEGIES: StrategyId[] = ["zones", "setforget", "fibonacci"];
+
 export interface BacktestTrade {
   strategy: StrategyId;
   direction: "long" | "short";
@@ -32,12 +40,14 @@ export interface BacktestTrade {
   takeProfit: number;
   exitPrice: number;
   rAchieved: number;
-  confirmations: number; // of the 4 non-AI checks
+  confirmations: number; // of the 6 non-AI checks
   /** which individual checks were true at entry (Vision excluded) */
   checks: Record<string, boolean>;
   outcome: "tp" | "sl" | "timeout";
   /** true when entered in the first 70% of the series (walk-forward split) */
   inSample: boolean;
+  /** position size in units used for P&L (risk-based or fixed) */
+  units: number;
 }
 
 export interface MetricsCore {
@@ -47,6 +57,8 @@ export interface MetricsCore {
   profitFactor: number;
   avgR: number;
   maxDrawdownR: number;
+  /** Absolute P&L in account currency using the fixed position size. */
+  totalPnl: number;
   /** Section 7 confidence split. Vision can't be queried retroactively, so
    * counts are out of 4 non-AI checks: "3" and "4" buckets; "5" is impossible. */
   confidence3: number;
@@ -71,7 +83,7 @@ export interface BacktestReport {
 export function computeMetrics(trades: BacktestTrade[]): MetricsCore {
   const n = trades.length;
   if (n === 0) {
-    return { trades: 0, wins: 0, winRate: 0, profitFactor: 0, avgR: 0, maxDrawdownR: 0, confidence3: 0, confidence4: 0 };
+    return { trades: 0, wins: 0, winRate: 0, profitFactor: 0, avgR: 0, maxDrawdownR: 0, totalPnl: 0, confidence3: 0, confidence4: 0 };
   }
   const wins = trades.filter((t) => t.rAchieved > 0);
   const grossWin = wins.reduce((s, t) => s + t.rAchieved, 0);
@@ -88,6 +100,11 @@ export function computeMetrics(trades: BacktestTrade[]): MetricsCore {
     maxDd = Math.max(maxDd, peak - equity);
   }
 
+  const totalPnl = trades.reduce(
+    (s, t) => s + t.rAchieved * Math.abs(t.entry - t.stopLoss) * t.units,
+    0
+  );
+
   return {
     trades: n,
     wins: wins.length,
@@ -95,6 +112,7 @@ export function computeMetrics(trades: BacktestTrade[]): MetricsCore {
     profitFactor: pf,
     avgR: trades.reduce((s, t) => s + t.rAchieved, 0) / n,
     maxDrawdownR: maxDd,
+    totalPnl,
     confidence3: trades.filter((t) => t.confirmations === 3).length,
     confidence4: trades.filter((t) => t.confirmations >= 4).length,
   };
@@ -117,8 +135,26 @@ export function runBacktest(opts: {
   /** Optional only for compatibility with existing deterministic test callers. */
   topDownCandles?: TopDownCandles;
   accountBalance?: number;
+  /** Fixed position size in units (e.g. 10000 = 0.1 lot). If omitted, risk-based sizing is used. */
+  fixedUnits?: number;
+  /** Risk percent of account balance per trade (default 0.01 = 1%). Only used when fixedUnits is omitted. */
+  riskPercent?: number;
+  /** Minimum non-AI confirmations to enter a trade (default 3). */
+  minConfidence?: number;
+  /** Strategies to run in the backtest. Defaults to all five. */
+  strategies?: StrategyId[];
 }): BacktestReport {
-  const { pair, timeframe, candles, htfCandles, topDownCandles, accountBalance = 10000 } = opts;
+  const {
+    pair,
+    timeframe,
+    candles,
+    htfCandles,
+    topDownCandles,
+    accountBalance = 10000,
+    fixedUnits,
+    minConfidence = 3,
+    strategies = ALL_STRATEGIES,
+  } = opts;
   const pip = pipSize(pair);
   const spread = (SPREAD_PIPS[pair] ?? 1.5) * pip;
   const slip = SLIPPAGE_PIPS * pip;
@@ -165,7 +201,7 @@ export function runBacktest(opts: {
     const windowCandles = candles.slice(Math.max(0, i - WINDOW), i + 1);
     const m15 = analyzeM15(windowCandles);
     if (!m15) continue;
-    const { pivots, atrValue, zones, trendlines, structureEvent, fib, setForget } = m15;
+        const { pivots, atrValue, zones, fib, setForget } = m15;
 
     // HTF agreement uses only HTF candles closed before this candle's time
     const cutoff = windowCandles[windowCandles.length - 1].time;
@@ -185,17 +221,24 @@ export function runBacktest(opts: {
       pivots,
       atrValue,
       zones,
-      trendlines,
-      structureEvent,
       fib,
       setForget,
       topDown,
     };
 
-    for (const strategy of ["trendline", "structure", "zones", "setforget", "fibonacci"] as StrategyId[]) {
+    for (const strategy of ALL_STRATEGIES) {
+      if (!strategies.includes(strategy)) continue;
       if (open[strategy]) continue; // one open trade per strategy
       const scored = scoreSetup(strategy, ctx, null); // vision excluded (Section 7)
       if (!scored.hasTrigger || !scored.fired) continue;
+
+      // Only enter if confidence meets the configured minimum. With the new
+      // 7-point checklist (Vision excluded in backtest = 6 points), the default
+      // of 4 matches the live scanner's signal-send threshold.
+      const count = Object.entries(scored.confirmations)
+        .filter(([k, v]) => k !== "Vision AI" && v)
+        .length;
+      if (count < minConfidence) continue;
 
       // same one-signal-per-setup rule as the live scanner
       const setupKey = buildSetupKey("bt", scored);
@@ -211,15 +254,17 @@ export function runBacktest(opts: {
         accountBalance,
       });
       if (!risk.ok) continue; // skipped-for-risk: logged in live mode, excluded here
+
+      // position size: fixed lots override risk-based sizing
+      const units = fixedUnits ?? risk.levels.positionUnits;
+      if (!units || units <= 0) continue;
+      traded.add(setupKey);
       traded.add(setupKey);
 
       // fill at NEXT candle open ± costs (signal known only after close)
       const next = candles[i + 1];
       const entry =
         scored.direction === "long" ? next.open + cost : next.open - cost;
-      const count = Object.entries(scored.confirmations)
-        .filter(([k, v]) => k !== "Vision AI" && v)
-        .length;
 
       open[strategy] = {
         strategy,
@@ -235,6 +280,7 @@ export function runBacktest(opts: {
         confirmations: count,
         outcome: "timeout",
         inSample: i + 1 < oosStart,
+        units,
       };
     }
   }
@@ -245,7 +291,7 @@ export function runBacktest(opts: {
   const scopes: Record<string, ScopedMetrics> = {
     combined: { inSample: computeMetrics(inSample), outOfSample: computeMetrics(outOfSample) },
   };
-  for (const strategy of ["trendline", "structure", "zones", "setforget", "fibonacci"] as StrategyId[]) {
+  for (const strategy of ALL_STRATEGIES) {
     scopes[`strategy:${strategy}`] = {
       inSample: computeMetrics(inSample.filter((t) => t.strategy === strategy)),
       outOfSample: computeMetrics(outOfSample.filter((t) => t.strategy === strategy)),

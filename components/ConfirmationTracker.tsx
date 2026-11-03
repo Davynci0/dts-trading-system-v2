@@ -4,39 +4,31 @@ import { useEffect, useState } from "react";
 import { STRATEGIES, type StrategyId } from "@/lib/types";
 
 const CONFIRMATIONS: Record<StrategyId, string[]> = {
-  trendline: [
-    "Valid trendline touch",
-    "Rejection candle",
-    "Momentum (RSI) turning",
-    "HTF trend agrees",
-    "Vision AI",
-  ],
-  structure: [
-    "Structure event",
-    "Conviction close",
-    "Zone freshness",
-    "HTF structure agrees",
-    "Vision AI",
-  ],
   zones: [
     "Price entered zone",
     "Rejection candle in zone",
-    "Zone fresh (few touches)",
+    "Zone fresh (≤1 touch)",
+    "Momentum (RSI) turning",
     "HTF trend agrees",
+    "M15 trend agrees",
     "Vision AI",
   ],
   setforget: [
     "AOI first touch",
     "Rejection candle in AOI",
     "AOI overlaps another POI",
+    "Momentum (RSI) turning",
     "HTF trend agrees",
+    "M15 trend agrees",
     "Vision AI",
   ],
   fibonacci: [
     "Price in golden zone",
     "Rejection candle in zone",
     "Zone overlaps another POI",
+    "Momentum (RSI) turning",
     "HTF trend agrees",
+    "M15 trend agrees",
     "Vision AI",
   ],
 };
@@ -103,7 +95,7 @@ export default function ConfirmationTracker({ pair, timeframe }: { pair: string;
             <div key={s.id}>
               <div className="mb-1 flex items-baseline justify-between">
                 <span className="text-xs font-medium text-neutral-300">{s.label}</span>
-                <span className="font-mono text-xs text-neutral-500">{count}/5</span>
+                <span className="font-mono text-xs text-neutral-500">{count}/7</span>
               </div>
               {!latest && (
                 <div className="mb-1 text-[10px] text-neutral-600">

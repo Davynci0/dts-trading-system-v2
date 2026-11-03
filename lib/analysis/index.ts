@@ -20,7 +20,7 @@ export {
 export { findFibSetup, inGoldenZone, type FibSetup } from "./fibonacci";
 export { findSetForgetSetup, setForgetEntry, type SetForgetSetup } from "./setForget";
 export { analyzeTopDown, topDownAgrees, type TopDownAnalysis, type TopDownCandles } from "./topDown";
-export { scoreSetup, SIGNAL_THRESHOLD, type ScoringContext, type ScoreResult } from "./scoring";
+export { scoreSetup, SIGNAL_THRESHOLD, SIGNAL_SEND_THRESHOLD, m15Agrees, type ScoringContext, type ScoreResult } from "./scoring";
 export {
   analyzeM15,
   nearbyActiveZones,

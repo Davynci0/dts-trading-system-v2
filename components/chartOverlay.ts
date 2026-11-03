@@ -12,29 +12,11 @@ interface RenderTarget {
 }
 
 export interface OverlayData {
-  trendlines: {
-    kind: "resistance" | "support";
-    role: "action" | "safety" | "chart";
-    sourceTimeframe: string;
-    broken?: boolean;
-    touches: number;
-    origin: { time: number; price: number };
-    definitionAnchor: { time: number; price: number };
-    start: { time: number; price: number };
-    end: { time: number; price: number };
-    anchors: { time: number; price: number; index: number }[];
-  }[];
   zones: {
     kind: "demand" | "supply";
     top: number;
     bottom: number;
     startTime: number;
-  }[];
-  /** Last confirmed HH/HL/LH/LL pivots on the selected chart timeframe. */
-  structure?: {
-    time: number;
-    price: number;
-    label: "HH" | "HL" | "LH" | "LL";
   }[];
   /** Alex G Set & Forget: the 50–61.8% AOI of the most recent structure-breaking leg */
   aoi: {
@@ -81,7 +63,7 @@ export interface OverlayData {
   }[];
 }
 
-export const EMPTY_OVERLAY: OverlayData = { trendlines: [], zones: [], structure: [], aoi: null, fib: null };
+export const EMPTY_OVERLAY: OverlayData = { zones: [], aoi: null, fib: null };
 
 const UP = "rgba(38,166,154,";
 const DOWN = "rgba(239,83,80,";
@@ -217,21 +199,6 @@ class OverlayPaneView implements IPrimitivePaneView {
             label(`${z.kind} zone`, x0 + 4, y + (z.kind === "supply" ? 12 : h - 4), `${base}1)`, "10px monospace", "left", 4);
           }
 
-          // Confirmed market structure is deliberately capped to avoid turning
-          // the chart into a forest of labels.
-          for (const s of data.structure ?? []) {
-            const x = source.timeToX(s.time);
-            const y = source.priceToY(s.price);
-            if (x == null || y == null) continue;
-            const bullish = s.label === "HH" || s.label === "HL";
-            const color = bullish ? "#26a69a" : "#ef5350";
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-            ctx.fill();
-            label(s.label, x + 4, y + (s.label === "HH" || s.label === "LH" ? -6 : 12), color, "bold 10px monospace", "left", 2);
-          }
-
           // settled trades: path from entry to where TP/SL was actually hit
           for (const h of data.history ?? []) {
             const xA = source.timeToX(h.startTime);
@@ -291,67 +258,6 @@ class OverlayPaneView implements IPrimitivePaneView {
               ctx.setLineDash([]);
               ctx.lineWidth = 1;
             }
-          }
-
-          // trendlines: drawn through the actual detected pivot anchors
-          for (const tl of data.trendlines) {
-            const color = tl.kind === "resistance" ? "#f0b90b" : "#58a6ff";
-            ctx.strokeStyle = color;
-            ctx.lineWidth = tl.role === "action" ? 2.5 : 1.5;
-            if (tl.role === "safety" || tl.broken) ctx.setLineDash([7, 5]);
-            const xStart = source.timeToX(tl.start.time);
-            const yStart = source.priceToY(tl.start.price);
-            const xEnd = source.timeToX(tl.end.time);
-            const yEnd = source.priceToY(tl.end.price);
-            if (xStart == null || yStart == null || xEnd == null || yEnd == null) {
-              continue;
-            }
-            const lineVisible =
-              Math.min(yStart, yEnd) <= mediaSize.height && Math.max(yStart, yEnd) >= 0;
-            if (!lineVisible) continue;
-            ctx.beginPath();
-            ctx.moveTo(xStart, yStart);
-            ctx.lineTo(xEnd, yEnd);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.lineWidth = 1;
-
-            const xOrigin = source.timeToX(tl.origin.time);
-            const yOrigin = source.priceToY(tl.origin.price);
-            const xDefinition = source.timeToX(tl.definitionAnchor.time);
-            const yDefinition = source.priceToY(tl.definitionAnchor.price);
-            ctx.fillStyle = color;
-            if (xOrigin != null && yOrigin != null) {
-              ctx.beginPath();
-              ctx.arc(xOrigin, yOrigin, 4, 0, Math.PI * 2);
-              ctx.fill();
-            }
-            if (xDefinition != null && yDefinition != null) {
-              ctx.beginPath();
-              ctx.arc(xDefinition, yDefinition, 4, 0, Math.PI * 2);
-              ctx.fill();
-            }
-
-            // Smaller hollow dots mark validating touches within the tolerance band.
-            ctx.strokeStyle = color;
-            for (const a of tl.anchors) {
-              const x = source.timeToX(a.time);
-              const y = source.priceToY(a.price);
-              if (x == null || y == null) continue;
-              ctx.beginPath();
-              ctx.arc(x, y, 2.5, 0, Math.PI * 2);
-              ctx.stroke();
-            }
-
-            label(
-              `${tl.sourceTimeframe} ${tl.role} ${tl.kind} (${tl.touches}T)`,
-              Math.max(4, xStart + 5),
-              Math.max(12, yStart - 6),
-              color,
-              "10px monospace",
-              "left",
-              1
-            );
           }
 
           // lay out labels by priority; one that cannot find a free slot is dropped, never overprinted

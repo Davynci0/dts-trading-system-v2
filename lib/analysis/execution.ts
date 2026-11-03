@@ -2,15 +2,9 @@ import type { Candle, SignalDirection } from "@/lib/types";
 import { detectPivots, significantPivots, type Pivot } from "./pivots";
 import { atr } from "./indicators";
 import { detectZones, type Zone } from "./zones";
-import { detectTrendlines, type Trendline } from "./trendlines";
-import {
-  classifyStructure,
-  detectStructureEvent,
-  type StructureEvent,
-  type StructureState,
-} from "./structure";
 import { findFibSetup, type FibSetup } from "./fibonacci";
 import { findSetForgetSetup, type SetForgetSetup } from "./setForget";
+import { classifyStructure, type StructureState } from "./structure";
 
 export const MIN_TRADEABLE_ATR = 0.0003; // ~3 pips on EUR/USD; reject spread-dominated low-volatility bars
 
@@ -29,48 +23,23 @@ export interface M15Analysis {
   structuralPivots: Pivot[];
   atrValue: number;
   zones: Zone[];
-  trendlines: Trendline[];
-  structureState: StructureState;
-  structureEvent: StructureEvent | null;
   fib: FibSetup | null;
   setForget: SetForgetSetup | null;
   preferredDirection: SignalDirection | null;
-  structureMarkers: { time: number; price: number; label: "HH" | "HL" | "LH" | "LL" }[];
+  structureState: StructureState;
 }
 
-function structureMarkers(pivots: Pivot[]): M15Analysis["structureMarkers"] {
-  const markers: M15Analysis["structureMarkers"] = [];
-  let priorHigh: Pivot | null = null;
-  let priorLow: Pivot | null = null;
-
-  for (const pivot of pivots) {
-    if (pivot.kind === "high") {
-      if (priorHigh) {
-        markers.push({
-          time: pivot.time,
-          price: pivot.price,
-          label: pivot.price > priorHigh.price ? "HH" : "LH",
-        });
-      }
-      priorHigh = pivot;
-    } else {
-      if (priorLow) {
-        markers.push({
-          time: pivot.time,
-          price: pivot.price,
-          label: pivot.price > priorLow.price ? "HL" : "LL",
-        });
-      }
-      priorLow = pivot;
-    }
-  }
-  return markers.slice(-8);
+export interface M15Analysis {
+  candles: Candle[];
+  pivots: Pivot[];
+  structuralPivots: Pivot[];
+  atrValue: number;
+  zones: Zone[];
+  fib: FibSetup | null;
+  setForget: SetForgetSetup | null;
+  preferredDirection: SignalDirection | null;
+  structureState: StructureState;
 }
-
-/**
- * All chart overlays and strategy inputs for the execution timeframe.
- * Weekly/Daily/H4 are bias filters only — they do not supply lines or swings.
- */
 export function analyzeM15(candles: Candle[]): M15Analysis | null {
   if (candles.length < 60) return null;
   const pivots = detectPivots(candles, M15_PIVOT_K);
@@ -79,11 +48,9 @@ export function analyzeM15(candles: Candle[]): M15Analysis | null {
 
   const structuralPivots = significantPivots(pivots, atrValue, M15_SWING_ATR);
   const zones = detectZones(candles);
-  const trendlines = detectTrendlines(candles, pivots, atrValue, false, M15_TRENDLINE_LOOKBACK);
   const structureState = classifyStructure(structuralPivots);
   const preferredDirection: SignalDirection | null =
     structureState === "uptrend" ? "long" : structureState === "downtrend" ? "short" : null;
-  const structureEvent = detectStructureEvent(candles, structuralPivots, zones, atrValue);
   const fib = findFibSetup(
     candles,
     structuralPivots,
@@ -99,13 +66,10 @@ export function analyzeM15(candles: Candle[]): M15Analysis | null {
     structuralPivots,
     atrValue,
     zones,
-    trendlines,
-    structureState,
-    structureEvent,
     fib,
     setForget,
     preferredDirection,
-    structureMarkers: structureMarkers(structuralPivots),
+    structureState,
   };
 }
 

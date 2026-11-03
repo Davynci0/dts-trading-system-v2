@@ -1,4 +1,4 @@
-export type StrategyId = "trendline" | "structure" | "fibonacci" | "zones" | "setforget";
+export type StrategyId = "fibonacci" | "zones" | "setforget";
 export type SignalDirection = "long" | "short";
 
 export interface Candle {
@@ -55,8 +55,6 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 export const TRADE_TIMEFRAMES = ["M15"] as const satisfies readonly Timeframe[];
 
 export const STRATEGIES: { id: StrategyId; label: string }[] = [
-  { id: "trendline", label: "Trendline Touch & Bounce" },
-  { id: "structure", label: "Market Structure" },
   { id: "zones", label: "Supply/Demand Zone" },
   { id: "setforget", label: "Alex G Set & Forget" },
   { id: "fibonacci", label: "Fibonacci Retracement" },

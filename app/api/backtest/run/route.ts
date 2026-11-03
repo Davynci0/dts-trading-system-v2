@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
-import { runBacktest, computeMetrics, type BacktestTrade } from "@/lib/backtest/engine";
+import { runBacktest, computeMetrics, LOT_SIZES, type BacktestTrade } from "@/lib/backtest/engine";
 import { createAdminClient } from "@/lib/supabase/admin";
+import type { StrategyId } from "@/lib/types";
 
 export const maxDuration = 300;
 
@@ -15,19 +16,39 @@ const TIMEFRAME_HOURS: Record<string, number> = {
 };
 
 /**
- * POST /api/backtest/run  { pairs?: string[], timeframe?: "M15", count?: number }
- * Runs the Section 7 backtest per pair, persists a run + per-scope metrics
- * rows to Supabase (combined, per-strategy, per-pair).
+ * POST /api/backtest/run
+ * Body: {
+ *   pairs?: string[],
+ *   timeframe?: "M15",
+ *   count?: number,
+ *   accountBalance?: number,
+ *   lotSize?: "0.01" | "0.1" | "1",
+ *   riskPercent?: number,
+ *   minConfidence?: number,
+ *   strategies?: ("zones"|"setforget"|"fibonacci")[]
+ * }
  */
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as {
     pairs?: string[];
     timeframe?: string;
     count?: number;
+    accountBalance?: number;
+    lotSize?: "0.01" | "0.1" | "1";
+    riskPercent?: number;
+    minConfidence?: number;
+    strategies?: string[];
   };
   const pairs = body.pairs?.length ? body.pairs : ["XAU_USD"];
   const timeframe = body.timeframe ?? "M15";
   const count = Math.min(Math.max(body.count ?? 2000, 500), 5000);
+  const accountBalance = body.accountBalance ?? 25000;
+  const lotSize = body.lotSize;
+  const riskPercent = body.riskPercent ?? 0.01;
+  const minConfidence = body.minConfidence ?? 4;
+  const fixedUnits = lotSize ? LOT_SIZES[lotSize] ?? undefined : undefined;
+  const validStrategies: StrategyId[] = ["zones", "setforget", "fibonacci"];
+  const strategies = body.strategies?.filter((s): s is StrategyId => validStrategies.includes(s as StrategyId)) ?? validStrategies;
   const horizonHours = count * (TIMEFRAME_HOURS[timeframe] ?? 1 / 4);
   const topDownCounts = {
     weekly: Math.min(5000, Math.max(160, Math.ceil(horizonHours / (24 * 7)) + 40)),
@@ -46,10 +67,16 @@ export async function POST(req: NextRequest) {
         timeframes: [timeframe],
         config: {
           count,
-          engine: "top-down W/D/H4, 4-of-5 (no vision), spread+slippage, conservative same-candle SL",
+          accountBalance,
+          lotSize,
+          riskPercent,
+          minConfidence,
+          strategies,
+          fixedUnits,
+          engine: "top-down W/D/H4, 6-point checklist (no vision), spread+slippage, conservative same-candle SL",
         },
         notes:
-          "Vision AI excluded — cannot be queried retroactively (Section 7). Confidence buckets: 3 vs 4 of the 4 non-AI checks.",
+          "Vision AI excluded — cannot be queried retroactively (Section 7). Confidence buckets: 3 vs 4+ of the 6 non-AI checks.",
       })
       .select("id")
       .single();
@@ -74,6 +101,11 @@ export async function POST(req: NextRequest) {
         candles,
         htfCandles,
         topDownCandles: { weekly, daily, h4 },
+        accountBalance,
+        fixedUnits,
+        riskPercent,
+        minConfidence,
+        strategies,
       });
       for (const t of report.trades) allTrades.push({ pair, trade: t });
       summaries.push({ pair, combined: report.scopes.combined });
@@ -93,7 +125,7 @@ export async function POST(req: NextRequest) {
   const scopes: Record<string, unknown> = {
     combined: scope(allTrades),
   };
-  for (const strategy of ["trendline", "structure", "zones", "setforget", "fibonacci"] as const) {
+  for (const strategy of ["zones", "setforget", "fibonacci"] as const) {
     scopes[`strategy:${strategy}`] = scope(allTrades.filter((r) => r.trade.strategy === strategy));
   }
   for (const pair of pairs) {
@@ -108,5 +140,15 @@ export async function POST(req: NextRequest) {
     if (error) console.error("persist backtest_results:", error.message);
   }
 
-  return NextResponse.json({ runId, timeframe, count, summaries });
+  return NextResponse.json({
+    runId,
+    timeframe,
+    count,
+    accountBalance,
+    lotSize,
+    riskPercent,
+    minConfidence,
+    strategies,
+    summaries,
+  });
 }

@@ -229,7 +229,7 @@ D.push(mk(22, 1.1002, 1.1065, 1.1, 1.1062)); // impulse
 for (let i = 23; i <= 39; i++) D.push(mk(i, 1.1055, 1.1059, 1.1051, 1.1055));
 D.push(mk(40, 1.1055, 1.1056, 1.1, 1.1008)); // into the zone
 D.push(mk(41, 1.1008, 1.101, 1.0999, 1.1004)); // still inside
-D.push(mk(42, 1.1004, 1.1009, 1.0995, 1.1007)); // bullish pin bar inside (lower wick 3× body)
+D.push(mk(42, 1.1005, 1.1007, 1.0995, 1.1006)); // bullish pin bar inside (long lower shadow, small body, close upper half)
 
 const zonesD = detectZones(D);
 const entryD = detectZoneEntry(D, zonesD);
@@ -245,16 +245,14 @@ if (entryD) {
     pivots: detectPivots(D),
     atrValue: atr(D)!,
     zones: zonesD,
-    trendlines: [],
-    structureEvent: null,
     fib: null,
   };
   const scoredD = scoreSetup("zones", ctxD, null);
   console.log("[zones scoring]", scoredD.count, JSON.stringify(scoredD.confirmations));
   check("zones: rejection candle detected in zone", scoredD.confirmations["Rejection candle in zone"] === true, "pin bar");
-  check("zones: freshness confirmed (1 touch ≤ 2)", scoredD.confirmations["Zone fresh (few touches)"] === true, `touches=${entryD.zone.touches}`);
-  check("zones: fires at 4/5 without vision", scoredD.fired && scoredD.count === 4, `count=${scoredD.count}`);
-  check("zones: vision adds 5th point", scoreSetup("zones", ctxD, true).count === 5, "5/5 with vision");
+  check("zones: freshness confirmed (1 touch ≤ 1)", entryD.zone.touches <= 1, `touches=${entryD.zone.touches}`);
+  check("zones: fires at 5/6 without vision", scoredD.fired && scoredD.count === 5, `count=${scoredD.count}`);
+  check("zones: vision adds 6th point", scoreSetup("zones", ctxD, true).count === 6, "6/6 with vision");
 }
 
 // stale visit: price parked inside the zone beyond the entry window → no trigger
@@ -262,18 +260,19 @@ const Dstale = [...D, mk(43, 1.1006, 1.1008, 1.1001, 1.1005), mk(44, 1.1005, 1.1
 check("zones: stale visit lapses (no trigger after 5 candles inside)", detectZoneEntry(Dstale, detectZones(Dstale)) === null, "candlesInside > window");
 
 // ============ Stage 5.3 + 6: fib golden zone + scoring ============
-// swing low (10,1.1000) → swing high (40,1.1100), retrace into golden zone at 55 with pin-bar rejection
+// swing low (10,1.1000) → swing high (40,1.1100), retrace into golden zone at 55-58 with a sharp drop so RSI falls below 50, then a bullish pin bar at 59.
 const F: Candle[] = [];
 for (let i = 0; i < 60; i++) {
   let p: number;
   if (i <= 10) p = 1.104 - (1.104 - 1.1) * (i / 10);
   else if (i <= 40) p = 1.1 + 0.01 * ((i - 10) / 30);
-  else p = 1.11 - 0.008 * ((i - 40) / 19); // retrace toward ~1.102
+  else if (i <= 55) p = 1.11 - 0.006 * ((i - 40) / 15); // shallow retrace
+  else p = 1.104 - 0.0015 * (i - 55); // sharper drop into the golden zone for RSI
   F.push(mk(i, p - 0.0001, p + 0.00025, p - 0.00025, p));
 }
 // golden zone: 1.11 - 0.618*0.01 = 1.10382 .. 1.11 - 0.786*0.01 = 1.10214
-// last candle: bullish pin bar inside the zone
-F[59] = mk(59, 1.1038, 1.104, 1.102, 1.1037);
+// last candle: bullish pin bar inside the zone, body in direction, lower wick ≥ body, close in upper half
+F[59] = mk(59, 1.1035, 1.104, 1.102, 1.1039);
 
 const pivotsF = detectPivots(F);
 const atrF = atr(F)!;
@@ -300,19 +299,17 @@ if (fib) {
     pivots: pivotsF,
     atrValue: atrF,
     zones: detectZones(F),
-    trendlines: [],
-    structureEvent: null,
     fib,
   };
   const noVision = scoreSetup("fibonacci", ctx, null);
   console.log("[scoring] fib noVision:", noVision.count, JSON.stringify(noVision.confirmations));
   check("scoring: trigger present", noVision.hasTrigger, `count=${noVision.count}`);
   check("scoring: rejection candle detected", noVision.confirmations["Rejection candle in zone"] === true, "pin bar");
-  check("scoring: fires at 3/5 without vision", noVision.fired && noVision.count === 3, `count=${noVision.count}`);
+  check("scoring: fires at 4/6 without vision", noVision.fired && noVision.count === 4, `count=${noVision.count}`);
   const withVision = scoreSetup("fibonacci", ctx, true);
-  check("scoring: vision adds the 5th point (high confidence)", withVision.count === 4, `count=${withVision.count}`);
+  check("scoring: vision adds the 5th point", withVision.count === 5, `count=${withVision.count}`);
   const visionNo = scoreSetup("fibonacci", ctx, false);
-  check("scoring: vision NO does not add a point", visionNo.count === 3, `count=${visionNo.count}`);
+  check("scoring: vision NO does not add a point", visionNo.count === 4, `count=${visionNo.count}`);
 }
 
 // ============ Alex G set & forget: untested AOI first touch ============
@@ -373,8 +370,6 @@ if (sf) {
     pivots: detectPivots(D),
     atrValue: atr(D)!,
     zones: detectZones(D),
-    trendlines: [],
-    structureEvent: null,
     fib: null,
     topDown: bearishTopDown,
   };
@@ -402,7 +397,7 @@ const report = runBacktest({ pair: "EUR_USD", timeframe: "M15", candles: B, htfC
 const comb = report.scopes.combined;
 console.log("\n[backtest] trades IS=%d OOS=%d", comb.inSample.trades, comb.outOfSample.trades);
 check("backtest: runs without crashing", report.candles === 600, `${report.candles} candles`);
-check("backtest: scopes present", ["combined", "strategy:trendline", "strategy:structure", "strategy:fibonacci"].every((k) => report.scopes[k]), Object.keys(report.scopes).join(","));
+check("backtest: scopes present", ["combined", "strategy:zones", "strategy:setforget", "strategy:fibonacci"].every((k) => report.scopes[k]), Object.keys(report.scopes).join(","));
 check("backtest: metrics consistent", comb.inSample.wins <= comb.inSample.trades && comb.inSample.confidence3 + comb.inSample.confidence4 <= comb.inSample.trades + 1, "buckets ≤ trades");
 check("backtest: limitation noted", report.limitation.includes("4 non-AI"), "vision exclusion documented");
 

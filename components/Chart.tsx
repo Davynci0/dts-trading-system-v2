@@ -177,9 +177,7 @@ export default function Chart({
       overlayRef.current = null;
     }
     const has =
-      overlay.trendlines.length > 0 ||
       overlay.zones.length > 0 ||
-      (overlay.structure?.length ?? 0) > 0 ||
       overlay.fib != null ||
       overlay.aoi != null ||
       overlay.position != null ||

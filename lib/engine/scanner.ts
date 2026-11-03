@@ -6,10 +6,13 @@ import {
   computeRiskLevels,
   analyzeM15,
   EXECUTION_HTF,
+  m15Agrees,
+  topDownAgrees,
   type ScoringContext,
   type ScoreResult,
 } from "@/lib/analysis";
 import { analyzeTopDown } from "@/lib/analysis/topDown";
+import { classifyStructure } from "@/lib/analysis/structure";
 import { buildSetupKey } from "@/lib/analysis/setupKey";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
 import { findOpenTrades } from "@/lib/engine/supersede";
@@ -22,11 +25,25 @@ import { createAdminClient } from "@/lib/supabase/admin";
 const ENGINE_VERSION = "tori-v3";
 
 const STRATEGY_LABELS: Record<StrategyId, string> = {
-  trendline: "Trendline Touch & Bounce",
-  structure: "Market Structure",
   zones: "Supply/Demand Zone",
   setforget: "Alex G Set & Forget",
   fibonacci: "Fibonacci Retracement",
+};
+
+/** Strategies enabled for live signals. Structure and trendline removed after
+ *  backtest research showed they lost on the recent XAU/USD M15 window. */
+const ENABLED_STRATEGIES: StrategyId[] = ["zones", "setforget", "fibonacci"];
+
+/** Per-strategy minimum non-AI confirmations required before a signal is sent.
+ *  Derived from 5,000-candle XAU/USD M15 research:
+ *    - setforget >= 4: 50% WR, 2.19 PF
+ *    - zones >= 5: 40% WR, 1.50 PF
+ *    - fibonacci >= 5: 30.6% WR, 1.03 PF (marginal, included for confluence)
+ */
+const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
+  zones: 5,
+  setforget: 4,
+  fibonacci: 5,
 };
 
 
@@ -96,7 +113,7 @@ export async function runScan(opts: {
       events.push({
         pair,
         timeframe: "H4",
-        strategy: "trendline",
+        strategy: "zones",
         kind: "error",
         detail: `top-down analysis unavailable: ${(e as Error).message.slice(0, 160)}`,
       });
@@ -115,7 +132,7 @@ export async function runScan(opts: {
         const m15 = analyzeM15(candles);
         if (!m15) continue;
 
-        const { pivots, atrValue, zones, trendlines, structureEvent, fib, setForget } = m15;
+        const { pivots, atrValue, zones, fib, setForget } = m15;
 
         const ctx: ScoringContext = {
           instrument: pair,
@@ -124,8 +141,6 @@ export async function runScan(opts: {
           pivots,
           atrValue,
           zones,
-          trendlines,
-          structureEvent,
           fib,
           setForget,
           topDown,
@@ -135,23 +150,9 @@ export async function runScan(opts: {
         // collect the ones that newly crossed threshold this scan, then send a
         // single reconciled signal (confluence bonus, or AI arbitration on a
         // long/short disagreement).
-        interface Firing {
-          strategy: StrategyId;
-          direction: "long" | "short";
-          scored: ScoreResult;
-          visionNote: string | null;
-          setupKey: string;
-          risk: ReturnType<typeof computeRiskLevels>;
-        }
         const fired: Firing[] = [];
 
-        for (const strategy of [
-          "trendline",
-          "structure",
-          "zones",
-          "setforget",
-          "fibonacci",
-        ] as StrategyId[]) {
+        for (const strategy of ENABLED_STRATEGIES) {
           const firstPass = scoreSetup(strategy, ctx, null);
           if (!firstPass.hasTrigger) continue;
 
@@ -159,7 +160,9 @@ export async function runScan(opts: {
           const setupKey = setupKeyOf(pair, tf, firstPass);
           const prior = await loadSetup(supabase, pair, tf, setupKey);
 
-          // Vision check (#5): query Gemini once the other checks start stacking (Section 3 note)
+          // Vision check (#7): query Gemini only when the strategy-specific minimum
+          // non-AI confirmations are already stacked. This matches the backtest research
+          // thresholds so live signals mirror the profitable combinations.
           let visionOk: boolean | null = prior?.visionChecked
             ? firstPass.confirmations["Vision AI"] ?? null
             : null;
@@ -167,8 +170,9 @@ export async function runScan(opts: {
           const nonAiCount = Object.entries(firstPass.confirmations)
             .filter(([k, v]) => k !== "Vision AI" && v)
             .length;
+          const minNonAi = STRATEGY_MIN_CONFIDENCE[strategy];
 
-          if (useVision && !prior?.visionChecked && nonAiCount >= 2) {
+          if (useVision && !prior?.visionChecked && nonAiCount >= minNonAi) {
             try {
               const risk = computeRiskLevels({
                 instrument: pair,
@@ -180,7 +184,6 @@ export async function runScan(opts: {
                 accountBalance,
               });
               const png = await renderSetupPng(candles, {
-                trendlines,
                 zones,
                 fib: fib ?? undefined,
                 entry,
@@ -222,7 +225,7 @@ export async function runScan(opts: {
 
           if (!scored.fired) {
             if (prior && scored.count !== prior.count) {
-              events.push({ pair, timeframe: tf, strategy, kind: "update", detail: `${scored.count}/5` });
+              events.push({ pair, timeframe: tf, strategy, kind: "update", detail: `${scored.count}/7` });
             }
           } else if (!prior?.signaled) {
             fired.push({
@@ -270,7 +273,7 @@ export async function runScan(opts: {
         events.push({
           pair,
           timeframe: tf,
-          strategy: "structure",
+          strategy: "zones",
           kind: "error",
           detail: (e as Error).message.slice(0, 200),
         });
@@ -311,13 +314,6 @@ export async function runScan(opts: {
 }
 
 function triggerDescription(scored: ScoreResult): string {
-  if (scored.strategy === "trendline" && scored.trigger?.line) {
-    return `${scored.trigger.line.kind} trendline touched (${scored.trigger.line.touches} touches)`;
-  }
-  if (scored.strategy === "structure" && scored.trigger?.event) {
-    const e = scored.trigger.event;
-    return e.type === "bos" ? `break of structure at ${e.level}` : e.type === "choch" ? `change of character at ${e.level}` : `re-entry into ${e.zone?.kind} zone`;
-  }
   if (scored.strategy === "fibonacci" && scored.trigger?.fib) {
     return `price in golden zone ${scored.trigger.fib.goldenBottom.toFixed(5)}–${scored.trigger.fib.goldenTop.toFixed(5)}`;
   }
@@ -327,7 +323,7 @@ function triggerDescription(scored: ScoreResult): string {
   }
   if (scored.strategy === "setforget" && scored.trigger?.setForget) {
     const s = scored.trigger.setForget;
-    return `first touch of ${s.direction === "long" ? "demand" : "supply"} AOI ${s.aoiBottom.toFixed(5)}–${s.aoiTop.toFixed(5)} after structure break at ${s.brokenLevel.toFixed(5)}`;
+    return `first touch of ${s.direction === "long" ? "demand" : "supply"} AOI ${s.aoiBottom.toFixed(5)}–${s.aoiTop.toFixed(5)}`;
   }
   return "core trigger";
 }
@@ -419,7 +415,7 @@ async function reconcileAndSignal(args: {
       events.push({
         pair,
         timeframe: tf,
-        strategy: fired[0]?.strategy ?? "structure",
+        strategy: fired[0]?.strategy ?? "zones",
         kind: "skipped",
         detail: `a trade is already open on ${pair} — holding until it hits TP or SL`,
       });
@@ -430,9 +426,8 @@ async function reconcileAndSignal(args: {
   const quality = (f: Firing): number => {
     let q = f.scored.count * 10;
     if (f.scored.topDownAligned) q += 35; // alignment is the strongest edge
-    if (f.scored.strategy === "setforget") q += 5; // first-touch AOI is highest-probability
     const rejection = Object.entries(f.scored.confirmations).some(
-      ([k, v]) => v && /Rejection|Conviction/.test(k)
+      ([k, v]) => v && /Rejection|Momentum/.test(k)
     );
     if (rejection) q += 12;
     if (f.risk.ok) {
@@ -443,17 +438,25 @@ async function reconcileAndSignal(args: {
     }
     return q;
   };
-  const highOdds = (f: Firing) =>
-    f.risk.ok && (f.scored.topDownAligned ? f.scored.count >= 3 : f.scored.count >= 4);
+  // High-quality final signal gate. Live data shows confidence-3 signals win
+  // only ~20% of the time, while 4+ hit ~50%. Require at least the strategy's
+  // researched non-AI minimum + vision confirmation, valid risk, and R≥2.
+  const highOdds = (f: Firing) => {
+    if (!f.risk.ok || f.risk.levels.rMultiple < 2) return false;
+    if (f.scored.count < STRATEGY_MIN_CONFIDENCE[f.scored.strategy] + 1) return false;
+    const trendAligned = f.scored.topDownAligned || m15Agrees(classifyStructure(ctx.pivots), f.direction);
+    if (!trendAligned) return false;
+    return true;
+  };
 
   const candidates = fired.filter(highOdds);
   if (candidates.length === 0) {
     events.push({
       pair,
       timeframe: tf,
-      strategy: fired[0]?.strategy ?? "structure",
+      strategy: fired[0]?.strategy ?? "zones",
       kind: "skipped",
-      detail: "no high-odds M15 setup (need HTF alignment at 3/5, or 4/5 countertrend with valid R)",
+      detail: `no high-odds M15 setup (need strategy-specific confirmations + vision, HTF or M15 alignment, and R≥2)`,
     });
     for (const f of fired) {
       await saveSetup(supabase, pair, tf, f.setupKey, {
@@ -471,17 +474,23 @@ async function reconcileAndSignal(args: {
   const longs = candidates.filter((f) => f.direction === "long");
   const shorts = candidates.filter((f) => f.direction === "short");
 
+  // If both directions have candidates, require top-down alignment to pick a side;
+  // otherwise pick the side with candidates. This prevents counter-trend signals
+  // when the higher timeframe is clearly bearish/bullish.
   let winnerSide: "long" | "short";
   let arbitrationNote: string | null = null;
 
   if (longs.length === 0 || shorts.length === 0) {
     winnerSide = longs.length > 0 ? "long" : "short";
+  } else if (ctx.topDown) {
+    winnerSide = topDownAgrees(ctx.topDown, "long") ? "long" : "short";
+    arbitrationNote = `both sides present — chose ${winnerSide} via HTF bias`;
   } else {
     const sideScore = (arr: Firing[]) => arr.reduce((s, f) => s + quality(f), 0);
     const fallback: "long" | "short" = sideScore(longs) >= sideScore(shorts) ? "long" : "short";
+    winnerSide = fallback;
     try {
       const png = await renderSetupPng(candles, {
-        trendlines: ctx.trendlines,
         zones: ctx.zones,
         fib: ctx.fib ?? undefined,
       });
@@ -489,7 +498,7 @@ async function reconcileAndSignal(args: {
         arr
           .map(
             (f) =>
-              `${STRATEGY_LABELS[f.strategy]} (${f.scored.count}/5: ${triggerDescription(f.scored)})`
+              `${STRATEGY_LABELS[f.strategy]} (${f.scored.count}/7: ${triggerDescription(f.scored)})`
           )
           .join("; ");
       const result = await geminiArbitrate(
@@ -504,11 +513,11 @@ async function reconcileAndSignal(args: {
       );
       winnerSide = result.direction;
       arbitrationNote = `CONFLICT (long: ${describe(longs)} | short: ${describe(shorts)}) → AI: ${result.direction.toUpperCase()} — ${result.note}`;
-    } catch (e) {
-      winnerSide = fallback;
-      arbitrationNote = `CONFLICT resolved by confirmation majority → ${fallback.toUpperCase()} (AI unavailable: ${(e as Error).message.slice(0, 100)})`;
+      } catch (e) {
+        winnerSide = sideScore(longs) >= sideScore(shorts) ? "long" : "short";
+        arbitrationNote = `arbitration failed (${(e as Error).message}); defaulted to ${winnerSide}`;
+      }
     }
-  }
 
   const winners = winnerSide === "long" ? longs : shorts;
   const ranked = [...winners].sort((a, b) => quality(b) - quality(a));

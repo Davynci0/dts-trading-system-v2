@@ -1,20 +1,18 @@
 import type { Candle, SignalDirection, StrategyId } from "@/lib/types";
 import type { Pivot } from "./pivots";
 import type { Zone } from "./zones";
-import type { Trendline } from "./trendlines";
-import type { StructureEvent } from "./structure";
+import type { StructureState } from "./structure";
 import type { FibSetup } from "./fibonacci";
+import { classifyStructure } from "./structure";
 import { topDownAgrees, type TopDownAnalysis } from "./topDown";
 import {
   goldenZoneHasPoi,
   htfAgrees,
-  isConvictionCandle,
   isRejectionCandle,
   rsiTurning,
-  zoneIsFresh,
+  zoneIsVeryFresh,
 } from "./confirmations";
 import { inGoldenZone } from "./fibonacci";
-import { trendlineTouch, bounceConfirmed } from "./trendlines";
 import { detectZoneEntry } from "./zones";
 import { setForgetEntry, type SetForgetSetup } from "./setForget";
 
@@ -25,8 +23,8 @@ export interface ScoringContext {
   pivots: Pivot[];
   atrValue: number;
   zones: Zone[];
-  trendlines: Trendline[];
-  structureEvent: StructureEvent | null;
+  trendlines?: never;
+  structureEvent?: never;
   fib: FibSetup | null;
   /** Alex G set-and-forget AOI setup (optional). */
   setForget?: SetForgetSetup | null;
@@ -37,9 +35,9 @@ export interface ScoringContext {
 export interface ScoreResult {
   strategy: StrategyId;
   direction: SignalDirection;
-  /** the 5 checks, keyed by label; #5 (vision) is filled by the caller */
+  /** the 7 checks, keyed by label; #7 (vision) is filled by the caller */
   confirmations: Record<string, boolean>;
-  /** how many of the 5 are currently true */
+  /** how many of the 7 are currently true */
   count: number;
   /** signal fires at >= 3 */
   fired: boolean;
@@ -49,19 +47,30 @@ export interface ScoreResult {
   hasTrigger: boolean;
   /** the setup's trigger for vision + risk context */
   trigger: {
-    line?: Trendline;
-    event?: StructureEvent;
     fib?: FibSetup;
     zone?: Zone;
     setForget?: SetForgetSetup;
   } | null;
 }
 
-export const SIGNAL_THRESHOLD = 3; // Section 3 — majority of 5, deliberately not unanimous
+export const SIGNAL_THRESHOLD = 3; // threshold that makes a setup "watchable" / tracked
+/** Minimum confirmations required before the scanner will send a live signal. */
+export const SIGNAL_SEND_THRESHOLD = 4;
+
+/** M15 execution-timeframe trend alignment: avoid counter-M15 trades. */
+export function m15Agrees(structureState: StructureState, direction: SignalDirection): boolean {
+  return (
+    (structureState === "uptrend" && direction === "long") ||
+    (structureState === "downtrend" && direction === "short")
+  );
+}
+
+/** Minimum confirmations required to consider a fired setup for a final signal. */
+export const HIGH_QUALITY_THRESHOLD = 4;
 
 /**
- * 5-point confirmation scoring (Section 3). Deterministic checks only —
- * the vision check (#5) is set by the caller from the Gemini result, since
+ * 6-point confirmation scoring. Deterministic checks only —
+ * the vision check (#6) is set by the caller from the Gemini result, since
  * it's async and unavailable in backtests (Section 7: 4-of-5 there).
  */
 export function scoreSetup(
@@ -75,40 +84,7 @@ export function scoreSetup(
   const confirmations: Record<string, boolean> = {};
   let trigger: ScoreResult["trigger"] = null;
 
-  if (strategy === "trendline") {
-    // Execution-timeframe lines only. HTF (H4) action lines are a bias filter,
-    // not the M15 trigger — projecting them onto 15m candles mis-reads structure.
-    const hit = trendlineTouch(candles, ctx.trendlines, ctx.atrValue);
-    if (!hit) {
-      return noTrigger(strategy);
-    }
-    direction = hit.direction;
-    trigger = { line: hit.line };
-    confirmations["Valid trendline touch"] = true; // core trigger now includes close-on-correct-side
-    // rejection candle or explicit bounce confirmation (either satisfies #2)
-    confirmations["Rejection candle"] =
-      isRejectionCandle(candles, direction) || bounceConfirmed(candles, hit.line, direction, ctx.atrValue);
-    confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
-    confirmations["HTF trend agrees"] = ctx.topDown
-      ? topDownAgrees(ctx.topDown, direction)
-      : htfAgrees(htfCandles, direction);
-    confirmations["Vision AI"] = visionOk === true;
-  } else if (strategy === "structure") {
-    const event = ctx.structureEvent;
-    if (!event) {
-      return noTrigger(strategy);
-    }
-    direction = event.direction;
-    trigger = { event };
-    confirmations["Structure event"] = true; // core trigger (BOS / CHoCH / zone bounce)
-    confirmations["Conviction close"] = isConvictionCandle(candles, direction);
-    confirmations["Zone freshness"] =
-      event.type === "zone_reentry" ? zoneIsFresh(event.zone?.touches ?? 0) : true;
-    confirmations["HTF structure agrees"] = ctx.topDown
-      ? topDownAgrees(ctx.topDown, direction)
-      : htfAgrees(htfCandles, direction);
-    confirmations["Vision AI"] = visionOk === true;
-  } else if (strategy === "zones") {
+  if (strategy === "zones") {
     const entry = detectZoneEntry(candles, ctx.zones);
     if (!entry) {
       return noTrigger(strategy);
@@ -117,10 +93,12 @@ export function scoreSetup(
     trigger = { zone: entry.zone };
     confirmations["Price entered zone"] = true; // core trigger
     confirmations["Rejection candle in zone"] = isRejectionCandle(candles, direction);
-    confirmations["Zone fresh (few touches)"] = entry.zone.touches <= 2;
+    confirmations["Zone fresh (≤1 touch)"] = zoneIsVeryFresh(entry.zone.touches);
+    confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = ctx.topDown
       ? topDownAgrees(ctx.topDown, direction)
       : htfAgrees(htfCandles, direction);
+    confirmations["M15 trend agrees"] = m15Agrees(classifyStructure(ctx.pivots), direction);
     confirmations["Vision AI"] = visionOk === true;
   } else if (strategy === "setforget") {
     const entry = setForgetEntry(candles, ctx.setForget ?? null);
@@ -135,9 +113,11 @@ export function scoreSetup(
       { goldenTop: entry.setup.aoiTop, goldenBottom: entry.setup.aoiBottom },
       { zones: ctx.zones, pivots: ctx.pivots, instrument: ctx.instrument, atrValue: ctx.atrValue }
     );
+    confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = ctx.topDown
       ? topDownAgrees(ctx.topDown, direction)
       : htfAgrees(htfCandles, direction);
+    confirmations["M15 trend agrees"] = m15Agrees(classifyStructure(ctx.pivots), direction);
     confirmations["Vision AI"] = visionOk === true;
   } else {
     const fib = ctx.fib;
@@ -154,9 +134,11 @@ export function scoreSetup(
       instrument: ctx.instrument,
       atrValue: ctx.atrValue,
     });
+    confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = ctx.topDown
       ? topDownAgrees(ctx.topDown, direction)
       : htfAgrees(htfCandles, direction);
+    confirmations["M15 trend agrees"] = m15Agrees(classifyStructure(ctx.pivots), direction);
     confirmations["Vision AI"] = visionOk === true;
   }
 

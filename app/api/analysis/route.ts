@@ -2,35 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
 import { analyzeM15, nearbyActiveZones } from "@/lib/analysis/execution";
 import { analyzeTopDown } from "@/lib/analysis/topDown";
-import { lineValueAtTime, type Trendline } from "@/lib/analysis/trendlines";
 
 export const maxDuration = 60;
-
-function chartLine(line: Trendline, role: "action" | "safety" | "chart", sourceTimeframe: string, candles: Awaited<ReturnType<typeof fetchCandles>>) {
-  const firstVisibleTime = candles[0].time;
-  const lastVisibleTime = candles[candles.length - 1].time;
-  const startTime = Math.max(line.origin.time, firstVisibleTime);
-
-  return {
-    kind: line.kind,
-    role,
-    sourceTimeframe,
-    broken: line.broken,
-    touches: line.touches,
-    origin: { time: line.origin.time, price: line.origin.price },
-    definitionAnchor: {
-      time: line.definitionAnchor.time,
-      price: line.definitionAnchor.price,
-    },
-    start: { time: startTime, price: lineValueAtTime(line, startTime) },
-    end: { time: lastVisibleTime, price: lineValueAtTime(line, lastVisibleTime) },
-    anchors: line.anchors.map((anchor) => ({
-      time: anchor.time,
-      price: anchor.price,
-      index: anchor.index,
-    })),
-  };
-}
 
 /**
  * GET /api/analysis?instrument=XAU_USD&granularity=M15&count=500
@@ -56,7 +29,7 @@ export async function GET(req: NextRequest) {
     ]);
     const analysis = analyzeM15(candles);
     if (!analysis) {
-      return NextResponse.json({ candles, trendlines: [], zones: [], structure: [], fib: null, aoi: null, topDown: null });
+      return NextResponse.json({ candles, zones: [], fib: null, aoi: null, topDown: null });
     }
 
     const topDown = analyzeTopDown({ weekly, daily, h4 });
@@ -68,8 +41,6 @@ export async function GET(req: NextRequest) {
       startTime: z.startTime,
       touches: z.touches,
     }));
-
-    const trendlines = analysis.trendlines.map((line) => chartLine(line, "chart", "M15", candles));
 
     const fib = analysis.fib;
     const fibOut = fib
@@ -106,9 +77,7 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       candles,
-      trendlines,
       zones,
-      structure: analysis.structureMarkers,
       fib: fibOut,
       aoi: aoiOut,
       topDown: {

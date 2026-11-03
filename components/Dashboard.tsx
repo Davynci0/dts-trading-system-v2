@@ -10,9 +10,7 @@ import { pipSize } from "@/lib/analysis/confirmations";
 import { EMPTY_OVERLAY, type OverlayData } from "@/components/chartOverlay";
 
 const LAYERS = [
-  { id: "trendlines", label: "Lines" },
   { id: "zones", label: "Zones" },
-  { id: "structure", label: "Structure" },
   { id: "fib", label: "Fib" },
   { id: "aoi", label: "AOI" },
   { id: "position", label: "Trade plan" },
@@ -43,9 +41,7 @@ export default function Dashboard() {
   const [scanStatus, setScanStatus] = useState<string | null>(null);
   const [pairSignals, setPairSignals] = useState<Signal[]>([]);
   const [layers, setLayers] = useState<Record<LayerId, boolean>>({
-    trendlines: true,
     zones: true,
-    structure: true,
     fib: true,
     aoi: true,
     position: true,
@@ -98,27 +94,29 @@ export default function Dashboard() {
     const history: NonNullable<OverlayData["history"]> = [];
     if (candles.length > 0) {
       const first = candles[0].time;
-      for (const s of pairSignals) {
-        if ((s.outcome !== "win" && s.outcome !== "loss") || !s.outcome_at || s.outcome_price == null) continue;
+      const sorted = pairSignals
+        .filter((s) => (s.outcome === "win" || s.outcome === "loss") && s.outcome_at && s.outcome_price != null)
+        .sort((a, b) => new Date(b.outcome_at!).getTime() - new Date(a.outcome_at!).getTime())
+        .slice(0, 20); // only show the 20 most recent settled trades
+      for (const s of sorted) {
+        if (!s.outcome_at || s.outcome_price == null) continue;
         const start = Math.floor(new Date(s.created_at).getTime() / 1000);
         const end = Math.floor(new Date(s.outcome_at).getTime() / 1000);
-        if (end < first) continue; // settled before the visible window
+        if (end < first) continue;
         history.push({
           direction: s.direction,
           entry: s.entry,
           startTime: barAt(start).time,
           endTime: barAt(end).time,
           exitPrice: s.outcome_price,
-          outcome: s.outcome,
+          outcome: s.outcome as "win" | "loss",
           r: s.outcome_r ?? 0,
           skipped: s.status === "skipped",
         });
       }
     }
     return {
-      trendlines: layers.trendlines ? overlay.trendlines : [],
       zones: layers.zones ? overlay.zones : [],
-      structure: layers.structure ? overlay.structure : [],
       fib: layers.fib ? overlay.fib : null,
       aoi: layers.aoi ? overlay.aoi : null,
       position: layers.position ? position : null,
@@ -159,20 +157,16 @@ export default function Dashboard() {
           if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
           // signature of the drawn analysis — skip re-render when nothing changed
           const sig = JSON.stringify({
-            t: json.trendlines ?? [],
             z: json.zones ?? [],
-            s: json.structure ?? [],
             f: json.fib ?? null,
             a: json.aoi ?? null,
             d: json.topDown ?? null,
           });
-          if (!initial && sig === analysisSigRef.current) return; // market structure unchanged
+          if (!initial && sig === analysisSigRef.current) return; // analysis unchanged
           analysisSigRef.current = sig;
           setCandles(json.candles);
           setOverlay({
-            trendlines: json.trendlines ?? [],
             zones: json.zones ?? [],
-            structure: json.structure ?? [],
             aoi: json.aoi ?? null,
             fib: json.fib ?? null,
           });
@@ -195,7 +189,7 @@ export default function Dashboard() {
     // 1) initial load
     loadAnalysis(true);
     // 2) TA refresh every 15 min (new M15 bar) — the signature
-    // check inside loadAnalysis skips the re-render when structure is unchanged
+    // check inside loadAnalysis skips the re-render when analysis is unchanged
     const taTimer = setInterval(() => loadAnalysis(false), 15 * 60 * 1000);
     // 3) fast live tick — updates only the forming bar via a cheap 1-candle call
     const liveTimer = setInterval(() => {
