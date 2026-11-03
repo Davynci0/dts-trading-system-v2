@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
     weekly: Math.min(5000, Math.max(160, Math.ceil(horizonHours / (24 * 7)) + 40)),
     daily: Math.min(5000, Math.max(260, Math.ceil(horizonHours / 24) + 40)),
     h4: Math.min(5000, Math.max(360, Math.ceil(horizonHours / 4) + 40)),
+    h1: Math.min(5000, Math.max(240, Math.ceil(horizonHours) + 40)),
   };
 
   const supabase = createAdminClient();
@@ -88,19 +89,20 @@ export async function POST(req: NextRequest) {
 
   for (const pair of pairs) {
     try {
-      const [candles, htfCandles, weekly, daily, h4] = await Promise.all([
+      const [candles, htfCandles, weekly, daily, h4, h1] = await Promise.all([
         fetchCandles({ instrument: pair, granularity: timeframe, count }),
         fetchCandles({ instrument: pair, granularity: HTF_OF[timeframe] ?? "H4", count: 500 }),
         fetchCandles({ instrument: pair, granularity: "W", count: topDownCounts.weekly }),
         fetchCandles({ instrument: pair, granularity: "D", count: topDownCounts.daily }),
         fetchCandles({ instrument: pair, granularity: "H4", count: topDownCounts.h4 }),
+        fetchCandles({ instrument: pair, granularity: "H1", count: topDownCounts.h1 }),
       ]);
       const report = runBacktest({
         pair,
         timeframe,
         candles,
         htfCandles,
-        topDownCandles: { weekly, daily, h4 },
+        topDownCandles: { weekly, daily, h4, h1 },
         accountBalance,
         fixedUnits,
         riskPercent,

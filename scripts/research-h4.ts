@@ -31,24 +31,25 @@ async function fetchRange(instrument: string, granularity: string, years: number
 }
 
 async function main() {
-  const data: Record<string, { h4: Candle[]; d: Candle[]; w: Candle[] }> = {};
+  const data: Record<string, { h4: Candle[]; h1: Candle[]; d: Candle[]; w: Candle[] }> = {};
   for (const pair of RESEARCH_PAIRS) {
-    const [h4, d, w] = await Promise.all([
+    const [h4, h1, d, w] = await Promise.all([
       fetchRange(pair, "H4", YEARS, 600),
+      fetchRange(pair, "H1", YEARS, 300),
       fetchRange(pair, "D", YEARS + 1, 3000),
       fetchRange(pair, "W", YEARS + 2, 3000),
     ]);
-    data[pair] = { h4, d, w };
+    data[pair] = { h4, h1, d, w };
   }
 
   report(data);
 }
 
-function report(data: Record<string, { h4: Candle[]; d: Candle[]; w: Candle[] }>) {
+function report(data: Record<string, { h4: Candle[]; h1: Candle[]; d: Candle[]; w: Candle[] }>) {
   const all: { pair: string; t: BacktestTrade }[] = [];
   for (const pair of RESEARCH_PAIRS) {
-    const { h4, d, w } = data[pair];
-    const r = runBacktest({ pair, timeframe: "H4", candles: h4, htfCandles: d, topDownCandles: { weekly: w, daily: d, h4 } });
+    const { h4, h1, d, w } = data[pair];
+    const r = runBacktest({ pair, timeframe: "H4", candles: h4, htfCandles: d, topDownCandles: { weekly: w, daily: d, h4, h1 } });
     for (const t of r.trades) all.push({ pair, t });
     console.log(`${pair.padEnd(8)} ${h4.length} candles  ${line(r.trades)}`);
   }

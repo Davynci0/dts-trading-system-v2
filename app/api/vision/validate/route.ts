@@ -24,18 +24,19 @@ export async function POST(req: NextRequest) {
   const granularity = body?.granularity ?? "M15";
 
   try {
-    const [candles, weekly, daily, h4] = await Promise.all([
+    const [candles, weekly, daily, h4, h1] = await Promise.all([
       fetchCandles({ instrument, granularity, count: 300 }),
       fetchCandles({ instrument, granularity: "W", count: 160 }),
       fetchCandles({ instrument, granularity: "D", count: 260 }),
       fetchCandles({ instrument, granularity: "H4", count: 360 }),
+      fetchCandles({ instrument, granularity: "H1", count: 240 }),
     ]);
     const pivots = detectPivots(candles);
     const atrValue = atr(candles);
     if (atrValue == null) throw new Error("insufficient data");
 
     const zones = detectZones(candles);
-    const topDown = analyzeTopDown({ weekly, daily, h4 });
+    const topDown = analyzeTopDown({ weekly, daily, h4, h1 });
     const trendlines = [topDown.actionLine, topDown.safetyLine].filter(
       (line): line is NonNullable<typeof line> => line != null
     );

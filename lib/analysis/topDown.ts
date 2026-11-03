@@ -10,12 +10,14 @@ export interface TopDownCandles {
   weekly: Candle[];
   daily: Candle[];
   h4: Candle[];
+  h1: Candle[];
 }
 
 export interface TopDownAnalysis {
   weekly: StructureState;
   daily: StructureState;
   h4: StructureState;
+  h1: StructureState;
   bias: TopDownBias;
   /** H4 line that matches the weekly/daily directional bias. */
   actionLine: Trendline | null;
@@ -30,34 +32,46 @@ function structureOf(candles: Candle[]): StructureState {
   return candles.length >= 10 ? classifyStructure(detectPivots(candles)) : "ranging";
 }
 
-function resolveBias(weekly: StructureState, daily: StructureState): TopDownBias {
+function resolveBias(
+  weekly: StructureState,
+  daily: StructureState,
+  h4: StructureState,
+  h1: StructureState
+): TopDownBias {
   const toBias = (state: StructureState): TopDownBias =>
     state === "uptrend" ? "bullish" : state === "downtrend" ? "bearish" : "neutral";
   const weeklyBias = toBias(weekly);
   const dailyBias = toBias(daily);
+  const h4Bias = toBias(h4);
+  const h1Bias = toBias(h1);
 
   // Weekly/Daily lead. A disagreement means there is no clean macro bias.
   if (weeklyBias !== "neutral" && dailyBias !== "neutral") {
     return weeklyBias === dailyBias ? weeklyBias : "neutral";
   }
-  // H4 selects/refines the action line; it never establishes macro direction.
+  // H4/H1 refine the bias when weekly/daily are not both directional.
+  if (h4Bias !== "neutral" && h1Bias !== "neutral" && h4Bias === h1Bias) {
+    return h4Bias;
+  }
   return dailyBias !== "neutral" ? dailyBias : weeklyBias;
 }
 
 /**
  * Tori-style top-down analysis: Weekly/Daily determine directional bias;
- * H4 defines the action line and opposing safety line; lower timeframes are
- * reserved for confirmation and execution.
+ * H4 defines the action line and opposing safety line; H1 is added as an
+ * additional confirmation/bias timeframe; lower timeframes are reserved for
+ * confirmation and execution.
  */
 export function analyzeTopDown(frames: TopDownCandles): TopDownAnalysis {
   const weekly = structureOf(frames.weekly);
   const daily = structureOf(frames.daily);
   const h4 = structureOf(frames.h4);
-  const bias = resolveBias(weekly, daily);
+  const h1 = structureOf(frames.h1);
+  const bias = resolveBias(weekly, daily, h4, h1);
 
   const h4Atr = atr(frames.h4);
   if (h4Atr == null || bias === "neutral") {
-    return { weekly, daily, h4, bias, actionLine: null, safetyLine: null };
+    return { weekly, daily, h4, h1, bias, actionLine: null, safetyLine: null };
   }
 
   const h4Pivots = detectPivots(frames.h4);
@@ -81,6 +95,7 @@ export function analyzeTopDown(frames: TopDownCandles): TopDownAnalysis {
     weekly,
     daily,
     h4,
+    h1,
     bias,
     actionLine: h4OpposesBias ? null : h4Lines.find((line) => line.kind === actionKind) ?? null,
     safetyLine: h4Lines.find((line) => line.kind === safetyKind) ?? null,
@@ -95,5 +110,8 @@ export function topDownAgrees(analysis: TopDownAnalysis, direction: SignalDirect
   const h4Opposes =
     (direction === "long" && analysis.h4 === "downtrend") ||
     (direction === "short" && analysis.h4 === "uptrend");
-  return macroAgrees && !h4Opposes;
+  const h1Opposes =
+    (direction === "long" && analysis.h1 === "downtrend") ||
+    (direction === "short" && analysis.h1 === "uptrend");
+  return macroAgrees && !h4Opposes && !h1Opposes;
 }

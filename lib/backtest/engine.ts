@@ -211,6 +211,7 @@ export function runBacktest(opts: {
           weekly: topDownCandles.weekly.filter((c) => c.time <= cutoff).slice(-160),
           daily: topDownCandles.daily.filter((c) => c.time <= cutoff).slice(-260),
           h4: topDownCandles.h4.filter((c) => c.time <= cutoff).slice(-360),
+          h1: topDownCandles.h1.filter((c) => c.time <= cutoff).slice(-240),
         })
       : undefined;
 

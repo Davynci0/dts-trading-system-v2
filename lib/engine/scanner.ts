@@ -103,12 +103,13 @@ export async function runScan(opts: {
   async function scanOnePair(pair: Pair): Promise<void> {
     let topDown;
     try {
-      const [weekly, daily, h4] = await Promise.all([
+      const [weekly, daily, h4, h1] = await Promise.all([
         fetchCandles({ instrument: pair, granularity: "W", count: 160 }),
         fetchCandles({ instrument: pair, granularity: "D", count: 260 }),
         fetchCandles({ instrument: pair, granularity: "H4", count: 360 }),
+        fetchCandles({ instrument: pair, granularity: "H1", count: 240 }),
       ]);
-      topDown = analyzeTopDown({ weekly, daily, h4 });
+      topDown = analyzeTopDown({ weekly, daily, h4, h1 });
     } catch (e) {
       events.push({
         pair,

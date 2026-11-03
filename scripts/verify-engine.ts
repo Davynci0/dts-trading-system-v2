@@ -112,7 +112,7 @@ for (let i = 0; i <= 60; i++) {
   }
   U.push(mk(i, price, price + 0.0002, price - 0.0002, price));
 }
-const topDownU = analyzeTopDown({ weekly: U, daily: U, h4: U });
+const topDownU = analyzeTopDown({ weekly: U, daily: U, h4: U, h1: U });
 const actionU = topDownU.actionLine;
 console.log(
   "\n[top-down]",
@@ -133,7 +133,7 @@ check("top-down: blocks countertrend shorts", !topDownAgrees(topDownU, "short"),
 const opposingH4 = U.map((c, index) =>
   mk(index, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)
 );
-const topDownOpposed = analyzeTopDown({ weekly: U, daily: U, h4: opposingH4 });
+const topDownOpposed = analyzeTopDown({ weekly: U, daily: U, h4: opposingH4, h1: U });
 check(
   "top-down: blocks a bullish setup while H4 is bearish",
   !topDownAgrees(topDownOpposed, "long"),
@@ -362,6 +362,7 @@ if (sf) {
     weekly: D.map((c, i) => mk(i, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)),
     daily: D.map((c, i) => mk(i, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)),
     h4: D.map((c, i) => mk(i, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)),
+    h1: D.map((c, i) => mk(i, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)),
   });
   const ctxSolo: ScoringContext = {
     instrument: "EUR_USD",

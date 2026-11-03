@@ -14,12 +14,13 @@ const STRATEGIES: StrategyId[] = ["zones", "setforget", "fibonacci"];
 const CONFIDENCES = [3, 4, 5];
 
 async function main() {
-  const [candles, htfCandles, weekly, daily, h4] = await Promise.all([
+  const [candles, htfCandles, weekly, daily, h4, h1] = await Promise.all([
     fetchCandles({ instrument: PAIR, granularity: TIMEFRAME, count: COUNT }),
     fetchCandles({ instrument: PAIR, granularity: "H1", count: 500 }),
     fetchCandles({ instrument: PAIR, granularity: "W", count: 500 }),
     fetchCandles({ instrument: PAIR, granularity: "D", count: 500 }),
     fetchCandles({ instrument: PAIR, granularity: "H4", count: 1000 }),
+    fetchCandles({ instrument: PAIR, granularity: "H1", count: 1000 }),
   ]);
 
   console.log(`Research sweep: ${PAIR} ${TIMEFRAME} ${candles.length} candles`);
@@ -33,7 +34,7 @@ async function main() {
         timeframe: TIMEFRAME,
         candles,
         htfCandles,
-        topDownCandles: { weekly, daily, h4 },
+        topDownCandles: { weekly, daily, h4, h1 },
         accountBalance: ACCOUNT_BALANCE,
         minConfidence,
         strategies: [strategy],
@@ -53,7 +54,7 @@ async function main() {
     timeframe: TIMEFRAME,
     candles,
     htfCandles,
-    topDownCandles: { weekly, daily, h4 },
+    topDownCandles: { weekly, daily, h4, h1 },
     accountBalance: ACCOUNT_BALANCE,
     minConfidence: 4,
     strategies: ["setforget", "zones"],
@@ -66,7 +67,7 @@ async function main() {
     timeframe: TIMEFRAME,
     candles,
     htfCandles,
-    topDownCandles: { weekly, daily, h4 },
+    topDownCandles: { weekly, daily, h4, h1 },
     accountBalance: ACCOUNT_BALANCE,
     minConfidence: 5,
     strategies: ["setforget", "zones"],

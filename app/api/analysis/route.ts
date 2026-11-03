@@ -7,8 +7,7 @@ export const maxDuration = 60;
 
 /**
  * GET /api/analysis?instrument=XAU_USD&granularity=M15&count=500
- * Chart TA is always M15. Weekly/Daily/H4 are bias context only — they are
- * not drawn as action/safety lines on the 15-minute chart.
+ * Chart TA is always M15. Weekly/Daily/H4/H1 are bias context only.
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -21,18 +20,19 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const [candles, weekly, daily, h4] = await Promise.all([
+    const [candles, weekly, daily, h4, h1] = await Promise.all([
       fetchCandles({ instrument, granularity: "M15", count }),
       fetchCandles({ instrument, granularity: "W", count: 160 }),
       fetchCandles({ instrument, granularity: "D", count: 260 }),
       fetchCandles({ instrument, granularity: "H4", count: 360 }),
+      fetchCandles({ instrument, granularity: "H1", count: 240 }),
     ]);
     const analysis = analyzeM15(candles);
     if (!analysis) {
       return NextResponse.json({ candles, zones: [], fib: null, aoi: null, topDown: null });
     }
 
-    const topDown = analyzeTopDown({ weekly, daily, h4 });
+    const topDown = analyzeTopDown({ weekly, daily, h4, h1 });
     const last = candles[candles.length - 1];
     const zones = nearbyActiveZones(analysis.zones, last.close, analysis.atrValue).map((z) => ({
       kind: z.kind,
