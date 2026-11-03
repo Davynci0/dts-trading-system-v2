@@ -22,23 +22,29 @@ export function classifyStructure(pivots: Pivot[]): StructureState {
 }
 
 export interface StructureEvent {
-  type: "bos" | "zone_reentry";
+  type: "bos" | "choch" | "zone_reentry";
   direction: "long" | "short";
-  /** price level that was broken (bos) or zone that was re-entered */
+  /** price level that was broken (bos/choch) or zone that was re-entered */
   level: number;
+  /** size of the break in ATR (only set for bos/choch) */
+  breakSizeAtr?: number;
   /** the zone involved, for zone re-entry (drives the freshness confirmation) */
   zone?: Zone;
 }
 
+const MIN_BOS_ATR = 0.15; // a break must be at least this many ATR beyond the level to be real, not spread noise
 /**
  * Core trigger (Section 2.2): a break of structure — the latest candle closed
- * through the most recent relevant swing point in the trend direction — or
- * price re-entering a still-active supply/demand zone from outside.
+ * through the most recent relevant swing point in the trend direction — a
+ * change-of-character (CHoCH) against the prior trend, or price re-entering a
+ * still-active supply/demand zone from outside. A break must exceed a small
+ * ATR margin so spread noise doesn't fire the strategy.
  */
 export function detectStructureEvent(
   candles: Candle[],
   pivots: Pivot[],
-  zones: Zone[]
+  zones: Zone[],
+  atrValue?: number
 ): StructureEvent | null {
   if (candles.length < 2) return null;
   const last = candles[candles.length - 1];
@@ -49,20 +55,52 @@ export function detectStructureEvent(
   const lows = pivots.filter((p) => p.kind === "low");
   const lastHigh = highs[highs.length - 1];
   const lastLow = lows[lows.length - 1];
+  const prevHigh = highs[highs.length - 2];
+  const prevLow = lows[lows.length - 2];
 
-  // BOS gets priority over zone re-entry
-  if (state === "uptrend" && lastHigh && prev.close <= lastHigh.price && last.close > lastHigh.price) {
-    return { type: "bos", direction: "long", level: lastHigh.price };
+  const margin = (atrValue ?? 0) * MIN_BOS_ATR;
+
+  // Trend-following BOS: close beyond the most recent swing in trend direction
+  if (state === "uptrend" && lastHigh && prev.close <= lastHigh.price && last.close > lastHigh.price + margin) {
+    return {
+      type: "bos",
+      direction: "long",
+      level: lastHigh.price,
+      breakSizeAtr: atrValue ? (last.close - lastHigh.price) / atrValue : undefined,
+    };
   }
-  if (state === "downtrend" && lastLow && prev.close >= lastLow.price && last.close < lastLow.price) {
-    return { type: "bos", direction: "short", level: lastLow.price };
+  if (state === "downtrend" && lastLow && prev.close >= lastLow.price && last.close < lastLow.price - margin) {
+    return {
+      type: "bos",
+      direction: "short",
+      level: lastLow.price,
+      breakSizeAtr: atrValue ? (lastLow.price - last.close) / atrValue : undefined,
+    };
+  }
+
+  // CHoCH: price takes out the prior swing in the opposite direction, signalling
+  // a probable trend reversal on the execution timeframe.
+  if (state === "downtrend" && prevHigh && last.close > prevHigh.price + margin) {
+    return {
+      type: "choch",
+      direction: "long",
+      level: prevHigh.price,
+      breakSizeAtr: atrValue ? (last.close - prevHigh.price) / atrValue : undefined,
+    };
+  }
+  if (state === "uptrend" && prevLow && last.close < prevLow.price - margin) {
+    return {
+      type: "choch",
+      direction: "short",
+      level: prevLow.price,
+      breakSizeAtr: atrValue ? (prevLow.price - last.close) / atrValue : undefined,
+    };
   }
 
   // zone re-entry: previous candle fully outside, latest candle back inside
   for (const z of zones) {
     if (!z.active) continue;
-    const wasOutside =
-      prev.low > z.top || prev.high < z.bottom;
+    const wasOutside = prev.low > z.top || prev.high < z.bottom;
     const nowInside = last.low <= z.top && last.high >= z.bottom;
     if (wasOutside && nowInside) {
       return {

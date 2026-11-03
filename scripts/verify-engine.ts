@@ -213,7 +213,7 @@ S[59] = mk(59, 1.1042, 1.1068, 1.1041, 1.1066);
 
 const pivotsS = detectPivots(S);
 const state = classifyStructure(pivotsS);
-const event = detectStructureEvent(S, pivotsS, []);
+const event = detectStructureEvent(S, pivotsS, [], atr(S) ?? undefined);
 console.log("\n[structure] state=%s event=%o", state, event);
 check("structure: uptrend classified (HH+HL)", state === "uptrend", state);
 check("structure: BOS long detected", event?.type === "bos" && event.direction === "long", event ? `${event.type} ${event.direction} @${event.level}` : "none");

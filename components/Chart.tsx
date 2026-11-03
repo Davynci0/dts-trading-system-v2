@@ -133,7 +133,7 @@ export default function Chart({
         close: c.close,
       }))
     );
-    const visibleBars = timeframe === "H4" ? 180 : 150;
+    const visibleBars = timeframe === "M15" ? 180 : 150;
     chartRef.current?.timeScale().setVisibleLogicalRange({
       from: Math.max(0, candles.length - visibleBars),
       to: candles.length + 5,

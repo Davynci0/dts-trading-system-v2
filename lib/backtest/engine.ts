@@ -1,17 +1,11 @@
 import type { Candle, StrategyId } from "@/lib/types";
 import { buildSetupKey } from "@/lib/analysis/setupKey";
 import {
-  detectPivots,
-  significantPivots,
-  atr,
-  detectZones,
-  detectTrendlines,
-  detectStructureEvent,
-  findFibSetup,
-  findSetForgetSetup,
+  analyzeM15,
   scoreSetup,
   computeRiskLevels,
-  type ScoringContext,} from "@/lib/analysis";
+  type ScoringContext,
+} from "@/lib/analysis";
 import { pipSize } from "@/lib/analysis/confirmations";
 import { analyzeTopDown, type TopDownCandles } from "@/lib/analysis/topDown";
 
@@ -169,15 +163,9 @@ export function runBacktest(opts: {
 
     // 2) evaluate strategies on the closed-candle window (no lookahead)
     const windowCandles = candles.slice(Math.max(0, i - WINDOW), i + 1);
-    const pivots = detectPivots(windowCandles);
-    const atrValue = atr(windowCandles);
-    if (atrValue == null) continue;
-
-    const zones = detectZones(windowCandles);
-    const structureEvent = detectStructureEvent(windowCandles, pivots, zones);
-    const structuralPivots = significantPivots(pivots, atrValue);
-    const fib = findFibSetup(windowCandles, structuralPivots, atrValue);
-    const setForget = findSetForgetSetup(windowCandles, structuralPivots, atrValue);
+    const m15 = analyzeM15(windowCandles);
+    if (!m15) continue;
+    const { pivots, atrValue, zones, trendlines, structureEvent, fib, setForget } = m15;
 
     // HTF agreement uses only HTF candles closed before this candle's time
     const cutoff = windowCandles[windowCandles.length - 1].time;
@@ -189,7 +177,6 @@ export function runBacktest(opts: {
           h4: topDownCandles.h4.filter((c) => c.time <= cutoff).slice(-360),
         })
       : undefined;
-    const trendlines = topDown?.actionLine ? [topDown.actionLine] : topDown ? [] : detectTrendlines(windowCandles, pivots, atrValue);
 
     const ctx: ScoringContext = {
       instrument: pair,

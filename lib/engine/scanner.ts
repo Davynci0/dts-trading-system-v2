@@ -1,19 +1,15 @@
 import type { Pair, StrategyId, Timeframe } from "@/lib/types";
+import { TRADE_TIMEFRAMES } from "@/lib/types";
 import { fetchCandles } from "@/lib/oanda";
 import {
-  detectPivots,
-  atr,
-  detectZones,
-  detectStructureEvent,
-  findFibSetup,
-  findSetForgetSetup,
   scoreSetup,
   computeRiskLevels,
+  analyzeM15,
+  EXECUTION_HTF,
   type ScoringContext,
   type ScoreResult,
 } from "@/lib/analysis";
 import { analyzeTopDown } from "@/lib/analysis/topDown";
-import { significantPivots } from "@/lib/analysis/pivots";
 import { buildSetupKey } from "@/lib/analysis/setupKey";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
 import { findOpenTrades } from "@/lib/engine/supersede";
@@ -23,8 +19,7 @@ import { setupVerdictPrompt, arbitrationPrompt } from "@/lib/vision/prompts";
 import { sendFinalSignal } from "@/lib/telegram";
 import { createAdminClient } from "@/lib/supabase/admin";
 
-/** HTF used for the trend/structure agreement check per timeframe. */
-const HTF_OF: Record<Timeframe, string> = { M5: "M15", M15: "H1", M30: "H4", H1: "H4", H4: "D", D: "W" };
+const ENGINE_VERSION = "tori-v3";
 
 const STRATEGY_LABELS: Record<StrategyId, string> = {
   trendline: "Trendline Touch & Bounce",
@@ -34,7 +29,6 @@ const STRATEGY_LABELS: Record<StrategyId, string> = {
   fibonacci: "Fibonacci Retracement",
 };
 
-const ENGINE_VERSION = "tori-v2";
 
 interface SetupState {
   confirmations: Record<string, boolean>;
@@ -75,11 +69,13 @@ export async function runScan(opts: {
 }): Promise<ScanSummary> {
   const {
     pairs,
-    timeframes,
+    timeframes: _timeframes,
     accountBalance = Number(process.env.ACCOUNT_BALANCE ?? 10000),
     useVision = true,
     sendTelegrams = true,
   } = opts;
+  const timeframes: Timeframe[] = [...TRADE_TIMEFRAMES];
+  void _timeframes;
 
   const supabase = createAdminClient();
   const events: ScanEvent[] = [];
@@ -107,31 +103,19 @@ export async function runScan(opts: {
       return;
     }
 
-    for (const tf of timeframes) {
+    for (const tf of timeframes.filter((t) => t === "M15")) {
       units++;
       try {
-        const candles = await fetchCandles({ instrument: pair, granularity: tf, count: 500 });
+        const candles = await fetchCandles({ instrument: pair, granularity: "M15", count: 500 });
         const htfCandles = await fetchCandles({
           instrument: pair,
-          granularity: HTF_OF[tf],
+          granularity: EXECUTION_HTF,
           count: 300,
         });
-        if (candles.length < 60) continue;
+        const m15 = analyzeM15(candles);
+        if (!m15) continue;
 
-        const pivots = detectPivots(candles);
-        const atrValue = atr(candles);
-        if (atrValue == null) continue;
-
-        const zones = detectZones(candles);
-        const trendlines = topDown.actionLine ? [topDown.actionLine] : [];
-        const structureEvent = detectStructureEvent(candles, pivots, zones);
-        // Fib and Set & Forget must anchor on SIGNIFICANT structure — raw
-        // fractal pivots on M15/M5 include micro zig-zags that produce
-        // trivial, imprecise zones. Same filter the chart rendering uses, so
-        // signals match what you see.
-        const structuralPivots = significantPivots(pivots, atrValue);
-        const fib = findFibSetup(candles, structuralPivots, atrValue);
-        const setForget = findSetForgetSetup(candles, structuralPivots, atrValue);
+        const { pivots, atrValue, zones, trendlines, structureEvent, fib, setForget } = m15;
 
         const ctx: ScoringContext = {
           instrument: pair,
@@ -332,7 +316,7 @@ function triggerDescription(scored: ScoreResult): string {
   }
   if (scored.strategy === "structure" && scored.trigger?.event) {
     const e = scored.trigger.event;
-    return e.type === "bos" ? `break of structure at ${e.level}` : `re-entry into ${e.zone?.kind} zone`;
+    return e.type === "bos" ? `break of structure at ${e.level}` : e.type === "choch" ? `change of character at ${e.level}` : `re-entry into ${e.zone?.kind} zone`;
   }
   if (scored.strategy === "fibonacci" && scored.trigger?.fib) {
     return `price in golden zone ${scored.trigger.fib.goldenBottom.toFixed(5)}–${scored.trigger.fib.goldenTop.toFixed(5)}`;
@@ -443,8 +427,49 @@ async function reconcileAndSignal(args: {
     }
   }
 
-  const longs = fired.filter((f) => f.direction === "long");
-  const shorts = fired.filter((f) => f.direction === "short");
+  const quality = (f: Firing): number => {
+    let q = f.scored.count * 10;
+    if (f.scored.topDownAligned) q += 35; // alignment is the strongest edge
+    if (f.scored.strategy === "setforget") q += 5; // first-touch AOI is highest-probability
+    const rejection = Object.entries(f.scored.confirmations).some(
+      ([k, v]) => v && /Rejection|Conviction/.test(k)
+    );
+    if (rejection) q += 12;
+    if (f.risk.ok) {
+      q += Math.min(14, f.risk.levels.rMultiple * 3); // reward potential
+      q += Math.min(8, 1 / Math.max(0.1, f.risk.levels.stopDistance / f.risk.levels.atr)); // tighter SL relative to ATR is better
+    } else {
+      q -= 50;
+    }
+    return q;
+  };
+  const highOdds = (f: Firing) =>
+    f.risk.ok && (f.scored.topDownAligned ? f.scored.count >= 3 : f.scored.count >= 4);
+
+  const candidates = fired.filter(highOdds);
+  if (candidates.length === 0) {
+    events.push({
+      pair,
+      timeframe: tf,
+      strategy: fired[0]?.strategy ?? "structure",
+      kind: "skipped",
+      detail: "no high-odds M15 setup (need HTF alignment at 3/5, or 4/5 countertrend with valid R)",
+    });
+    for (const f of fired) {
+      await saveSetup(supabase, pair, tf, f.setupKey, {
+        confirmations: f.scored.confirmations,
+        count: f.scored.count,
+        visionChecked: true,
+        visionNote: f.visionNote,
+        signaled: true,
+        lastSeen: Math.floor(Date.now() / 1000),
+      }).catch(() => undefined);
+    }
+    return;
+  }
+
+  const longs = candidates.filter((f) => f.direction === "long");
+  const shorts = candidates.filter((f) => f.direction === "short");
 
   let winnerSide: "long" | "short";
   let arbitrationNote: string | null = null;
@@ -452,17 +477,8 @@ async function reconcileAndSignal(args: {
   if (longs.length === 0 || shorts.length === 0) {
     winnerSide = longs.length > 0 ? "long" : "short";
   } else {
-    // conflict — majority by count, then by total confirmations, as AI fallback
-    const score = (arr: Firing[]) =>
-      arr.reduce((s, f) => s + f.scored.count, 0);
-    const fallback: "long" | "short" =
-      longs.length !== shorts.length
-        ? longs.length > shorts.length
-          ? "long"
-          : "short"
-        : score(longs) >= score(shorts)
-          ? "long"
-          : "short";
+    const sideScore = (arr: Firing[]) => arr.reduce((s, f) => s + quality(f), 0);
+    const fallback: "long" | "short" = sideScore(longs) >= sideScore(shorts) ? "long" : "short";
     try {
       const png = await renderSetupPng(candles, {
         trendlines: ctx.trendlines,
@@ -495,13 +511,7 @@ async function reconcileAndSignal(args: {
   }
 
   const winners = winnerSide === "long" ? longs : shorts;
-  // strongest = risk.ok with highest R, else most confirmations
-  const ranked = [...winners].sort((a, b) => {
-    const ar = a.risk.ok ? a.risk.levels.rMultiple : -Infinity;
-    const br = b.risk.ok ? b.risk.levels.rMultiple : -Infinity;
-    if (ar !== br) return br - ar;
-    return b.scored.count - a.scored.count;
-  });
+  const ranked = [...winners].sort((a, b) => quality(b) - quality(a));
   const primary = ranked[0];
 
   // mark every fired setup (winners and losers) as signaled so they don't re-alert

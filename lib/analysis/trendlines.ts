@@ -24,6 +24,7 @@ export interface Trendline {
 
 export const TOUCH_TOLERANCE_ATR = 0.15; // touch band half-width
 export const MIN_TOUCHES = 3; // Section 2.1 — no two-point lines
+export const CLOSE_BOUNCE_MARGIN_ATR = 0.05; // close must clear the line by this much to confirm a real bounce
 // A line defined by two anchors that are only a few candles apart has a noisy
 // slope — projected across the chart it looks crooked/wrong (worst on M15,
 // where 120 candles ≈ 30h and every tiny swing becomes a pivot). Require the
@@ -219,8 +220,9 @@ export function detectTrendlines(
 
 /**
  * Core trigger (Section 2.1): the latest candle touched a valid trendline
- * within the tolerance band. Returns the line touched and implied direction
- * (bounce off support → long, bounce off resistance → short).
+ * within the tolerance band AND closed back on the correct side of it.
+ * A wick through the line that closes beyond it is a break, not a bounce,
+ * so broken lines and close-beyond touches are rejected here.
  */
 export function trendlineTouch(
   candles: Candle[],
@@ -230,15 +232,20 @@ export function trendlineTouch(
   if (candles.length === 0) return null;
   const last = candles[candles.length - 1];
   const tolerance = TOUCH_TOLERANCE_ATR * atrValue;
+  const margin = CLOSE_BOUNCE_MARGIN_ATR * atrValue;
 
   for (const line of lines) {
-    if (line.broken) continue; // broken lines are display-only, never triggers
+    if (line.broken) continue;
     const lv = lineValueAtTime(line, last.time);
-    if (line.kind === "support" && Math.abs(last.low - lv) <= tolerance) {
-      return { line, direction: "long" };
+    if (line.kind === "support") {
+      const touched = Math.abs(last.low - lv) <= tolerance;
+      const closedCorrectSide = last.close > lv + margin;
+      if (touched && closedCorrectSide) return { line, direction: "long" };
     }
-    if (line.kind === "resistance" && Math.abs(last.high - lv) <= tolerance) {
-      return { line, direction: "short" };
+    if (line.kind === "resistance") {
+      const touched = Math.abs(last.high - lv) <= tolerance;
+      const closedCorrectSide = last.close < lv - margin;
+      if (touched && closedCorrectSide) return { line, direction: "short" };
     }
   }
   return null;
@@ -253,15 +260,20 @@ export function trendlineTouchAtTime(
   if (candles.length === 0) return null;
   const last = candles[candles.length - 1];
   const tolerance = TOUCH_TOLERANCE_ATR * atrValue;
+  const margin = CLOSE_BOUNCE_MARGIN_ATR * atrValue;
 
   for (const line of lines) {
     if (line.broken) continue;
     const value = lineValueAtTime(line, last.time);
-    if (line.kind === "support" && Math.abs(last.low - value) <= tolerance) {
-      return { line, direction: "long" };
+    if (line.kind === "support") {
+      const touched = Math.abs(last.low - value) <= tolerance;
+      const closedCorrectSide = last.close > value + margin;
+      if (touched && closedCorrectSide) return { line, direction: "long" };
     }
-    if (line.kind === "resistance" && Math.abs(last.high - value) <= tolerance) {
-      return { line, direction: "short" };
+    if (line.kind === "resistance") {
+      const touched = Math.abs(last.high - value) <= tolerance;
+      const closedCorrectSide = last.close < value - margin;
+      if (touched && closedCorrectSide) return { line, direction: "short" };
     }
   }
   return null;

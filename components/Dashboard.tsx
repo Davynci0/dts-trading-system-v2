@@ -5,7 +5,7 @@ import Chart from "@/components/Chart";
 import SignalFeed from "@/components/SignalFeed";
 import ConfirmationTracker from "@/components/ConfirmationTracker";
 import AskAIButton from "@/components/AskAIButton";
-import { PAIRS, TIMEFRAMES, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
+import { PAIRS, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
 import { pipSize } from "@/lib/analysis/confirmations";
 import { EMPTY_OVERLAY, type OverlayData } from "@/components/chartOverlay";
 
@@ -24,6 +24,7 @@ interface TopDownSummary {
   weekly: string;
   daily: string;
   h4: string;
+  m15?: string;
   bias: "bullish" | "bearish" | "neutral";
   actionLine: { kind: string; touches: number } | null;
   safetyLine: { kind: string; touches: number } | null;
@@ -31,7 +32,7 @@ interface TopDownSummary {
 
 export default function Dashboard() {
   const [pair, setPair] = useState<Pair>("XAU_USD");
-  const [timeframe, setTimeframe] = useState<Timeframe>("M15");
+  const timeframe: Timeframe = "M15";
   const [candles, setCandles] = useState<Candle[]>([]);
   const [liveCandle, setLiveCandle] = useState<Candle | null>(null);
   const [overlay, setOverlay] = useState<OverlayData>(EMPTY_OVERLAY);
@@ -131,7 +132,7 @@ export default function Dashboard() {
       const res = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pairs: [pair], timeframes: [timeframe] }),
+        body: JSON.stringify({ pairs: [pair], timeframes: ["M15"] }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -150,7 +151,7 @@ export default function Dashboard() {
     let stopped = false;
 
     const loadAnalysis = (initial: boolean) =>
-      fetch(`/api/analysis?instrument=${pair}&granularity=${timeframe}&count=500`, {
+      fetch(`/api/analysis?instrument=${pair}&granularity=M15&count=500`, {
         signal: controller.signal,
       })
         .then(async (res) => {
@@ -193,12 +194,12 @@ export default function Dashboard() {
 
     // 1) initial load
     loadAnalysis(true);
-    // 2) TA refresh every 15 min (H4 close-aligns the cadence) — the signature
+    // 2) TA refresh every 15 min (new M15 bar) — the signature
     // check inside loadAnalysis skips the re-render when structure is unchanged
     const taTimer = setInterval(() => loadAnalysis(false), 15 * 60 * 1000);
     // 3) fast live tick — updates only the forming bar via a cheap 1-candle call
     const liveTimer = setInterval(() => {
-      fetch(`/api/live?instrument=${pair}&granularity=${timeframe}`, {
+      fetch(`/api/live?instrument=${pair}&granularity=M15`, {
         signal: controller.signal,
       })
         .then((r) => r.json())
@@ -214,19 +215,10 @@ export default function Dashboard() {
       clearInterval(taTimer);
       clearInterval(liveTimer);
     };
-  }, [pair, timeframe]);
+  }, [pair]);
 
   function changePair(p: Pair) {
     setPair(p);
-    setLoading(true);
-    setOverlay(EMPTY_OVERLAY);
-    setTopDown(null);
-    setLiveCandle(null);
-    analysisSigRef.current = "";
-  }
-
-  function changeTimeframe(tf: Timeframe) {
-    setTimeframe(tf);
     setLoading(true);
     setOverlay(EMPTY_OVERLAY);
     setTopDown(null);
@@ -261,21 +253,9 @@ export default function Dashboard() {
               </option>
             ))}
           </select>
-          <div className="flex overflow-hidden rounded border border-neutral-700">
-            {TIMEFRAMES.map((tf) => (
-              <button
-                key={tf}
-                onClick={() => changeTimeframe(tf)}
-                className={`px-2.5 py-1.5 text-sm ${
-                  timeframe === tf
-                    ? "bg-neutral-700 text-white"
-                    : "bg-neutral-900 text-neutral-400 hover:text-neutral-200"
-                }`}
-              >
-                {tf}
-              </button>
-            ))}
-          </div>
+          <span className="rounded border border-neutral-700 bg-neutral-700 px-2.5 py-1.5 text-sm text-white">
+            M15
+          </span>
           <div className="flex overflow-hidden rounded border border-neutral-700">
             {LAYERS.map((l) => (
               <button
@@ -323,11 +303,7 @@ export default function Dashboard() {
             >
               Bias {topDown.bias}
             </span>
-            <span>
-              {topDown.actionLine
-                ? `Action H4 ${topDown.actionLine.kind} (${topDown.actionLine.touches}T)`
-                : "No eligible H4 action line"}
-            </span>
+            {topDown.m15 ? <span>M15 {topDown.m15}</span> : null}
           </div>
         )}
 

@@ -85,14 +85,14 @@ export default function ConfirmationTracker({ pair, timeframe }: { pair: string;
       <div className="mb-3 flex items-baseline justify-between">
         <h2 className="text-sm font-semibold text-neutral-100">Confirmation Tracker</h2>
         <span className="text-xs text-neutral-500">
-          {pair.replace("_", "/")} · {timeframe} · TA refresh 15m · H4 primary
+          {pair.replace("_", "/")} · {timeframe} · M15 TA
         </span>
       </div>
       <div className="space-y-4">
         {STRATEGIES.map((s) => {
           const live = setups.filter(
             (r) =>
-              r.dedupe_key.startsWith(`tori-v2:${s.id}:`) &&
+              (r.dedupe_key.startsWith(`tori-v3:${s.id}:`) || r.dedupe_key.startsWith(`tori-v2:${s.id}:`)) &&
               r.pair === pair &&
               r.timeframe === timeframe
           );

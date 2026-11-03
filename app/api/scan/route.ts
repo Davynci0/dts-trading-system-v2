@@ -1,19 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runScan } from "@/lib/engine/scanner";
-import { PAIRS, TIMEFRAMES, type Pair, type Timeframe } from "@/lib/types";
+import { PAIRS, TRADE_TIMEFRAMES, type Pair, type Timeframe } from "@/lib/types";
 
 export const maxDuration = 300;
 
 function parseParams(req: NextRequest, body: Record<string, unknown> | null) {
   const sp = req.nextUrl.searchParams;
   const rawPairs = (body?.pairs as string[] | undefined) ?? sp.get("pairs")?.split(",");
-  const rawTfs = (body?.timeframes as string[] | undefined) ?? sp.get("timeframes")?.split(",");
-  const pairs = (rawPairs?.length ? rawPairs : PAIRS).filter((p): p is Pair =>
+  const pairs = (rawPairs?.length ? rawPairs : [...PAIRS]).filter((p): p is Pair =>
     (PAIRS as readonly string[]).includes(p)
   );
-  const timeframes = (rawTfs?.length ? rawTfs : ["M15", "M30"]).filter((t): t is Timeframe =>
-    (TIMEFRAMES as readonly string[]).includes(t)
-  );
+  // The scanner only runs on M15 execution timeframe; any other timeframe is ignored.
+  const timeframes: Timeframe[] = [...TRADE_TIMEFRAMES];
   return { pairs, timeframes };
 }
 
@@ -28,7 +26,7 @@ async function handle(req: NextRequest, body: Record<string, unknown> | null) {
   return NextResponse.json(summary);
 }
 
-/** GET — Vercel cron entry point (full scan: all pairs, M15 + M30). */
+/** GET — Vercel cron entry point (full scan: all pairs, M15 only). */
 export async function GET(req: NextRequest) {
   return handle(req, null);
 }

@@ -36,7 +36,8 @@ const LEG_LOOKBACK = 10; // legs among the last N pivots
 export function findSetForgetSetup(
   candles: Candle[],
   pivots: Pivot[],
-  atrValue: number
+  atrValue: number,
+  preferredDirection?: "long" | "short"
 ): SetForgetSetup | null {
   if (candles.length === 0) return null;
   const recent = pivots.slice(-LEG_LOOKBACK * 2);
@@ -97,6 +98,7 @@ export function findSetForgetSetup(
         }
       }
 
+      if (preferredDirection && setup.direction !== preferredDirection) continue;
       if (!best || setup.legEndIndex > best.legEndIndex) best = setup;
     }
   }

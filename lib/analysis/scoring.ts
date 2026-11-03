@@ -14,7 +14,7 @@ import {
   zoneIsFresh,
 } from "./confirmations";
 import { inGoldenZone } from "./fibonacci";
-import { trendlineTouch, trendlineTouchAtTime, bounceConfirmed } from "./trendlines";
+import { trendlineTouch, bounceConfirmed } from "./trendlines";
 import { detectZoneEntry } from "./zones";
 import { setForgetEntry, type SetForgetSetup } from "./setForget";
 
@@ -76,18 +76,16 @@ export function scoreSetup(
   let trigger: ScoreResult["trigger"] = null;
 
   if (strategy === "trendline") {
-    const hit = ctx.topDown
-      ? ctx.topDown.actionLine
-        ? trendlineTouchAtTime(candles, [ctx.topDown.actionLine], ctx.atrValue)
-        : null
-      : trendlineTouch(candles, ctx.trendlines, ctx.atrValue);
+    // Execution-timeframe lines only. HTF (H4) action lines are a bias filter,
+    // not the M15 trigger — projecting them onto 15m candles mis-reads structure.
+    const hit = trendlineTouch(candles, ctx.trendlines, ctx.atrValue);
     if (!hit) {
       return noTrigger(strategy);
     }
     direction = hit.direction;
     trigger = { line: hit.line };
-    confirmations["Valid trendline touch"] = true; // core trigger
-    // a bounce must actually reject the line — touch alone isn't enough
+    confirmations["Valid trendline touch"] = true; // core trigger now includes close-on-correct-side
+    // rejection candle or explicit bounce confirmation (either satisfies #2)
     confirmations["Rejection candle"] =
       isRejectionCandle(candles, direction) || bounceConfirmed(candles, hit.line, direction, ctx.atrValue);
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
@@ -102,10 +100,10 @@ export function scoreSetup(
     }
     direction = event.direction;
     trigger = { event };
-    confirmations["Structure event"] = true; // core trigger (BOS or zone bounce)
+    confirmations["Structure event"] = true; // core trigger (BOS / CHoCH / zone bounce)
     confirmations["Conviction close"] = isConvictionCandle(candles, direction);
     confirmations["Zone freshness"] =
-      event.type === "bos" ? true : zoneIsFresh(event.zone?.touches ?? 0);
+      event.type === "zone_reentry" ? zoneIsFresh(event.zone?.touches ?? 0) : true;
     confirmations["HTF structure agrees"] = ctx.topDown
       ? topDownAgrees(ctx.topDown, direction)
       : htfAgrees(htfCandles, direction);

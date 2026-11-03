@@ -15,6 +15,11 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "instrument is required" }, { status: 400 });
   }
 
+  // Dashboard TA is M15-only; reject other granularities early so callers can't drift.
+  if (granularity !== "M15") {
+    return NextResponse.json({ error: "Trading analysis runs on M15 only" }, { status: 400 });
+  }
+
   try {
     const candles = await fetchCandles({ instrument, granularity, count });
     return NextResponse.json({ candles });
