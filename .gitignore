@@ -36,8 +36,10 @@ yarn-error.log*
 # vercel
 .vercel
 
-# Supabase CLI cache
-/supabase/.temp/
+# screenshots from testing
+chart-test-*.png
+dashboard-*.png
+backtests.png
 
 # typescript
 *.tsbuildinfo
