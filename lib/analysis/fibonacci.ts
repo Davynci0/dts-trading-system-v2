@@ -101,6 +101,57 @@ export function findFibSetup(
   return null;
 }
 
+/**
+ * Find the most recent significant swing for chart drawing, regardless of
+ * whether price is currently inside the golden zone. This lets the chart
+ * always show the latest Fibonacci retracement levels as a reference.
+ */
+export function findRecentSwing(
+  candles: Candle[],
+  pivots: Pivot[],
+  atrValue: number,
+  lookbackCandles = DEFAULT_FIB_LOOKBACK
+): FibSetup | null {
+  if (candles.length === 0) return null;
+  const last = candles[candles.length - 1];
+  const minIndex = Math.max(0, candles.length - lookbackCandles);
+  const recent = pivots.filter((p) => p.index >= minIndex);
+
+  let best: FibSetup | null = null;
+
+  for (let i = 0; i < recent.length; i++) {
+    for (let j = i + 1; j < recent.length; j++) {
+      const a = recent[i];
+      const b = recent[j];
+      if (a.kind === b.kind) continue;
+
+      const low = a.kind === "low" ? a : b;
+      const high = a.kind === "high" ? a : b;
+      const range = high.price - low.price;
+      if (range < MIN_SWING_ATR * atrValue) continue;
+
+      let setup: FibSetup;
+      if (low.index < high.index) {
+        const goldenTop = high.price - GOLDEN_LOW * range;
+        const goldenBottom = high.price - GOLDEN_HIGH * range;
+        setup = { direction: "long", swingLow: low, swingHigh: high, goldenTop, goldenBottom, range };
+      } else {
+        const goldenBottom = low.price + GOLDEN_LOW * range;
+        const goldenTop = low.price + GOLDEN_HIGH * range;
+        setup = { direction: "short", swingLow: low, swingHigh: high, goldenTop, goldenBottom, range };
+      }
+
+      const endIndex = setup.direction === "long" ? setup.swingHigh.index : setup.swingLow.index;
+      const bestEnd = best ? (best.direction === "long" ? best.swingHigh.index : best.swingLow.index) : -1;
+      if (endIndex > bestEnd || (endIndex === bestEnd && setup.range > (best?.range ?? 0))) {
+        best = setup;
+      }
+    }
+  }
+
+  return best;
+}
+
 /** Core trigger (Section 2.3): latest candle's range overlaps the golden zone. */
 export function inGoldenZone(candles: Candle[], fib: FibSetup): boolean {
   if (candles.length === 0) return false;

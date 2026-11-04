@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
-import { analyzeM15, nearbyActiveZones } from "@/lib/analysis/execution";
+import { analyzeM15 } from "@/lib/analysis/execution";
+import { findRecentSwing } from "@/lib/analysis/fibonacci";
 import { analyzeTopDown } from "@/lib/analysis/topDown";
 
 export const maxDuration = 60;
@@ -34,35 +35,43 @@ export async function GET(req: NextRequest) {
 
     const topDown = analyzeTopDown({ weekly, daily, h4, h1 });
     const last = candles[candles.length - 1];
-    const zones = nearbyActiveZones(analysis.zones, last.close, analysis.atrValue).map((z) => ({
-      kind: z.kind,
-      top: z.top,
-      bottom: z.bottom,
-      startTime: z.startTime,
-      touches: z.touches,
-    }));
+    // Draw all active zones on the chart, not just the ones near current price,
+    // so the user can see the full technical landscape.
+    const zones = analysis.zones
+      .filter((z) => z.active)
+      .sort((a, b) => b.startIndex - a.startIndex)
+      .slice(0, 12)
+      .map((z) => ({
+        kind: z.kind,
+        top: z.top,
+        bottom: z.bottom,
+        startTime: z.startTime,
+        touches: z.touches,
+      }));
 
-    const fib = analysis.fib;
-    const fibOut = fib
+    // Always draw the most recent significant swing's Fibonacci levels,
+    // even when price is not currently inside the golden zone.
+    const swingFib = findRecentSwing(candles, analysis.pivots, analysis.atrValue);
+    const fib = swingFib
       ? {
-          direction: fib.direction,
-          goldenTop: fib.goldenTop,
-          goldenBottom: fib.goldenBottom,
-          swingLow: { time: fib.swingLow.time, price: fib.swingLow.price },
-          swingHigh: { time: fib.swingHigh.time, price: fib.swingHigh.price },
+          direction: swingFib.direction,
+          goldenTop: swingFib.goldenTop,
+          goldenBottom: swingFib.goldenBottom,
+          swingLow: { time: swingFib.swingLow.time, price: swingFib.swingLow.price },
+          swingHigh: { time: swingFib.swingHigh.time, price: swingFib.swingHigh.price },
           level50:
-            fib.direction === "long"
-              ? fib.swingHigh.price - 0.5 * fib.range
-              : fib.swingLow.price + 0.5 * fib.range,
+            swingFib.direction === "long"
+              ? swingFib.swingHigh.price - 0.5 * swingFib.range
+              : swingFib.swingLow.price + 0.5 * swingFib.range,
           level618:
-            fib.direction === "long"
-              ? fib.swingHigh.price - 0.618 * fib.range
-              : fib.swingLow.price + 0.618 * fib.range,
+            swingFib.direction === "long"
+              ? swingFib.swingHigh.price - 0.618 * swingFib.range
+              : swingFib.swingLow.price + 0.618 * swingFib.range,
           level786:
-            fib.direction === "long"
-              ? fib.swingHigh.price - 0.786 * fib.range
-              : fib.swingLow.price + 0.786 * fib.range,
-          range: fib.range,
+            swingFib.direction === "long"
+              ? swingFib.swingHigh.price - 0.786 * swingFib.range
+              : swingFib.swingLow.price + 0.786 * swingFib.range,
+          range: swingFib.range,
         }
       : null;
 
@@ -82,7 +91,7 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({
       candles,
       zones,
-      fib: fibOut,
+      fib,
       aoi: aoiOut,
       topDown: {
         weekly: topDown.weekly,
