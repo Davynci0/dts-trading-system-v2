@@ -437,6 +437,8 @@ async function reconcileAndSignal(args: {
     } else {
       q -= 50;
     }
+    // Prefer Fibonacci as the primary strategy when quality is comparable.
+    if (f.scored.strategy === "fibonacci") q += 8;
     return q;
   };
   // High-quality final signal gate. Live data shows confidence-3 signals win
