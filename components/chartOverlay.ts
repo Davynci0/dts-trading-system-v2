@@ -113,15 +113,17 @@ class OverlayPaneView implements IPrimitivePaneView {
             const xZone = xSwing1 ?? x0;
             if (yTop != null && yBottom != null) {
               const y = Math.min(yTop, yBottom);
-              const h = Math.abs(yBottom - yTop);
-              ctx.fillStyle = `${base}0.14)`;
+              const h = Math.max(Math.abs(yBottom - yTop), 4);
+              ctx.fillStyle = `${base}0.22)`;
               ctx.fillRect(xZone, y, W - xZone, h);
-              ctx.strokeStyle = `${base}0.7)`;
+              ctx.strokeStyle = `${base}0.85)`;
+              ctx.lineWidth = 1.5;
               ctx.setLineDash([4, 3]);
               ctx.strokeRect(xZone, y, W - xZone, h);
               ctx.setLineDash([]);
+              ctx.lineWidth = 1;
               const tradeAction = f.direction === "long" ? "BUY" : "SELL";
-              label(`${tradeAction} ZONE — Golden (61.8–78.6%)`, xZone + 6, y - 4, `${base}0.95)`, "11px monospace", "left", 3);
+              label(`${tradeAction} ZONE — Golden (61.8–78.6%)`, xZone + 6, y - 4, `${base}1)`, "bold 11px monospace", "left", 3);
             }
 
             // ratio + swing level lines: 0%, 61.8%, 78.6%, 100%
@@ -164,21 +166,23 @@ class OverlayPaneView implements IPrimitivePaneView {
             const yBottom = source.priceToY(a.bottom);
             if (x0 != null && yTop != null && yBottom != null) {
               const y = Math.min(yTop, yBottom);
-              const h = Math.abs(yBottom - yTop);
+              const h = Math.max(Math.abs(yBottom - yTop), 4);
               const base = a.direction === "long" ? UP : DOWN;
-              ctx.fillStyle = `${base}${a.tested ? "0.05)" : "0.16)"}`;
+              ctx.fillStyle = `${base}${a.tested ? "0.08)" : "0.22)"}`;
               ctx.fillRect(x0, y, W - x0, h);
-              ctx.strokeStyle = `${base}${a.tested ? "0.35)" : "0.8)"}`;
+              ctx.strokeStyle = `${base}${a.tested ? "0.55)" : "0.85)"}`;
+              ctx.lineWidth = 1.5;
               ctx.setLineDash([6, 4]);
               ctx.strokeRect(x0, y, W - x0, h);
               ctx.setLineDash([]);
+              ctx.lineWidth = 1;
               const aoiAction = a.direction === "long" ? "BUY" : "SELL";
               label(
                 `${aoiAction} ZONE — AOI 50–61.8% ${a.tested ? "(tested)" : "(untested)"}`,
                 x0 + 6,
-                y + (a.direction === "short" ? 12 : h - 4),
+                y + (a.direction === "short" ? 14 : h - 6),
                 `${base}1)`,
-                "bold 10px monospace",
+                "bold 11px monospace",
                 "left",
                 2
               );
@@ -192,14 +196,18 @@ class OverlayPaneView implements IPrimitivePaneView {
             const yBottom = source.priceToY(z.bottom);
             if (x0 == null || yTop == null || yBottom == null) continue;
             const y = Math.min(yTop, yBottom);
-            const h = Math.abs(yBottom - yTop);
+            const h = Math.max(Math.abs(yBottom - yTop), 4); // ensure visible even for tiny zones
             const base = z.kind === "demand" ? UP : DOWN;
-            ctx.fillStyle = `${base}0.15)`;
+            ctx.fillStyle = `${base}0.22)`;
             ctx.fillRect(x0, y, W - x0, h);
-            ctx.strokeStyle = `${base}0.55)`;
+            ctx.strokeStyle = `${base}0.85)`;
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([4, 3]);
             ctx.strokeRect(x0, y, W - x0, h);
+            ctx.setLineDash([]);
+            ctx.lineWidth = 1;
             const zoneAction = z.kind === "demand" ? "BUY" : "SELL";
-            label(`${zoneAction} ZONE (${z.kind})`, x0 + 4, y + (z.kind === "supply" ? 12 : h - 4), `${base}1)`, "10px monospace", "left", 4);
+            label(`${zoneAction} ZONE (${z.kind})`, x0 + 4, y + (z.kind === "supply" ? 14 : h - 6), `${base}1)`, "bold 11px monospace", "left", 4);
           }
 
           // settled trades: path from entry to where TP/SL was actually hit
