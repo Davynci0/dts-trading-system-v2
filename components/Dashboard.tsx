@@ -22,6 +22,7 @@ interface TopDownSummary {
   weekly: string;
   daily: string;
   h4: string;
+  h1?: string;
   m15?: string;
   bias: "bullish" | "bearish" | "neutral";
   actionLine: { kind: string; touches: number } | null;
@@ -286,13 +287,14 @@ export default function Dashboard() {
             <span>W {topDown.weekly}</span>
             <span>D {topDown.daily}</span>
             <span>H4 {topDown.h4}</span>
+            {topDown.h1 ? <span>H1 {topDown.h1}</span> : null}
             <span
               className={
                 topDown.bias === "bullish"
-                  ? "text-teal-400"
+                  ? "text-emerald-400"
                   : topDown.bias === "bearish"
-                    ? "text-red-400"
-                    : "text-neutral-500"
+                    ? "text-rose-400"
+                    : "text-zinc-400"
               }
             >
               Bias {topDown.bias}

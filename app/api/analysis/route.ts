@@ -84,6 +84,7 @@ export async function GET(req: NextRequest) {
         weekly: topDown.weekly,
         daily: topDown.daily,
         h4: topDown.h4,
+        h1: topDown.h1,
         bias: topDown.bias,
         m15: analysis.structureState,
         actionLine: null,
