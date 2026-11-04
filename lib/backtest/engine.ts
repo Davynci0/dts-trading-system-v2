@@ -208,10 +208,10 @@ export function runBacktest(opts: {
     const htfSlice = htfCandles.filter((c) => c.time <= cutoff).slice(-300);
     const topDown = topDownCandles
       ? analyzeTopDown({
-          weekly: topDownCandles.weekly.filter((c) => c.time <= cutoff).slice(-160),
-          daily: topDownCandles.daily.filter((c) => c.time <= cutoff).slice(-260),
-          h4: topDownCandles.h4.filter((c) => c.time <= cutoff).slice(-360),
-          h1: topDownCandles.h1.filter((c) => c.time <= cutoff).slice(-240),
+          weekly: topDownCandles.weekly.filter((c) => c.time <= cutoff).slice(-52),
+          daily: topDownCandles.daily.filter((c) => c.time <= cutoff).slice(-90),
+          h4: topDownCandles.h4.filter((c) => c.time <= cutoff).slice(-120),
+          h1: topDownCandles.h1.filter((c) => c.time <= cutoff).slice(-120),
         })
       : undefined;
 

@@ -26,10 +26,10 @@ export async function POST(req: NextRequest) {
   try {
     const [candles, weekly, daily, h4, h1] = await Promise.all([
       fetchCandles({ instrument, granularity, count: 300 }),
-      fetchCandles({ instrument, granularity: "W", count: 160 }),
-      fetchCandles({ instrument, granularity: "D", count: 260 }),
-      fetchCandles({ instrument, granularity: "H4", count: 360 }),
-      fetchCandles({ instrument, granularity: "H1", count: 240 }),
+      fetchCandles({ instrument, granularity: "W", count: 52 }),
+      fetchCandles({ instrument, granularity: "D", count: 90 }),
+      fetchCandles({ instrument, granularity: "H4", count: 120 }),
+      fetchCandles({ instrument, granularity: "H1", count: 120 }),
     ]);
     const pivots = detectPivots(candles);
     const atrValue = atr(candles);

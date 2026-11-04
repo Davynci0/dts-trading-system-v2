@@ -51,10 +51,10 @@ export async function POST(req: NextRequest) {
   const strategies = body.strategies?.filter((s): s is StrategyId => validStrategies.includes(s as StrategyId)) ?? validStrategies;
   const horizonHours = count * (TIMEFRAME_HOURS[timeframe] ?? 1 / 4);
   const topDownCounts = {
-    weekly: Math.min(5000, Math.max(160, Math.ceil(horizonHours / (24 * 7)) + 40)),
-    daily: Math.min(5000, Math.max(260, Math.ceil(horizonHours / 24) + 40)),
-    h4: Math.min(5000, Math.max(360, Math.ceil(horizonHours / 4) + 40)),
-    h1: Math.min(5000, Math.max(240, Math.ceil(horizonHours) + 40)),
+    weekly: Math.min(5000, Math.max(52, Math.ceil(horizonHours / (24 * 7)) + 10)),
+    daily: Math.min(5000, Math.max(90, Math.ceil(horizonHours / 24) + 10)),
+    h4: Math.min(5000, Math.max(120, Math.ceil(horizonHours / 4) + 10)),
+    h1: Math.min(5000, Math.max(120, Math.ceil(horizonHours) + 10)),
   };
 
   const supabase = createAdminClient();
