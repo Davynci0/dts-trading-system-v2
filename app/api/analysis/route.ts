@@ -50,6 +50,10 @@ export async function GET(req: NextRequest) {
           goldenBottom: fib.goldenBottom,
           swingLow: { time: fib.swingLow.time, price: fib.swingLow.price },
           swingHigh: { time: fib.swingHigh.time, price: fib.swingHigh.price },
+          level50:
+            fib.direction === "long"
+              ? fib.swingHigh.price - 0.5 * fib.range
+              : fib.swingLow.price + 0.5 * fib.range,
           level618:
             fib.direction === "long"
               ? fib.swingHigh.price - 0.618 * fib.range

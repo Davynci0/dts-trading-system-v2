@@ -34,6 +34,7 @@ export interface OverlayData {
     /** swing anchors + golden-ratio levels for precise rendering */
     swingLow: { time: number; price: number };
     swingHigh: { time: number; price: number };
+    level50: number;
     level618: number;
     level786: number;
     range: number;
@@ -126,24 +127,26 @@ class OverlayPaneView implements IPrimitivePaneView {
               label(`${tradeAction} ZONE — Golden (61.8–78.6%)`, xZone + 6, y - 4, `${base}1)`, "bold 11px monospace", "left", 3);
             }
 
-            // ratio + swing level lines: 0%, 61.8%, 78.6%, 100%
+            // ratio + swing level lines: 0%, 50%, 61.8%, 78.6%, 100%
             const levels: { price: number; label: string; strong: boolean }[] = [
               { price: f.swingHigh.price, label: "100%", strong: true },
               { price: f.level618, label: "61.8%", strong: true },
+              { price: f.level50, label: "50%", strong: false },
               { price: f.level786, label: "78.6%", strong: true },
               { price: f.swingLow.price, label: "0%", strong: true },
             ];
             for (const lv of levels) {
               const y = source.priceToY(lv.price);
               if (y == null) continue;
-              ctx.strokeStyle = `${base}0.45)`;
-              ctx.setLineDash([2, 4]);
+              ctx.strokeStyle = lv.strong ? `${base}0.75)` : `${base}0.5)`;
+              ctx.lineWidth = lv.strong ? 1.5 : 1;
+              ctx.setLineDash(lv.strong ? [] : [3, 4]);
               ctx.beginPath();
               ctx.moveTo(x0, y);
               ctx.lineTo(W, y);
               ctx.stroke();
               ctx.setLineDash([]);
-              label(`${lv.label} ${lv.price.toFixed(2)}`, x0 + 4, y - 2, `${base}0.9)`, "10px monospace", "left", 3);
+              label(`${lv.label} ${lv.price.toFixed(2)}`, x0 + 4, y - 2, `${base}${lv.strong ? "1)" : "0.8)"}`, lv.strong ? "bold 10px monospace" : "10px monospace", "left", 3);
             }
 
             // swing anchor markers
