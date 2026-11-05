@@ -40,8 +40,8 @@ export interface BacktestTrade {
   takeProfit: number;
   exitPrice: number;
   rAchieved: number;
-  confirmations: number; // of the 6 non-AI checks
-  /** which individual checks were true at entry (Vision excluded) */
+  confirmations: number; // of the 6 deterministic checks
+  /** which individual checks were true at entry */
   checks: Record<string, boolean>;
   outcome: "tp" | "sl" | "timeout";
   /** true when entered in the first 70% of the series (walk-forward split) */
@@ -121,7 +121,7 @@ export function computeMetrics(trades: BacktestTrade[]): MetricsCore {
 /**
  * Backtest (Section 7). Walks the series forward evaluating all three
  * strategies on a rolling window of CLOSED candles only (no lookahead).
- * Vision AI is excluded (can't be queried retroactively at scale), so scoring
+       * deterministic 6-point checklist
  * runs 4-of-5 with the threshold still at 3 — noted in the report.
  * Entry fills at the next candle's open ± half-spread + slippage; if a candle
  * touches both SL and TP, the stop is assumed hit first (conservative).
@@ -274,7 +274,7 @@ export function runBacktest(opts: {
         takeProfit: risk.levels.takeProfit,
         exitPrice: 0,
         rAchieved: 0,
-        checks: Object.fromEntries(Object.entries(scored.confirmations).filter(([k]) => k !== "Vision AI")),
+             checks: scored.confirmations,
         confirmations: count,
         outcome: "timeout",
         inSample: i + 1 < oosStart,

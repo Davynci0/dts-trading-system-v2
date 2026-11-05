@@ -30,7 +30,7 @@ export async function sendTelegramMessage(text: string): Promise<void> {
 const pairLabel = (pair: string) => pair.replace("_", "/");
 const dirLabel = (d: "long" | "short") => (d === "long" ? "🟢 LONG" : "🔴 SHORT");
 
-/** Final signal: threshold reached. Includes structure-based SL/TP + R + confidence + vision note. */
+/** Final signal: threshold reached. Includes structure-based SL/TP + R + confidence + context note. */
 export async function sendFinalSignal(opts: {
   pair: string;
   direction: "long" | "short";
@@ -65,7 +65,7 @@ export async function sendFinalSignal(opts: {
       `SL ${opts.stopBasis} · TP at ${opts.targetBasis}`,
       `R:R *${opts.rMultiple.toFixed(2)}* · Confidence *${confidence}* (${opts.confidence}/5)`,
       `Size: ${opts.positionUnits.toLocaleString()} units (risk $${opts.riskAmount.toFixed(0)}, 1%)`,
-      opts.visionNote ? `🤖 Vision AI: ${opts.visionNote}` : null,
+      opts.visionNote ? `📝 Context: ${opts.visionNote}` : null,
       opts.comparison ? `\n${opts.comparison.replace(/[_*`\[]/g, " ")}` : null,
       `_Signal only — review and execute manually._`,
     ]
