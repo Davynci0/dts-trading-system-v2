@@ -167,13 +167,12 @@ export async function runScan(opts: {
             events.push({ pair, timeframe: tf, strategy, kind: "update", detail: `${scored.count}/6` });
           }
 
-          // Send-eligible: the strategy's researched minimum is met AND this
-          // exact setup has never produced a sent signal. Setups that are
-          // considered but not sent (risk/alignment skip, open trade, lost a
-          // conflict) stay un-signaled so they are re-considered on later
-          // scans when conditions change — crossing the watch threshold must
-          // not permanently silence a setup.
-          if (scored.count >= minConfidence && !prior?.signaled) {
+          // Send-eligible ONLY when the strategy's researched minimum is met
+          // and the setup has never actually signaled. Considered-but-not-sent
+          // setups (risk/alignment skip, open trade, lost conflict) remain
+          // eligible so later scans can send them when conditions change.
+          const disposition = setupDisposition(scored.count, prior, minConfidence);
+          if (disposition.eligible) {
             fired.push({
               strategy,
               direction: scored.direction,
@@ -349,6 +348,24 @@ const STRATEGY_QUALITY_BONUS: Record<StrategyId, number> = {
   zones: 4,
   fibonacci: 0,
 };
+
+/** Core state-machine decision for one (setup, prior-state, strategy-minimum):
+ *  a setup is a SEND CANDIDATE once its count reaches the strategy minimum,
+ *  and stays one across scans until a signal is actually sent — being
+ *  considered-but-not-sent (risk skip, open trade, lost conflict) must never
+ *  silence it, and neither must merely crossing the low watch threshold.
+ *  Exported for regression tests (this is the bug that zeroed the live feed). */
+export function setupDisposition(
+  count: number,
+  prior: Pick<SetupState, "signaled" | "lastSkip"> | null,
+  minConfidence: number
+): { eligible: boolean; signaled: boolean; lastSkip: string | null } {
+  return {
+    eligible: prior?.signaled !== true && count >= minConfidence,
+    signaled: prior?.signaled === true,
+    lastSkip: prior?.lastSkip ?? null,
+  };
+}
 
 /**
  * Turn the independently-fired setups for one pair/timeframe into a single

@@ -14,6 +14,7 @@ import { findFibSetup, inGoldenZone } from "../lib/analysis/fibonacci";
 import { findSetForgetSetup, setForgetEntry } from "../lib/analysis/setForget";
 import { scoreSetup, type ScoringContext } from "../lib/analysis/scoring";
 import { runBacktest } from "../lib/backtest/engine";
+import { setupDisposition } from "../lib/engine/scanner";
 import { analyzeTopDown, topDownAgrees } from "../lib/analysis/topDown";
 
 function mk(i: number, o: number, h: number, l: number, c: number): Candle {
@@ -444,6 +445,37 @@ check("backtest: runs without crashing", report.candles === 600, `${report.candl
 check("backtest: scopes present", ["combined", "strategy:zones", "strategy:setforget", "strategy:fibonacci"].every((k) => report.scopes[k]), Object.keys(report.scopes).join(","));
 check("backtest: metrics consistent", comb.inSample.wins <= comb.inSample.trades && comb.inSample.confidence3 + comb.inSample.confidence4 + comb.inSample.confidence5 <= comb.inSample.trades + 1, "buckets ≤ trades");
 check("backtest: limitation noted", report.limitation.includes("6-point checklist"), "deterministic 6-point checklist documented");
+
+// ============ Scanner state machine: a considered-but-not-sent setup is never silenced ============
+// Regression test for the bug that zeroed the live feed: setups were marked
+// signaled merely for crossing the watch threshold, so they could never fire at
+// the strategy minimum. Signals mark signaled; skips must not.
+{
+  const prior = (over: Partial<{ signaled: boolean; lastSkip: string | null }> | null) =>
+    over ? { signaled: false, lastSkip: null, ...over } : null;
+  // below minimum → not a send candidate
+  check(
+    "scanner: below strategy minimum stays watch-only",
+    setupDisposition(3, prior(null), 5).eligible === false && setupDisposition(3, prior(null), 5).signaled === false,
+    "3 vs min 5"
+  );
+  // at minimum, never signaled → candidate
+  check("scanner: at minimum is a send candidate", setupDisposition(5, prior(null), 5).eligible === true, "5 vs min 5");
+  // skipped for risk (lastSkip set, still not signaled) → STILL a candidate next scan
+  const afterSkip = setupDisposition(5, prior({ lastSkip: "structure only pays 1.40R" }), 5);
+  check("scanner: risk-skip does not silence the setup", afterSkip.eligible === true && afterSkip.lastSkip === "structure only pays 1.40R", "eligible again");
+  // skipped while a trade was open → STILL a candidate next scan
+  check(
+    "scanner: open-trade skip does not silence the setup",
+    setupDisposition(5, prior({ lastSkip: "a trade is already open on XAU_USD — holding" }), 5).eligible === true,
+    "eligible again"
+  );
+  // once a signal was actually sent → done, forever
+  const afterSend = setupDisposition(6, prior({ signaled: true }), 5);
+  check("scanner: sent signal permanently dedupes the setup", afterSend.eligible === false && afterSend.signaled === true, "signaled wins");
+  // firmirin confluence-grade minimum: 5 is NOT enough, 6 is
+  check("scanner: fibonacci 6-point gate", setupDisposition(5, prior(null), 6).eligible === false && setupDisposition(6, prior({ lastSkip: "x" }), 6).eligible === true, "5<6 gates");
+}
 {
   const perStrategy = runBacktest({
     pair: "EUR_USD",
