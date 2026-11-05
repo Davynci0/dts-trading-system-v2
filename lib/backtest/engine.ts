@@ -230,15 +230,12 @@ export function runBacktest(opts: {
     for (const strategy of ALL_STRATEGIES) {
       if (!strategies.includes(strategy)) continue;
       if (open[strategy]) continue; // one open trade per strategy
-      const scored = scoreSetup(strategy, ctx, null); // vision excluded (Section 7)
+      const scored = scoreSetup(strategy, ctx);
       if (!scored.hasTrigger || !scored.fired) continue;
 
       // Only enter if confidence meets the configured minimum. With the new
-      // 7-point checklist (Vision excluded in backtest = 6 points), the default
-      // of 4 matches the live scanner's signal-send threshold.
-      const count = Object.entries(scored.confirmations)
-        .filter(([k, v]) => k !== "Vision AI" && v)
-        .length;
+      // 6-point checklist, the default of 4 matches the live scanner's signal-send threshold.
+      const count = Object.values(scored.confirmations).filter(Boolean).length;
       if (count < minConfidence) continue;
 
       // same one-signal-per-setup rule as the live scanner

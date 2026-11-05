@@ -35,9 +35,9 @@ export interface ScoringContext {
 export interface ScoreResult {
   strategy: StrategyId;
   direction: SignalDirection;
-  /** the 7 checks, keyed by label; #7 (vision) is filled by the caller */
+  /** the 6 deterministic checks, keyed by label */
   confirmations: Record<string, boolean>;
-  /** how many of the 7 are currently true */
+  /** how many of the 6 are currently true */
   count: number;
   /** signal fires at >= 3 */
   fired: boolean;
@@ -45,7 +45,7 @@ export interface ScoreResult {
   topDownAligned: boolean;
   /** true when no core trigger exists at all — caller should not track state */
   hasTrigger: boolean;
-  /** the setup's trigger for vision + risk context */
+  /** the setup's trigger for risk context */
   trigger: {
     fib?: FibSetup;
     zone?: Zone;
@@ -69,14 +69,11 @@ export function m15Agrees(structureState: StructureState, direction: SignalDirec
 export const HIGH_QUALITY_THRESHOLD = 4;
 
 /**
- * 6-point confirmation scoring. Deterministic checks only —
- * the vision check (#6) is set by the caller from the Gemini result, since
- * it's async and unavailable in backtests (Section 7: 4-of-5 there).
+ * 6-point confirmation scoring. Deterministic checks only.
  */
 export function scoreSetup(
   strategy: StrategyId,
-  ctx: ScoringContext,
-  visionOk: boolean | null
+  ctx: ScoringContext
 ): ScoreResult {
   const { candles, htfCandles } = ctx;
 
@@ -99,7 +96,6 @@ export function scoreSetup(
       ? topDownAgrees(ctx.topDown, direction)
       : htfAgrees(htfCandles, direction);
     confirmations["M15 trend agrees"] = m15Agrees(classifyStructure(ctx.pivots), direction);
-    confirmations["Vision AI"] = visionOk === true;
   } else if (strategy === "setforget") {
     const entry = setForgetEntry(candles, ctx.setForget ?? null);
     if (!entry) {
@@ -118,7 +114,6 @@ export function scoreSetup(
       ? topDownAgrees(ctx.topDown, direction)
       : htfAgrees(htfCandles, direction);
     confirmations["M15 trend agrees"] = m15Agrees(classifyStructure(ctx.pivots), direction);
-    confirmations["Vision AI"] = visionOk === true;
   } else {
     const fib = ctx.fib;
     if (!fib || !inGoldenZone(candles, fib)) {
@@ -139,7 +134,6 @@ export function scoreSetup(
       ? topDownAgrees(ctx.topDown, direction)
       : htfAgrees(htfCandles, direction);
     confirmations["M15 trend agrees"] = m15Agrees(classifyStructure(ctx.pivots), direction);
-    confirmations["Vision AI"] = visionOk === true;
   }
 
   const count = Object.values(confirmations).filter(Boolean).length;

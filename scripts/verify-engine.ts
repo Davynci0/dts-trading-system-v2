@@ -247,12 +247,11 @@ if (entryD) {
     zones: zonesD,
     fib: null,
   };
-  const scoredD = scoreSetup("zones", ctxD, null);
+  const scoredD = scoreSetup("zones", ctxD);
   console.log("[zones scoring]", scoredD.count, JSON.stringify(scoredD.confirmations));
   check("zones: rejection candle detected in zone", scoredD.confirmations["Rejection candle in zone"] === true, "pin bar");
   check("zones: freshness confirmed (1 touch ≤ 1)", entryD.zone.touches <= 1, `touches=${entryD.zone.touches}`);
-  check("zones: fires at 5/6 without vision", scoredD.fired && scoredD.count === 5, `count=${scoredD.count}`);
-  check("zones: vision adds 6th point", scoreSetup("zones", ctxD, true).count === 6, "6/6 with vision");
+  check("zones: fires at 5/6", scoredD.fired && scoredD.count === 5, `count=${scoredD.count}`);
 }
 
 // stale visit: price parked inside the zone beyond the entry window → no trigger
@@ -301,15 +300,11 @@ if (fib) {
     zones: detectZones(F),
     fib,
   };
-  const noVision = scoreSetup("fibonacci", ctx, null);
-  console.log("[scoring] fib noVision:", noVision.count, JSON.stringify(noVision.confirmations));
+  const noVision = scoreSetup("fibonacci", ctx);
+  console.log("[scoring] fib:", noVision.count, JSON.stringify(noVision.confirmations));
   check("scoring: trigger present", noVision.hasTrigger, `count=${noVision.count}`);
   check("scoring: rejection candle detected", noVision.confirmations["Rejection candle in zone"] === true, "pin bar");
-  check("scoring: fires at 4/6 without vision", noVision.fired && noVision.count === 4, `count=${noVision.count}`);
-  const withVision = scoreSetup("fibonacci", ctx, true);
-  check("scoring: vision adds the 5th point", withVision.count === 5, `count=${withVision.count}`);
-  const visionNo = scoreSetup("fibonacci", ctx, false);
-  check("scoring: vision NO does not add a point", visionNo.count === 4, `count=${visionNo.count}`);
+  check("scoring: fires at 4/6", noVision.fired && noVision.count === 4, `count=${noVision.count}`);
 }
 
 // ============ Alex G set & forget: untested AOI first touch ============
@@ -374,7 +369,7 @@ if (sf) {
     fib: null,
     topDown: bearishTopDown,
   };
-  const solo = scoreSetup("zones", ctxSolo, null);
+  const solo = scoreSetup("zones", ctxSolo);
   check("solo fire: fires despite opposing top-down", solo.fired && solo.count >= 3, `count=${solo.count} topDownAligned=${solo.topDownAligned}`);
   check("solo fire: topDownAligned false but fired true (no veto)", solo.fired && !solo.topDownAligned, "no veto");
 }
