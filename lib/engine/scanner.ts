@@ -19,6 +19,7 @@ import { findOpenTrades } from "@/lib/engine/supersede";
 import { sendFinalSignal } from "@/lib/telegram";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ENGINE_VERSION } from "@/lib/engine/version";
+import { fetchQuoteUsdRates, quoteUsdRateFor } from "@/lib/fx";
 
 const STRATEGY_LABELS: Record<StrategyId, string> = {
   zones: "Supply/Demand Zone",
@@ -95,9 +96,14 @@ export async function runScan(opts: {
   const events: ScanEvent[] = [];
   let units = 0;
 
+  // Joint conversion rates for USD risk sizing (USD_JPY, AUD_USD, NZD_USD as
+  // needed by the scanned pairs) — fetched ONCE per scan, not per pair.
+  const quoteRates = await fetchQuoteUsdRates(pairs).catch(() => ({}) as Record<string, number>);
+
   // One pair, fully independent. Pairs run concurrently (see the worker pool
   // below) so a setup on one pair is never missed while another is being fetched.
   async function scanOnePair(pair: Pair): Promise<void> {
+    const quoteUsdRate = quoteUsdRateFor(pair, quoteRates);
     let topDown;
     try {
       const [weekly, daily, h4, h1] = await Promise.all([
@@ -187,6 +193,7 @@ export async function runScan(opts: {
                 pivots,
                 zones,
                 accountBalance,
+                quoteUsdRate,
               }),
             });
           }
@@ -259,7 +266,8 @@ export async function runScan(opts: {
 
 function triggerDescription(scored: ScoreResult): string {
   if (scored.strategy === "fibonacci" && scored.trigger?.fib) {
-    return `price in golden zone ${scored.trigger.fib.goldenBottom.toFixed(5)}–${scored.trigger.fib.goldenTop.toFixed(5)}`;
+    const f = scored.trigger.fib;
+    return `price in golden zone ${f.goldenBottom.toFixed(5)}–${f.goldenTop.toFixed(5)}`;
   }
   if (scored.strategy === "zones" && scored.trigger?.zone) {
     const z = scored.trigger.zone;

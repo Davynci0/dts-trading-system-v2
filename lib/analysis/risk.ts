@@ -18,7 +18,8 @@ export interface RiskLevels {
   stopDistance: number;
   rMultiple: number;
   atr: number;
-  /** units of base currency; assumes a USD account (quote≈USD conversion noted) */
+  /** units of base currency, sized so the stop costs riskAmount in USD
+   *  (converted from the quote currency via quoteUsdRate) */
   positionUnits: number;
   riskAmount: number;
   tpSource: "swing" | "zone" | "measured_move";
@@ -68,8 +69,12 @@ export function computeRiskLevels(opts: {
   pivots: Pivot[];
   zones?: ZoneRef[];
   accountBalance: number;
+  /** USD value of 1 unit of the quote currency (JPY pairs, GBP_AUD, GBP_NZD...).
+   *  Defaults to 1 (USD-quoted pairs incl. XAU). 0/missing conversion refuses sizing. */
+  quoteUsdRate?: number;
 }): RiskResult {
   const { instrument, direction, entry, candles, pivots, accountBalance } = opts;
+  const quoteUsdRate = opts.quoteUsdRate ?? 1;
   const zones = opts.zones ?? [];
   const long = direction === "long";
   const pip = pipSize(instrument);
@@ -159,6 +164,13 @@ export function computeRiskLevels(opts: {
   const measured = candidates.length === 0;
   const takeProfit = target.price;
   const rMultiple = rOf(takeProfit);
+  if (!(quoteUsdRate > 0)) {
+    return {
+      ok: false,
+      reason: "USD conversion rate for the quote currency is unavailable — cannot size the position",
+      levels: null,
+    };
+  }
   const riskAmount = accountBalance * RISK_PCT_PER_TRADE;
   const levels: RiskLevels = {
     direction,
@@ -168,7 +180,8 @@ export function computeRiskLevels(opts: {
     stopDistance,
     rMultiple,
     atr: atrValue,
-    positionUnits: Math.floor(riskAmount / stopDistance),
+    // loss per unit = stopDistance (quote currency) → × quoteUsdRate = USD
+    positionUnits: Math.floor(riskAmount / (stopDistance * quoteUsdRate)),
     riskAmount,
     tpSource: measured ? "measured_move" : target.source,
     stopBasis,

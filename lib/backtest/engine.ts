@@ -15,6 +15,12 @@ export const SPREAD_PIPS: Record<string, number> = {
   EUR_USD: 1.0,
   GBP_USD: 1.2,
   USD_JPY: 1.0,
+  GBP_JPY: 2.5,
+  EUR_JPY: 1.4,
+  AUD_JPY: 1.6,
+  NZD_JPY: 2.0,
+  GBP_AUD: 3.5,
+  GBP_NZD: 4.5,
 };
 export const SLIPPAGE_PIPS = 0.5; // per side
 const WINDOW = 500; // rolling analysis window per step
@@ -80,7 +86,7 @@ export interface BacktestReport {
   trades: BacktestTrade[]; // raw trades for cross-pair aggregation by the caller
 }
 
-export function computeMetrics(trades: BacktestTrade[]): MetricsCore {
+export function computeMetrics(trades: BacktestTrade[], quoteUsdRate = 1): MetricsCore {
   const n = trades.length;
   if (n === 0) {
     return { trades: 0, wins: 0, winRate: 0, profitFactor: 0, avgR: 0, maxDrawdownR: 0, totalPnl: 0, confidence3: 0, confidence4: 0, confidence5: 0 };
@@ -100,10 +106,11 @@ export function computeMetrics(trades: BacktestTrade[]): MetricsCore {
     maxDd = Math.max(maxDd, peak - equity);
   }
 
-  const totalPnl = trades.reduce(
-    (s, t) => s + t.rAchieved * Math.abs(t.entry - t.stopLoss) * t.units,
-    0
-  );
+  const totalPnl =
+    trades.reduce(
+      (s, t) => s + t.rAchieved * Math.abs(t.entry - t.stopLoss) * t.units,
+      0
+    ) * quoteUsdRate; // P&L is in the quote currency; convert to USD for reporting
 
   return {
     trades: n,
@@ -153,6 +160,9 @@ export function runBacktest(opts: {
   requireChecks?: string[];
   /** Research-only entry filter: these checks must all be FALSE at entry. */
   excludeChecks?: string[];
+  /** USD value of 1 unit of the quote currency — sizes USD risks correctly on
+   *  JPY pairs and crosses (GBP_JPY, GBP_AUD, ...). Defaults to 1 (USD-quoted). */
+  quoteUsdRate?: number;
 }): BacktestReport {
   const {
     pair,
@@ -167,6 +177,7 @@ export function runBacktest(opts: {
     strategies = ALL_STRATEGIES,
     requireChecks = [],
     excludeChecks = [],
+    quoteUsdRate = 1,
   } = opts;
   const minFor = (s: StrategyId): number => {
     if (typeof minConfidence === "number") return minConfidence;
@@ -270,6 +281,7 @@ export function runBacktest(opts: {
         pivots,
         zones,
         accountBalance,
+        quoteUsdRate,
       });
       if (!risk.ok) continue; // skipped-for-risk: logged in live mode, excluded here
 
@@ -321,12 +333,15 @@ export function runBacktest(opts: {
   const outOfSample = trades.filter((t) => !t.inSample);
 
   const scopes: Record<string, ScopedMetrics> = {
-    combined: { inSample: computeMetrics(inSample), outOfSample: computeMetrics(outOfSample) },
+    combined: {
+      inSample: computeMetrics(inSample, quoteUsdRate),
+      outOfSample: computeMetrics(outOfSample, quoteUsdRate),
+    },
   };
   for (const strategy of ALL_STRATEGIES) {
     scopes[`strategy:${strategy}`] = {
-      inSample: computeMetrics(inSample.filter((t) => t.strategy === strategy)),
-      outOfSample: computeMetrics(outOfSample.filter((t) => t.strategy === strategy)),
+      inSample: computeMetrics(inSample.filter((t) => t.strategy === strategy), quoteUsdRate),
+      outOfSample: computeMetrics(outOfSample.filter((t) => t.strategy === strategy), quoteUsdRate),
     };
   }
 

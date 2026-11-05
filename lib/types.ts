@@ -44,7 +44,21 @@ export interface Signal {
   superseded_at: string | null;
 }
 
-export const PAIRS = ["XAU_USD"] as const;
+/** XAU + hand-picked majors/crosses with wide ranges and sharp risk-shift moves:
+ *  JPY quote pairs (GBP_JPY, USD_JPY, EUR_JPY, AUD_JPY, NZD_JPY), the classic
+ *  GBP volatile set (GBP_USD, GBP_AUD, GBP_NZD) and gold. All use the same
+ *  M15 technical analysis pipeline (zones/fib/setforget/top-down). */
+export const PAIRS = [
+  "XAU_USD",
+  "GBP_JPY",
+  "GBP_USD",
+  "AUD_JPY",
+  "NZD_JPY",
+  "USD_JPY",
+  "EUR_JPY",
+  "GBP_AUD",
+  "GBP_NZD",
+] as const;
 
 export type Pair = (typeof PAIRS)[number];
 

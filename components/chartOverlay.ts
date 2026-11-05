@@ -62,6 +62,8 @@ export interface OverlayData {
     r: number;
     skipped: boolean;
   }[];
+  /** price display precision on labels (XAU 2, JPY quotes 3, 4-dec majors 5) */
+  digits?: number;
 }
 
 export const EMPTY_OVERLAY: OverlayData = { zones: [], aoi: null, fib: null };
@@ -93,6 +95,7 @@ class OverlayPaneView implements IPrimitivePaneView {
       draw(target: RenderTarget) {
         target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
           const W = mediaSize.width;
+          const fmt = (n: number) => n.toFixed(data.digits ?? 2);
 
           // labels are collected, then laid out last so none overprint each other
           interface Label { text: string; x: number; y: number; color: string; font: string; align: "left" | "right"; prio: number }
@@ -146,7 +149,7 @@ class OverlayPaneView implements IPrimitivePaneView {
               ctx.lineTo(W, y);
               ctx.stroke();
               ctx.setLineDash([]);
-              label(`${lv.label} ${lv.price.toFixed(2)}`, x0 + 4, y - 2, `${base}${lv.strong ? "1)" : "0.8)"}`, lv.strong ? "bold 10px monospace" : "10px monospace", "left", 3);
+              label(`${lv.label} ${fmt(lv.price)}`, x0 + 4, y - 2, `${base}${lv.strong ? "1)" : "0.8)"}`, lv.strong ? "bold 10px monospace" : "10px monospace", "left", 3);
             }
 
             // swing anchor markers
@@ -255,9 +258,9 @@ class OverlayPaneView implements IPrimitivePaneView {
               ctx.fillRect(x0, Math.min(yE, yS), W - x0, Math.abs(yS - yE));
 
               const levels: [number, string, string][] = [
-                [yT, "#26a69a", `TP ${p.takeProfit.toFixed(2)}  +${p.rewardPips.toFixed(0)} pips  ${p.rMultiple.toFixed(1)}R`],
-                [yE, "#d1d4dc", `${p.skipped ? "SKIPPED " : ""}${p.direction.toUpperCase()} ${p.entry.toFixed(2)}`],
-                [yS, "#ef5350", `SL ${p.stopLoss.toFixed(2)}  −${p.riskPips.toFixed(0)} pips`],
+                [yT, "#26a69a", `TP ${fmt(p.takeProfit)}  +${p.rewardPips.toFixed(0)} pips  ${p.rMultiple.toFixed(1)}R`],
+                [yE, "#d1d4dc", `${p.skipped ? "SKIPPED " : ""}${p.direction.toUpperCase()} ${fmt(p.entry)}`],
+                [yS, "#ef5350", `SL ${fmt(p.stopLoss)}  −${p.riskPips.toFixed(0)} pips`],
               ];
               for (const [y, color, text] of levels) {
                 ctx.strokeStyle = color;

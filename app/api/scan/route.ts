@@ -3,7 +3,7 @@ import { runScan } from "@/lib/engine/scanner";
 import { isAuthorizedMutation } from "@/lib/apiGuard";
 import { PAIRS, TRADE_TIMEFRAMES, type Pair, type Timeframe } from "@/lib/types";
 
-export const maxDuration = 300;
+export const maxDuration = 60; // Hobby plan cap — 9 pairs scan concurrently well inside this
 
 function parseParams(req: NextRequest, body: Record<string, unknown> | null) {
   const sp = req.nextUrl.searchParams;

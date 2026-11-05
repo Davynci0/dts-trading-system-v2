@@ -122,8 +122,12 @@ export default function Dashboard() {
       aoi: layers.aoi ? overlay.aoi : null,
       position: layers.position ? position : null,
       history: layers.history ? history : [],
+      digits: (() => {
+        const pip = pipSize(pair);
+        return pip >= 0.1 ? 2 : pip >= 0.01 ? 3 : 5;
+      })(),
     };
-  }, [overlay, layers, pairSignals, candles]);
+  }, [overlay, layers, pairSignals, candles, pair]);
 
   async function scanNow() {
     setScanStatus("scanning…");

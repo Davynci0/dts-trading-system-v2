@@ -120,5 +120,73 @@ check("J: skipped, nothing below entry", !rJ.ok && rJ.reason.includes("no swing 
 const rK = run({ direction: "long", entry: 1.1, pivots: [p(20, "low", 1.0955), p(25, "high", 1.0958), p(28, "low", 1.0956), p(40, "high", 1.115)] });
 check("K: stop anchors on real swing, not the 0.3-pip wiggle", rK.ok && Math.abs(rK.levels.stopLoss - (1.0955 - buf)) < 1e-9, rK.ok ? `SL=${rK.levels.stopLoss.toFixed(5)}` : rK.reason);
 
+// ---- L: JPY-quoted pair sizing uses the USD/JPY conversion ----
+// A GBP_JPY long risking 1% of $10,000 = $100 with the structural stop in JPY
+// must size units = 100 / (stopDistance/USD_JPY), not 100/stopDistance.
+{
+  const jpy: Candle[] = [];
+  for (let i = 0; i < 60; i++) {
+    const c = i % 2 === 0 ? 200 : 199.85;
+    jpy.push({ time: 1_700_000_000 + i * 900, open: c, high: c + 0.1, low: c - 0.1, close: c, volume: 1 });
+  }
+  const jp = piv(jpy);
+  const jpyAtr = atr(jpy)!;
+  // swing ~0.6 below entry: stop = 0.6 + 0.25·ATR ≈ 1.5×ATR — inside the [0.5, 3]× band
+  const swingLow = 200 - 0.6;
+  const rL = computeRiskLevels({
+    instrument: "GBP_JPY",
+    direction: "long",
+    entry: 200,
+    candles: jpy,
+    pivots: [jp(20, "low", swingLow), jp(40, "high", 203)],
+    accountBalance: 10000,
+    quoteUsdRate: 1 / 150,
+  });
+  const stopDist = 0.6 + 0.25 * jpyAtr;
+  console.log("\nL:", JSON.stringify(rL.levels));
+  check("L: JPY pair passes on structure", rL.ok, rL.ok ? "ok" : rL.reason);
+  if (rL.ok) {
+    const expected = Math.floor(100 / (stopDist / 150));
+    check("L: units convert JPY quote to USD risk", rL.levels.positionUnits === expected, `${rL.levels.positionUnits}u vs ${expected}u`);
+    check("L: JPY pip report uses 0.01", Math.abs(rL.levels.riskPips - rL.levels.stopDistance / 0.01) < 1e-6, `${rL.levels.riskPips.toFixed(0)} pips`);
+  }
+  const rL0 = computeRiskLevels({
+    instrument: "GBP_JPY",
+    direction: "long",
+    entry: 200,
+    candles: jpy,
+    pivots: [jp(20, "low", swingLow), jp(40, "high", 203)],
+    accountBalance: 10000,
+    quoteUsdRate: 0, // conversion unavailable
+  });
+  check("L: missing conversion refuses to size", !rL0.ok && rL0.reason.includes("USD conversion"), !rL0.ok ? rL0.reason : "unexpectedly ok");
+}
+
+// ---- M: cross quote (GBP_AUD) sizing uses AUD/USD ----
+{
+  const aud: Candle[] = [];
+  for (let i = 0; i < 60; i++) {
+    const c = i % 2 === 0 ? 1.95 : 1.9506;
+    aud.push({ time: 1_700_000_000 + i * 900, open: c, high: c + 0.0006, low: c - 0.0006, close: c, volume: 1 });
+  }
+  const ap = piv(aud);
+  const audAtr = atr(aud)!;
+  const swingLow = 1.95 - 0.0006 - 0.25 * audAtr; // stop lands ~1×ATR away
+  const rM = computeRiskLevels({
+    instrument: "GBP_AUD",
+    direction: "long",
+    entry: 1.95,
+    candles: aud,
+    pivots: [ap(20, "low", swingLow), ap(40, "high", 1.96)],
+    accountBalance: 10000,
+    quoteUsdRate: 0.65, // AUD/USD
+  });
+  check("M: cross sizes through AUD/USD", rM.ok, rM.ok ? "ok" : rM.reason);
+  if (rM.ok) {
+    const expected = Math.floor(100 / (rM.levels.stopDistance * 0.65));
+    check("M: units × AUD/USD = $100 risk", rM.levels.positionUnits === expected, `${rM.levels.positionUnits}u vs ${expected}u`);
+  }
+}
+
 console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} TEST(S) FAILED`);
 process.exit(failures === 0 ? 0 : 1);
