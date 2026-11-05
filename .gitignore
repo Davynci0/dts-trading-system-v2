@@ -44,3 +44,7 @@ backtests.png
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# local artifacts
+supabase/.temp/
+*.png
