@@ -14,7 +14,7 @@ import { findFibSetup, inGoldenZone } from "../lib/analysis/fibonacci";
 import { findSetForgetSetup, setForgetEntry } from "../lib/analysis/setForget";
 import { scoreSetup, type ScoringContext } from "../lib/analysis/scoring";
 import { runBacktest } from "../lib/backtest/engine";
-import { setupDisposition } from "../lib/engine/scanner";
+import { setupDisposition, signalPairs } from "../lib/engine/scanner";
 import { analyzeTopDown, topDownAgrees } from "../lib/analysis/topDown";
 
 function mk(i: number, o: number, h: number, l: number, c: number): Candle {
@@ -475,6 +475,17 @@ check("backtest: limitation noted", report.limitation.includes("6-point checklis
   check("scanner: sent signal permanently dedupes the setup", afterSend.eligible === false && afterSend.signaled === true, "signaled wins");
   // firmirin confluence-grade minimum: 5 is NOT enough, 6 is
   check("scanner: fibonacci 6-point gate", setupDisposition(5, prior(null), 6).eligible === false && setupDisposition(6, prior({ lastSkip: "x" }), 6).eligible === true, "5<6 gates");
+  // only research-validated pairs may SEND signals; the rest stay watch-only
+  check(
+    "scanner: default signal pairs are the researched ones",
+    signalPairs(undefined).has("XAU_USD") && signalPairs(undefined).has("GBP_AUD") && !signalPairs(undefined).has("EUR_JPY"),
+    `[${[...signalPairs(undefined)].join(",")}]`
+  );
+  check(
+    "scanner: SIGNAL_PAIRS override is respected",
+    !signalPairs("XAU_USD,GBP_JPY").has("EUR_JPY") && signalPairs("XAU_USD,GBP_JPY").has("GBP_JPY"),
+    "override list respected"
+  );
 }
 {
   const perStrategy = runBacktest({

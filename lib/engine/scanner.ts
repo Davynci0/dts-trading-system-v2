@@ -31,21 +31,6 @@ const STRATEGY_LABELS: Record<StrategyId, string> = {
  *  backtest research showed they lost on the recent XAU/USD M15 window. */
 const ENABLED_STRATEGIES: StrategyId[] = ["zones", "setforget", "fibonacci"];
 
-/** Per-strategy minimum confirmations required before a signal is sent.
- *  Measured post-fix on 5,000 XAU/USD M15 candles (52 days), one trade per pair,
- *  validated on split halves (scripts/research-live2.ts / research-fib6.ts):
- *    - zones >= 5, setforget >= 4, fibonacci >= 5 (old gate): 139 trades, PF 0.92 — negative
- *    - zones >= 5, setforget >= 4 (fib OFF): PF 1.57 but only 12 trades
- *    - fibonacci >= 6 (confluence-grade, below): PF 1.23, 31 trades, halves 0.94/1.69
- *  Fibonacci's standalone edge at 5 is negative, so it only sends at a perfect
- *  6/6 where it doubles as confluence for a zones/setforget setup.
- */
-const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
-  zones: 5,
-  setforget: 4,
-  fibonacci: 6,
-};
-
 
 interface SetupState {
   confirmations: Record<string, boolean>;
@@ -178,6 +163,21 @@ export async function runScan(opts: {
           // setups (risk/alignment skip, open trade, lost conflict) remain
           // eligible so later scans can send them when conditions change.
           const disposition = setupDisposition(scored.count, prior, minConfidence);
+          const watchOnly = !signalPairs().has(pair);
+          const watchNote = "watch-only pair — 6-month research shows no durable edge at the current gate";
+          if (disposition.eligible && watchOnly) {
+            if (prior?.lastSkip !== watchNote) {
+              events.push({ pair, timeframe: tf, strategy, kind: "skipped", detail: watchNote });
+            }
+            await saveSetup(supabase, pair, tf, setupKey, {
+              confirmations: scored.confirmations,
+              count: scored.count,
+              signaled: prior?.signaled === true,
+              lastSkip: watchNote,
+              lastSeen: now,
+            });
+            continue;
+          }
           if (disposition.eligible) {
             fired.push({
               strategy,
@@ -356,6 +356,38 @@ const STRATEGY_QUALITY_BONUS: Record<StrategyId, number> = {
   zones: 4,
   fibonacci: 0,
 };
+
+/** Per-strategy minimum confirmations required before a signal is sent.
+ *  Measured post-fix on 5,000 XAU/USD M15 candles (52 days), one trade per pair,
+ *  validated on split halves (scripts/research-live2.ts / research-fib6.ts):
+ *    - zones >= 5, setforget >= 4, fibonacci >= 5 (old gate): 139 trades, PF 0.92 — negative
+ *    - zones >= 5, setforget >= 4 (fib OFF): PF 1.57 but only 12 trades
+ *    - fibonacci >= 6 (confluence-grade, below): PF 1.23, 31 trades, halves 0.94/1.69
+ *  Fibonacci's standalone edge at 5 is negative, so it only sends at a perfect
+ *  6/6 where it doubles as confluence for a zones/setforget setup.
+ */
+const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
+  zones: 5,
+  setforget: 4,
+  fibonacci: 6,
+};
+
+/** Pairs allowed to SEND live signals (Telegram + signals table). All pairs
+ *  still scan fully — TA, confirmation trackers, feed events — but watch-only
+ *  pairs cannot put capital at risk. Chosen from the 6-month ranking at the
+ *  live gate (scripts/research-rank.ts, ~12.4k M15 candles, IS/OOS split):
+ *    XAU_USD:  the only pair positive over the full window (PF 1.14, avgR +0.10, DD 7.6R)
+ *    GBP_AUD:  the only FX pair not negative (PF 1.00, both halves ~neutral, DD 12.5R)
+ *  Everything else measured PF 0.63-0.85 with heavy IS/OOS regime flips —
+ *  re-enable a pair by adding it here (or the SIGNAL_PAIRS env) once its live
+ *  statistics or a longer research window justify it. */
+const DEFAULT_SIGNAL_PAIRS = ["XAU_USD", "GBP_AUD"];
+
+/** Pairs allowed to send live signals. Override with SIGNAL_PAIRS=XAU_USD,GBP_JPY. */
+export function signalPairs(override?: string | undefined): Set<string> {
+  const raw = override ?? process.env.SIGNAL_PAIRS;
+  return new Set((raw && raw.trim()) ? raw.split(",").map((s) => s.trim()) : DEFAULT_SIGNAL_PAIRS);
+}
 
 /** Core state-machine decision for one (setup, prior-state, strategy-minimum):
  *  a setup is a SEND CANDIDATE once its count reaches the strategy minimum,
