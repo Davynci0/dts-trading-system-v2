@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
-import { analyzeM15 } from "@/lib/analysis/execution";
+import { analyzeM15, M15_TRENDLINE_LOOKBACK } from "@/lib/analysis/execution";
 import { findRecentSwing } from "@/lib/analysis/fibonacci";
 import { analyzeTopDown } from "@/lib/analysis/topDown";
 
@@ -49,9 +49,11 @@ export async function GET(req: NextRequest) {
         touches: z.touches,
       }));
 
-    // Always draw the most recent significant swing's Fibonacci levels,
-    // even when price is not currently inside the golden zone.
-    const swingFib = findRecentSwing(candles, analysis.pivots, analysis.atrValue);
+    // Always draw the most recent significant swing's Fibonacci levels, even
+    // when price is not currently inside the golden zone. Uses the SAME
+    // structural pivots and lookback as the engine's findFibSetup so the
+    // drawn swing is one the scanner would actually trade.
+    const swingFib = findRecentSwing(candles, analysis.structuralPivots, analysis.atrValue, M15_TRENDLINE_LOOKBACK);
     const fib = swingFib
       ? {
           direction: swingFib.direction,

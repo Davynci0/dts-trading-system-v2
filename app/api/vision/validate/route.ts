@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
 import { detectPivots, atr, detectZones, findFibSetup } from "@/lib/analysis";
 import { analyzeTopDown } from "@/lib/analysis/topDown";
+import { isAuthorizedMutation } from "@/lib/apiGuard";
 import { renderSetupPng } from "@/lib/vision/chartRender";
 import { geminiAnalyze } from "@/lib/vision/gemini";
 import { renderValidationPrompt } from "@/lib/vision/prompts";
@@ -14,8 +15,12 @@ export const maxDuration = 120;
  * Rendering validation check (Section 6, use #3): QA on the drawing engine.
  * Draws the detected overlays from the exact pivot/swing coordinates, asks
  * Gemini whether they visually line up with the chart, and logs mismatches.
+ * Same-origin dashboard use or cron-secret bearer only.
  */
 export async function POST(req: NextRequest) {
+  if (!isAuthorizedMutation(req)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
   const body = (await req.json().catch(() => null)) as {
     instrument?: string;
     granularity?: string;

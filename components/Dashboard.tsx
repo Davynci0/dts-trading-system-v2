@@ -156,8 +156,14 @@ export default function Dashboard() {
         .then(async (res) => {
           const json = await res.json();
           if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
-          // signature of the drawn analysis — skip re-render when nothing changed
+          // signature of the drawn analysis — skip re-render when nothing
+          // changed. The candle series is part of it: during quiet markets the
+          // overlays freeze but price still prints new bars, and the chart must
+          // never go stale.
+          const jsonCandles = (json.candles ?? []) as Candle[];
           const sig = JSON.stringify({
+            n: jsonCandles.length,
+            t: jsonCandles[jsonCandles.length - 1]?.time ?? null,
             z: json.zones ?? [],
             f: json.fib ?? null,
             a: json.aoi ?? null,
@@ -165,7 +171,7 @@ export default function Dashboard() {
           });
           if (!initial && sig === analysisSigRef.current) return; // analysis unchanged
           analysisSigRef.current = sig;
-          setCandles(json.candles);
+          setCandles(jsonCandles);
           setOverlay({
             zones: json.zones ?? [],
             aoi: json.aoi ?? null,
@@ -321,7 +327,17 @@ export default function Dashboard() {
               Loading candles…
             </div>
           ) : (
-            <Chart candles={candles} overlay={shownOverlay} timeframe={timeframe} liveCandle={liveCandle} />
+            <Chart
+              candles={candles}
+              overlay={shownOverlay}
+              timeframe={timeframe}
+              liveCandle={liveCandle}
+              viewKey={pair}
+              digits={(() => {
+                const pip = pipSize(pair);
+                return pip >= 0.1 ? 2 : pip >= 0.01 ? 3 : 5;
+              })()}
+            />
           )}
         </div>
       </div>

@@ -21,9 +21,9 @@ interface LegendState {
   c: string;
 }
 
-function toLegend(candle: Candle | undefined): LegendState | null {
+function toLegend(candle: Candle | undefined, digits: number): LegendState | null {
   if (!candle) return null;
-  const f = (n: number) => n.toFixed(5);
+  const f = (n: number) => n.toFixed(digits);
   return {
     time: new Date(candle.time * 1000).toUTCString().slice(5, 22),
     o: f(candle.open),
@@ -43,11 +43,18 @@ export default function Chart({
   overlay = EMPTY_OVERLAY,
   timeframe,
   liveCandle,
+  viewKey,
+  digits = 5,
 }: {
   candles: Candle[];
   overlay?: OverlayData;
   timeframe: string;
   liveCandle?: Candle | null;
+  /** changes when the visible market dataset switches (pair) — the only
+   *  moment the zoom/pan position is intentionally reset. */
+  viewKey: string;
+  /** price display precision (XAU 2, JPY 3, 4-dec majors 5) */
+  digits?: number;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
   const legendRef = useRef<HTMLDivElement>(null);
@@ -55,6 +62,9 @@ export default function Chart({
   const seriesRef = useRef<ISeriesApi<"Candlestick"> | null>(null);
   const overlayRef = useRef<OverlayPrimitive | null>(null);
   const candlesRef = useRef<Candle[]>([]);
+  const rangeAppliedForRef = useRef<string | null>(null);
+  const overlaySigRef = useRef<string>("");
+  const digitsRef = useRef(5);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -93,7 +103,7 @@ export default function Chart({
       const byTime = param.time
         ? candlesRef.current.find((c) => c.time === (param.time as number))
         : undefined;
-      const legend = toLegend(byTime ?? candlesRef.current[candlesRef.current.length - 1]);
+      const legend = toLegend(byTime ?? candlesRef.current[candlesRef.current.length - 1], digitsRef.current);
       el.textContent = legend
         ? `${legend.time}  O ${legend.o}  H ${legend.h}  L ${legend.l}  C ${legend.c}`
         : "";
@@ -123,6 +133,10 @@ export default function Chart({
   }, []);
 
   useEffect(() => {
+    digitsRef.current = digits ?? 5;
+  }, [digits]);
+
+  useEffect(() => {
     candlesRef.current = candles;
     seriesRef.current?.setData(
       candles.map((c) => ({
@@ -133,12 +147,17 @@ export default function Chart({
         close: c.close,
       }))
     );
-    const visibleBars = timeframe === "M15" ? 180 : 150;
-    chartRef.current?.timeScale().setVisibleLogicalRange({
-      from: Math.max(0, candles.length - visibleBars),
-      to: candles.length + 5,
-    });
-  }, [candles, timeframe]);
+    // Apply the initial viewport only when the dataset (pair) changes —
+    // refreshing with new bars must never destroy the user's zoom/pan.
+    if (rangeAppliedForRef.current !== viewKey && candles.length > 0) {
+      rangeAppliedForRef.current = viewKey;
+      const visibleBars = timeframe === "M15" ? 180 : 150;
+      chartRef.current?.timeScale().setVisibleLogicalRange({
+        from: Math.max(0, candles.length - visibleBars),
+        to: candles.length + 5,
+      });
+    }
+  }, [candles, timeframe, viewKey]);
 
   // fast live tick: update ONLY the last (forming) bar — no setData, no re-render,
   // so overlays and the user's zoom/pan position are untouched between refreshes
@@ -168,10 +187,16 @@ export default function Chart({
     }
   }, [liveCandle]);
 
-  // attach/detach the overlay primitive when engine data changes
+  // attach/detach the overlay primitive when engine data CONTENT changes.
+  // The primitive reads coordinates live at render time (timeToX/priceToY),
+  // so candle updates re-render it without a detach/attach round-trip — this
+  // also stops the 30-s poll from churning the primitive identity.
   useEffect(() => {
     const series = seriesRef.current;
     if (!series) return;
+    const sig = JSON.stringify(overlay);
+    if (sig === overlaySigRef.current) return;
+    overlaySigRef.current = sig;
     if (overlayRef.current) {
       series.detachPrimitive(overlayRef.current);
       overlayRef.current = null;
@@ -187,7 +212,7 @@ export default function Chart({
       series.attachPrimitive(p);
       overlayRef.current = p;
     }
-    // coordinates change when candles change (indices shift) — recompute views
+    // coordinates may have changed — recompute views
     series.priceScale().applyOptions({});
     chartRef.current?.timeScale().applyOptions({});
   }, [overlay, candles]);

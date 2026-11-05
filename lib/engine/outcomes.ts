@@ -19,8 +19,14 @@ export interface Settlement {
 }
 
 const EXPIRY_MS = 7 * 24 * 3600 * 1000;
+/** M15 candle duration. `candle.time` is the bar OPEN — the bar is tradeable
+ *  from its open; a bar only predates the signal when it CLOSED before it. */
+const CANDLE_MS = 15 * 60 * 1000;
 
-/** First candle after firing that touches TP (win) or SL (loss); a candle touching both counts as a loss. */
+/** First candle after firing that touches TP (win) or SL (loss); a candle touching both counts as a loss.
+ *  A candle is considered when its close (open + CANDLE_MS) is after the signal
+ *  time — the entry bar itself must be evaluated, an immediate SL/TP touch there
+ *  is a real outcome (comparing open times would skip it). */
 export function settleSignal(
   s: SettleInput,
   candles: { time: number; high: number; low: number }[],
@@ -28,7 +34,7 @@ export function settleSignal(
 ): Settlement | null {
   const long = s.direction === "long";
   for (const c of candles) {
-    if (c.time * 1000 <= s.firedAt) continue;
+    if (c.time * 1000 + CANDLE_MS <= s.firedAt) continue;
     const hitTp = long ? c.high >= s.take_profit : c.low <= s.take_profit;
     const hitSl = long ? c.low <= s.stop_loss : c.high >= s.stop_loss;
     if (hitTp && hitSl) return { outcome: "loss", r: -1, hitTime: c.time, hitPrice: s.stop_loss };

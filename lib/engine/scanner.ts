@@ -18,8 +18,7 @@ import { scoreOpenSignals } from "@/lib/engine/outcomes";
 import { findOpenTrades } from "@/lib/engine/supersede";
 import { sendFinalSignal } from "@/lib/telegram";
 import { createAdminClient } from "@/lib/supabase/admin";
-
-const ENGINE_VERSION = "tori-v3";
+import { ENGINE_VERSION } from "@/lib/engine/version";
 
 const STRATEGY_LABELS: Record<StrategyId, string> = {
   zones: "Supply/Demand Zone",
@@ -32,22 +31,28 @@ const STRATEGY_LABELS: Record<StrategyId, string> = {
 const ENABLED_STRATEGIES: StrategyId[] = ["zones", "setforget", "fibonacci"];
 
 /** Per-strategy minimum confirmations required before a signal is sent.
- *  Derived from 5,000-candle XAU/USD M15 research:
- *    - setforget >= 4: 50% WR, 2.19 PF
- *    - zones >= 5: 40% WR, 1.50 PF
- *    - fibonacci >= 5: 30.6% WR, 1.03 PF (marginal, included for confluence)
+ *  Measured post-fix on 5,000 XAU/USD M15 candles (52 days), one trade per pair,
+ *  validated on split halves (scripts/research-live2.ts / research-fib6.ts):
+ *    - zones >= 5, setforget >= 4, fibonacci >= 5 (old gate): 139 trades, PF 0.92 — negative
+ *    - zones >= 5, setforget >= 4 (fib OFF): PF 1.57 but only 12 trades
+ *    - fibonacci >= 6 (confluence-grade, below): PF 1.23, 31 trades, halves 0.94/1.69
+ *  Fibonacci's standalone edge at 5 is negative, so it only sends at a perfect
+ *  6/6 where it doubles as confluence for a zones/setforget setup.
  */
 const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
   zones: 5,
   setforget: 4,
-  fibonacci: 5,
+  fibonacci: 6,
 };
 
 
 interface SetupState {
   confirmations: Record<string, boolean>;
   count: number;
+  /** true ONLY once this exact setup has produced a sent signal — never on a skip. */
   signaled: boolean;
+  /** last reason this setup was considered but not sent (dedupes feed events). */
+  lastSkip: string | null;
   lastSeen: number; // unix seconds
 }
 
@@ -139,10 +144,9 @@ export async function runScan(opts: {
           topDown,
         };
 
-        // Each strategy is evaluated independently — one firing is enough. We
-        // collect the ones that newly crossed threshold this scan, then send a
-        // single reconciled signal (confluence bonus, or AI arbitration on a
-        // long/short disagreement).
+        // Each strategy is evaluated independently. We collect the setups that
+        // reached their strategy's send threshold without having signaled
+        // before, then reconcile them into a single actionable signal.
         const fired: Firing[] = [];
 
         for (const strategy of ENABLED_STRATEGIES) {
@@ -159,18 +163,23 @@ export async function runScan(opts: {
 
           if (!prior) {
             events.push({ pair, timeframe: tf, strategy, kind: "watching", detail: triggerDescription(scored) });
+          } else if (scored.count !== prior.count) {
+            events.push({ pair, timeframe: tf, strategy, kind: "update", detail: `${scored.count}/6` });
           }
 
-          if (!scored.fired) {
-            if (prior && scored.count !== prior.count) {
-              events.push({ pair, timeframe: tf, strategy, kind: "update", detail: `${scored.count}/6` });
-            }
-          } else if (!prior?.signaled) {
+          // Send-eligible: the strategy's researched minimum is met AND this
+          // exact setup has never produced a sent signal. Setups that are
+          // considered but not sent (risk/alignment skip, open trade, lost a
+          // conflict) stay un-signaled so they are re-considered on later
+          // scans when conditions change — crossing the watch threshold must
+          // not permanently silence a setup.
+          if (scored.count >= minConfidence && !prior?.signaled) {
             fired.push({
               strategy,
               direction: scored.direction,
               scored,
               setupKey,
+              prior,
               risk: computeRiskLevels({
                 instrument: pair,
                 direction: scored.direction,
@@ -186,7 +195,8 @@ export async function runScan(opts: {
           await saveSetup(supabase, pair, tf, setupKey, {
             confirmations: scored.confirmations,
             count: scored.count,
-            signaled: scored.fired ? true : prior?.signaled === true,
+            signaled: prior?.signaled === true,
+            lastSkip: prior?.lastSkip ?? null,
             lastSeen: now,
           });
         }
@@ -318,16 +328,35 @@ interface Firing {
   direction: "long" | "short";
   scored: ScoreResult;
   setupKey: string;
+  prior: SetupState | null;
   risk: ReturnType<typeof computeRiskLevels>;
 }
+
+/** Why a send-eligible setup did not produce a signal — recorded so the
+ *  feed doesn't repeat itself and the setup is re-considered when it changes. */
+function skipReasonFor(f: Firing): string {
+  if (!f.risk.ok) return f.risk.reason;
+  if (f.risk.levels.rMultiple < 2) {
+    return `structure only pays ${f.risk.levels.rMultiple.toFixed(2)}R (min 2)`;
+  }
+  return `counter-trend: neither HTF nor M15 structure agrees with the ${f.direction}`;
+}
+
+/** Research-ranked strategy preference: setforget (PF 2.19) > zones (1.50) >
+ *  fibonacci (1.03). The primary strategy's risk levels define the trade. */
+const STRATEGY_QUALITY_BONUS: Record<StrategyId, number> = {
+  setforget: 8,
+  zones: 4,
+  fibonacci: 0,
+};
 
 /**
  * Turn the independently-fired setups for one pair/timeframe into a single
  * actionable signal:
  *  - one direction only → fire it; multiple agreeing strategies = confluence.
- *  - long AND short both fired → conflict. Ask Gemini (chart image) which side
- *    is more valid; fall back to the higher-confirmation / majority side.
- * The risk sanity check still gates the final order (never a bad-R signal).
+ *  - long AND short both fired → conflict, resolved by HTF bias then quality.
+ * A setup is marked `signaled` ONLY when it contributed to a sent signal;
+ * skipped setups remain eligible and are re-considered on later scans.
  */
 async function reconcileAndSignal(args: {
   fired: Firing[];
@@ -340,19 +369,31 @@ async function reconcileAndSignal(args: {
   sendTelegrams: boolean;
 }): Promise<void> {
   const { fired, pair, tf, candles, ctx, supabase, events, sendTelegrams } = args;
+  const now = Math.floor(Date.now() / 1000);
+
+  const persist = (f: Firing, patch: Partial<SetupState>) =>
+    saveSetup(supabase, pair, tf, f.setupKey, {
+      confirmations: f.scored.confirmations,
+      count: f.scored.count,
+      signaled: f.prior?.signaled === true,
+      lastSkip: f.prior?.lastSkip ?? null,
+      lastSeen: now,
+      ...patch,
+    }).catch(() => undefined);
 
   // One trade per pair: while a trade is open, take no new trade on this pair
-  // until it hits TP or SL. No replacement, no second position.
+  // until it hits TP or SL. No replacement, no second position. The fired
+  // setups stay un-signaled so they can fire once the trade settles.
   if (supabase) {
     const open = await findOpenTrades(supabase, pair);
     if (open.length > 0) {
-      events.push({
-        pair,
-        timeframe: tf,
-        strategy: fired[0]?.strategy ?? "zones",
-        kind: "skipped",
-        detail: `a trade is already open on ${pair} — holding until it hits TP or SL`,
-      });
+      const detail = `a trade is already open on ${pair} — holding until it hits TP or SL`;
+      for (const f of fired) {
+        if (f.prior?.lastSkip !== detail) {
+          events.push({ pair, timeframe: tf, strategy: f.strategy, kind: "skipped", detail });
+        }
+        await persist(f, { lastSkip: detail });
+      }
       return;
     }
   }
@@ -370,13 +411,12 @@ async function reconcileAndSignal(args: {
     } else {
       q -= 50;
     }
-    // Prefer Fibonacci as the primary strategy when quality is comparable.
-    if (f.scored.strategy === "fibonacci") q += 8;
+    q += STRATEGY_QUALITY_BONUS[f.scored.strategy];
     return q;
   };
-  // High-quality final signal gate. Live data shows confidence-3 signals win
-  // only ~20% of the time, while 4+ hit ~50%. Require at least the strategy's
-  // researched minimum confirmations, valid risk, and R≥2.
+  // High-quality final signal gate: valid risk, R≥2 and alignment with the
+  // higher or execution timeframe. (The strategy confirmation minimum was
+  // already required before the setup entered this reconciliation.)
   const highOdds = (f: Firing) => {
     if (!f.risk.ok || f.risk.levels.rMultiple < 2) return false;
     if (f.scored.count < STRATEGY_MIN_CONFIDENCE[f.scored.strategy]) return false;
@@ -387,20 +427,12 @@ async function reconcileAndSignal(args: {
 
   const candidates = fired.filter(highOdds);
   if (candidates.length === 0) {
-      events.push({
-        pair,
-        timeframe: tf,
-        strategy: fired[0]?.strategy ?? "zones",
-        kind: "skipped",
-        detail: `no high-odds M15 setup (need strategy-specific confirmations, HTF or M15 alignment, and R≥2)`,
-      });
     for (const f of fired) {
-      await saveSetup(supabase, pair, tf, f.setupKey, {
-        confirmations: f.scored.confirmations,
-        count: f.scored.count,
-        signaled: true,
-        lastSeen: Math.floor(Date.now() / 1000),
-      }).catch(() => undefined);
+      const reason = skipReasonFor(f);
+      if (f.prior?.lastSkip !== reason) {
+        events.push({ pair, timeframe: tf, strategy: f.strategy, kind: "skipped", detail: reason });
+      }
+      await persist(f, { lastSkip: reason });
     }
     return;
   }
@@ -408,7 +440,7 @@ async function reconcileAndSignal(args: {
   const longs = candidates.filter((f) => f.direction === "long");
   const shorts = candidates.filter((f) => f.direction === "short");
 
-  // If both directions have candidates, require top-down alignment to pick a side;
+  // If both directions have candidates, use top-down alignment to pick a side;
   // otherwise pick the side with candidates. This prevents counter-trend signals
   // when the higher timeframe is clearly bearish/bullish.
   let winnerSide: "long" | "short";
@@ -429,16 +461,16 @@ async function reconcileAndSignal(args: {
   const ranked = [...winners].sort((a, b) => quality(b) - quality(a));
   const primary = ranked[0];
 
-  // mark every fired setup (winners and losers) as signaled so they don't re-alert
+  // The winning side produced its decision row for this pair (sent, or
+  // recorded as skipped-for-risk) — done for these setups. Setups on the
+  // rejected side stay eligible for a future, separate signal.
+  for (const f of winners) {
+    await persist(f, { signaled: true, lastSkip: null });
+  }
   for (const f of fired) {
-    const prior = await loadSetup(supabase, pair, tf, f.setupKey);
-    await saveSetup(supabase, pair, tf, f.setupKey, {
-      confirmations: f.scored.confirmations,
-      count: f.scored.count,
-      signaled: true,
-      lastSeen: Math.floor(Date.now() / 1000),
-    }).catch(() => undefined);
-    void prior;
+    if (!winners.includes(f)) {
+      await persist(f, { lastSkip: `lost the ${winnerSide} conflict on this pair (${arbitrationNote ?? "side selection"})` });
+    }
   }
 
   const confluence = winners.map((f) => f.strategy);
@@ -500,7 +532,7 @@ async function reconcileAndSignal(args: {
       timeframe: tf,
       strategy: primary.strategy,
       kind: "signal",
-      detail: `${winnerSide} ${confidence}/5 R${L.rMultiple.toFixed(2)}${winners.length > 1 ? ` ×${winners.length} confluence` : ""}`,
+      detail: `${winnerSide} ${confidence}/6 R${L.rMultiple.toFixed(2)}${winners.length > 1 ? ` ×${winners.length} confluence` : ""}`,
     });
   } else {
     // Skipped for risk: still record the position that WOULD have been taken

@@ -59,10 +59,10 @@ export interface MetricsCore {
   maxDrawdownR: number;
   /** Absolute P&L in account currency using the fixed position size. */
   totalPnl: number;
-  /** Section 7 confidence split. Vision can't be queried retroactively, so
-   * counts are out of 4 non-AI checks: "3" and "4" buckets; "5" is impossible. */
+  /** Confidence split out of the 6 deterministic checks: "3", "4" and "≥5". */
   confidence3: number;
   confidence4: number;
+  confidence5: number;
 }
 
 export interface ScopedMetrics {
@@ -83,7 +83,7 @@ export interface BacktestReport {
 export function computeMetrics(trades: BacktestTrade[]): MetricsCore {
   const n = trades.length;
   if (n === 0) {
-    return { trades: 0, wins: 0, winRate: 0, profitFactor: 0, avgR: 0, maxDrawdownR: 0, totalPnl: 0, confidence3: 0, confidence4: 0 };
+    return { trades: 0, wins: 0, winRate: 0, profitFactor: 0, avgR: 0, maxDrawdownR: 0, totalPnl: 0, confidence3: 0, confidence4: 0, confidence5: 0 };
   }
   const wins = trades.filter((t) => t.rAchieved > 0);
   const grossWin = wins.reduce((s, t) => s + t.rAchieved, 0);
@@ -114,18 +114,18 @@ export function computeMetrics(trades: BacktestTrade[]): MetricsCore {
     maxDrawdownR: maxDd,
     totalPnl,
     confidence3: trades.filter((t) => t.confirmations === 3).length,
-    confidence4: trades.filter((t) => t.confirmations >= 4).length,
+    confidence4: trades.filter((t) => t.confirmations === 4).length,
+    confidence5: trades.filter((t) => t.confirmations >= 5).length,
   };
 }
 
 /**
- * Backtest (Section 7). Walks the series forward evaluating all three
- * strategies on a rolling window of CLOSED candles only (no lookahead).
-       * deterministic 6-point checklist
- * runs 4-of-5 with the threshold still at 3 — noted in the report.
- * Entry fills at the next candle's open ± half-spread + slippage; if a candle
- * touches both SL and TP, the stop is assumed hit first (conservative).
- * Results are NOT optimized toward any target — reported as produced.
+ * Backtest (Section 7). Walks the series forward evaluating the strategies
+ * on a rolling window of CLOSED candles only (no lookahead), using the same
+ * deterministic 6-point checklist as the live scanner. Entry fills at the
+ * next candle's open ± half-spread + slippage; if a candle touches both SL
+ * and TP, the stop is assumed hit first (conservative). Results are NOT
+ * optimized toward any target — reported as produced.
  */
 export function runBacktest(opts: {
   pair: string;
@@ -139,10 +139,20 @@ export function runBacktest(opts: {
   fixedUnits?: number;
   /** Risk percent of account balance per trade (default 0.01 = 1%). Only used when fixedUnits is omitted. */
   riskPercent?: number;
-  /** Minimum non-AI confirmations to enter a trade (default 3). */
-  minConfidence?: number;
-  /** Strategies to run in the backtest. Defaults to all five. */
+  /** Minimum confirmations to enter a trade. A single number applies to all
+   *  strategies; a per-strategy record mirrors the live scanner's gate. Default 3. */
+  minConfidence?: number | Partial<Record<StrategyId, number>>;
+  /** Live-parity mode: at most ONE open trade at a time (per pair), regardless
+   *  of strategy — mirrors the scanner's one-trade-per-pair rule. When false
+   *  (default), each strategy books its own concurrent trades. */
+  oneTradePerPair?: boolean;
+  /** Strategies to run in the backtest. Defaults to all enabled. */
   strategies?: StrategyId[];
+  /** Research-only entry filter: these checks must all be TRUE at entry.
+   *  Used to measure the marginal value of individual confirmations. */
+  requireChecks?: string[];
+  /** Research-only entry filter: these checks must all be FALSE at entry. */
+  excludeChecks?: string[];
 }): BacktestReport {
   const {
     pair,
@@ -153,8 +163,15 @@ export function runBacktest(opts: {
     accountBalance = 10000,
     fixedUnits,
     minConfidence = 3,
+    oneTradePerPair = false,
     strategies = ALL_STRATEGIES,
+    requireChecks = [],
+    excludeChecks = [],
   } = opts;
+  const minFor = (s: StrategyId): number => {
+    if (typeof minConfidence === "number") return minConfidence;
+    return minConfidence[s] ?? 3;
+  };
   const pip = pipSize(pair);
   const spread = (SPREAD_PIPS[pair] ?? 1.5) * pip;
   const slip = SLIPPAGE_PIPS * pip;
@@ -173,7 +190,7 @@ export function runBacktest(opts: {
       const hitSl = t.direction === "long" ? c.low <= t.stopLoss : c.high >= t.stopLoss;
       const hitTp = t.direction === "long" ? c.high >= t.takeProfit : c.low <= t.takeProfit;
 
-      if (hitSl || hitTp || i - t.entryIndex >= MAX_HOLD_CANDLES || i === candles.length - 1) {
+      if (hitSl || hitTp || i - t.entryIndex >= MAX_HOLD_CANDLES) {
         let exitPrice: number;
         let outcome: BacktestTrade["outcome"];
         if (hitSl) {
@@ -230,13 +247,16 @@ export function runBacktest(opts: {
     for (const strategy of ALL_STRATEGIES) {
       if (!strategies.includes(strategy)) continue;
       if (open[strategy]) continue; // one open trade per strategy
+      if (oneTradePerPair && Object.keys(open).length > 0) continue; // live parity: one trade per pair
       const scored = scoreSetup(strategy, ctx);
       if (!scored.hasTrigger || !scored.fired) continue;
 
-      // Only enter if confidence meets the configured minimum. With the new
-      // 6-point checklist, the default of 4 matches the live scanner's signal-send threshold.
+      // Only enter if confidence meets the configured (per-strategy) minimum.
       const count = Object.values(scored.confirmations).filter(Boolean).length;
-      if (count < minConfidence) continue;
+      if (count < minFor(strategy)) continue;
+      // research filters: measure individual checks' marginal value
+      if (requireChecks.some((c) => scored.confirmations[c] !== true)) continue;
+      if (excludeChecks.some((c) => scored.confirmations[c] === true)) continue;
 
       // same one-signal-per-setup rule as the live scanner
       const setupKey = buildSetupKey("bt", scored);
@@ -256,7 +276,6 @@ export function runBacktest(opts: {
       // position size: fixed lots override risk-based sizing
       const units = fixedUnits ?? risk.levels.positionUnits;
       if (!units || units <= 0) continue;
-      traded.add(setupKey);
       traded.add(setupKey);
 
       // fill at NEXT candle open ± costs (signal known only after close)
@@ -283,6 +302,21 @@ export function runBacktest(opts: {
     }
   }
 
+  // close out any trade still open at the end of the series at the final
+  // close — dropping them would bias the metrics against recent entries.
+  const lastIndex = candles.length - 1;
+  for (const strategy of Object.keys(open) as StrategyId[]) {
+    const t = open[strategy]!;
+    const c = candles[lastIndex];
+    const stopDist = Math.abs(t.entry - t.stopLoss);
+    t.exitIndex = lastIndex;
+    t.exitPrice = c.close;
+    t.rAchieved = (t.direction === "long" ? c.close - t.entry : t.entry - c.close) / stopDist;
+    t.outcome = "timeout";
+    trades.push(t);
+    delete open[strategy];
+  }
+
   const inSample = trades.filter((t) => t.inSample);
   const outOfSample = trades.filter((t) => !t.inSample);
 
@@ -302,7 +336,7 @@ export function runBacktest(opts: {
     candles: candles.length,
     generatedAt: new Date().toISOString(),
     limitation:
-      "Confirmation scoring used the 4 non-AI checks only (3-of-4 threshold applied as 3-of-5-minus-vision); Gemini vision check cannot be queried retroactively on historical charts. Confidence buckets are 3 and 4 of 4; 5-of-5 is impossible in backtest.",
+      "Deterministic 6-point checklist, same as the live scanner. Confidence buckets are 3, 4 and ≥5 out of 6. Costs (spread + slippage) are applied at entry; a candle touching both SL and TP settles as a loss. Confluent setups book separately per strategy unless oneTradePerPair is enabled (live parity).",
     scopes,
     trades,
   };

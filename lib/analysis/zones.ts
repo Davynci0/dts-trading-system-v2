@@ -44,18 +44,23 @@ export function detectZones(candles: Candle[]): Zone[] {
     const impulsive = range > IMPULSE_RANGE_MULT * a && body / range > IMPULSE_BODY_RATIO;
     if (!impulsive) continue;
 
-    // walk back over the small-bodied base candle(s) preceding the impulse
+    // Walk back over the small-bodied base candle(s) preceding the impulse.
+    // The walk stops at the first LARGE-bodied candle (or the candle-count
+    // limit); the terminating large candle must NOT be part of the base —
+    // including it would stretch the zone box into the opposite swing.
     let j = i - 1;
-    while (
-      j - 1 >= 0 &&
-      i - j < MAX_BASE_CANDLES &&
-      Math.abs(candles[j].close - candles[j].open) < 0.5 * (atrs[j] ?? a)
-    ) {
-      j--;
+    let hitLargeCandle = false;
+    while (j >= 1 && i - j < MAX_BASE_CANDLES) {
+      if (Math.abs(candles[j].close - candles[j].open) < 0.5 * (atrs[j] ?? a)) {
+        j--;
+      } else {
+        hitLargeCandle = true;
+        break;
+      }
     }
-    if (j === i) continue; // no base candle found
-    const base = candles.slice(j, i); // [j, i-1]
-    if (base.length === 0) continue;
+    const baseStart = hitLargeCandle ? j + 1 : j;
+    const base = candles.slice(baseStart, i); // small-bodied candles only
+    if (base.length === 0) continue; // no base candle found
 
     const top = Math.max(...base.map((b) => b.high));
     const bottom = Math.min(...base.map((b) => b.low));

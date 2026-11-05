@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { runScan } from "@/lib/engine/scanner";
+import { isAuthorizedMutation } from "@/lib/apiGuard";
 import { PAIRS, TRADE_TIMEFRAMES, type Pair, type Timeframe } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -31,8 +32,13 @@ export async function GET(req: NextRequest) {
   return handle(req, null);
 }
 
-/** POST — manual/dashboard trigger. Body: { pairs?: string[], timeframes?: string[] }. */
+/** POST — manual/dashboard trigger. Body: { pairs?: string[], timeframes?: string[] }.
+ *  The POST path bypasses the cron bearer (the dashboard can't hold a secret)
+ *  but must be same-origin or carry the cron secret. */
 export async function POST(req: NextRequest) {
+  if (!isAuthorizedMutation(req)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
   return handle(req, body);
 }

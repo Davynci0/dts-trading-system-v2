@@ -86,20 +86,28 @@ export function computeRiskLevels(opts: {
   const highs = swings.filter((p) => p.kind === "high");
   const lows = swings.filter((p) => p.kind === "low");
 
-  // --- stop: beyond the nearest significant swing that clears normal noise ---
+  // --- stop: beyond the price-nearest significant swing that clears normal
+  // noise. Anchoring to the nearest swing in PRICE (not the most recent one)
+  // keeps the stop proportional to the actual structure around the entry. ---
   const buffer = STOP_BUFFER_ATR_FRACTION * atrValue;
   const minStop = MIN_STOP_ATR * atrValue;
   let stopLoss: number;
   let stopBasis: string;
   if (long) {
-    const swing = [...lows].reverse().find((p) => entry - (p.price - buffer) >= minStop && p.price < entry);
+    const swing = lows
+      .filter((p) => p.price < entry)
+      .sort((a, b) => b.price - a.price) // nearest below entry first
+      .find((p) => entry - (p.price - buffer) >= minStop);
     if (!swing) {
       return { ok: false, reason: "no swing low far enough below entry — no structure to anchor the stop", levels: null };
     }
     stopLoss = swing.price - buffer;
     stopBasis = `below swing low ${fmt(swing.price)}`;
   } else {
-    const swing = [...highs].reverse().find((p) => p.price + buffer - entry >= minStop && p.price > entry);
+    const swing = highs
+      .filter((p) => p.price > entry)
+      .sort((a, b) => a.price - b.price) // nearest above entry first
+      .find((p) => p.price + buffer - entry >= minStop);
     if (!swing) {
       return { ok: false, reason: "no swing high far enough above entry — no structure to anchor the stop", levels: null };
     }

@@ -4,6 +4,7 @@
  */
 import type { Candle } from "../lib/types";
 import { detectPivots, significantPivots } from "../lib/analysis/pivots";
+import { settleSignal } from "../lib/engine/outcomes";
 import { compareTrades, formatAge, type OpenTrade, type NewSetup } from "../lib/engine/supersede";
 import { atr } from "../lib/analysis/indicators";
 import { detectZones, detectZoneEntry, ZONE_ENTRY_WINDOW } from "../lib/analysis/zones";
@@ -46,6 +47,53 @@ if (demand) {
   check("zones: box spans base candles", demand.top === 1.1003 && demand.bottom === 1.0998, `${demand.bottom}-${demand.top}`);
   check("zones: re-entry counted as touch", demand.touches === 1, `touches=${demand.touches}`);
   check("zones: invalidated on close-through", !demand.active && demand.invalidatedIndex === 48, `inv@${demand.invalidatedIndex}`);
+}
+
+// ============ Zones: base walk must exclude the terminating large candle ============
+// A big drop candle sits immediately before a tight base + bullish impulse.
+// The old walk-back included that candle in the base, stretching the zone box
+// into the opposite swing (and usually tripping the width limit, dropping
+// the zone entirely). The box must span ONLY the small-bodied base candles.
+{
+  const ZB: Candle[] = [];
+  for (let i = 0; i < 20; i++) ZB.push(mk(i, 1.2, 1.2003, 1.1998, 1.2)); // flat plateau
+  ZB.push(mk(20, 1.2, 1.2003, 1.195, 1.1955)); // LARGE candle right before the base
+  ZB.push(mk(21, 1.1955, 1.1958, 1.1952, 1.1956)); // small base candle
+  ZB.push(mk(22, 1.1956, 1.1959, 1.1953, 1.1957)); // small base candle
+  ZB.push(mk(23, 1.1955, 1.201, 1.1954, 1.2008)); // bullish impulse
+  for (let i = 24; i < 40; i++) ZB.push(mk(i, 1.2004, 1.2008, 1.2001, 1.2005)); // price away
+  const demandB = detectZones(ZB).find((z) => z.kind === "demand");
+  check(
+    "zones: base excludes the terminating large candle",
+    demandB != null && Math.abs(demandB.top - 1.1959) < 1e-9 && Math.abs(demandB.bottom - 1.1952) < 1e-9,
+    demandB ? `${demandB.bottom}-${demandB.top}` : "none"
+  );
+}
+
+// ============ Outcome settlement: the entry bar must be evaluated ============
+// A signal fires just after a bar close. The NEXT bar is the entry bar; if it
+// hits SL immediately that is a real loss. The old open-time comparison skipped
+// it entirely, letting later bars rewrite the outcome.
+{
+  const t0 = 1_700_000_000;
+  const firedAt = (t0 + 900) * 1000 + 12_000; // 12s after the source bar closed
+  const settle = [
+    { time: t0, high: 100, low: 90 }, // source bar: closed before the signal — excluded
+    { time: t0 + 900, high: 99, low: 89 }, // entry bar: dips to SL — must count
+  ];
+  const res = settleSignal({ direction: "long", entry: 95, stop_loss: 90, take_profit: 110, firedAt }, settle);
+  check("settlement: entry bar is evaluated (first-bar SL = loss)", res?.outcome === "loss" && res.hitPrice === 90, res ? `${res.outcome}@${res.hitPrice}` : "null");
+  // signal fires exactly at the source bar's close: source excluded, entry bar still counts
+  const resBoundary = settleSignal({ direction: "long", entry: 95, stop_loss: 90, take_profit: 110, firedAt: (t0 + 900) * 1000 }, settle);
+  check("settlement: boundary-close signal still evaluates the entry bar", resBoundary?.outcome === "loss", resBoundary ? resBoundary.outcome : "null");
+  // signal fires after the ENTRY bar closed: every candle in range predates it
+  // → nothing to settle yet (well within the 7-day expiry)
+  const resAfter = settleSignal(
+    { direction: "long", entry: 95, stop_loss: 90, take_profit: 110, firedAt: (t0 + 1800) * 1000 + 1000 },
+    settle,
+    (t0 + 1800) * 1000 + 61_000
+  );
+  check("settlement: bars closed at/before the signal are excluded", resAfter === null, resAfter ? resAfter.outcome : "null");
 }
 
 // ============ Stage 5.1: trendlines ============
@@ -394,8 +442,36 @@ const comb = report.scopes.combined;
 console.log("\n[backtest] trades IS=%d OOS=%d", comb.inSample.trades, comb.outOfSample.trades);
 check("backtest: runs without crashing", report.candles === 600, `${report.candles} candles`);
 check("backtest: scopes present", ["combined", "strategy:zones", "strategy:setforget", "strategy:fibonacci"].every((k) => report.scopes[k]), Object.keys(report.scopes).join(","));
-check("backtest: metrics consistent", comb.inSample.wins <= comb.inSample.trades && comb.inSample.confidence3 + comb.inSample.confidence4 <= comb.inSample.trades + 1, "buckets ≤ trades");
-check("backtest: limitation noted", report.limitation.includes("4 non-AI"), "vision exclusion documented");
+check("backtest: metrics consistent", comb.inSample.wins <= comb.inSample.trades && comb.inSample.confidence3 + comb.inSample.confidence4 + comb.inSample.confidence5 <= comb.inSample.trades + 1, "buckets ≤ trades");
+check("backtest: limitation noted", report.limitation.includes("6-point checklist"), "deterministic 6-point checklist documented");
+{
+  const perStrategy = runBacktest({
+    pair: "EUR_USD",
+    timeframe: "M15",
+    candles: B,
+    htfCandles: B,
+    minConfidence: { zones: 99, setforget: 3, fibonacci: 3 },
+    strategies: ["zones", "setforget", "fibonacci"],
+  });
+  check(
+    "backtest: per-strategy confidence thresholds gate entry",
+    perStrategy.trades.every((t) => t.strategy !== "zones"),
+    `${perStrategy.trades.length} trades, zones blocked at 99`
+  );
+  const oneAtATime = runBacktest({
+    pair: "EUR_USD",
+    timeframe: "M15",
+    candles: B,
+    htfCandles: B,
+    minConfidence: 3,
+    oneTradePerPair: true,
+  });
+  let overlap = 0;
+  for (const t of oneAtATime.trades as { entryIndex: number; exitIndex: number }[]) {
+    if (oneAtATime.trades.some((o) => o !== t && o.entryIndex < t.exitIndex && t.entryIndex < o.exitIndex)) overlap++;
+  }
+  check("backtest: oneTradePerPair never overlaps positions", overlap === 0, `${oneAtATime.trades.length} trades, ${overlap} overlapping`);
+}
 
 // ============ significantPivots: zigzag keeps real swings, collapses noise ============
 {

@@ -23,8 +23,6 @@ export interface ScoringContext {
   pivots: Pivot[];
   atrValue: number;
   zones: Zone[];
-  trendlines?: never;
-  structureEvent?: never;
   fib: FibSetup | null;
   /** Alex G set-and-forget AOI setup (optional). */
   setForget?: SetForgetSetup | null;
@@ -54,8 +52,6 @@ export interface ScoreResult {
 }
 
 export const SIGNAL_THRESHOLD = 3; // threshold that makes a setup "watchable" / tracked
-/** Minimum confirmations required before the scanner will send a live signal. */
-export const SIGNAL_SEND_THRESHOLD = 4;
 
 /** M15 execution-timeframe trend alignment: avoid counter-M15 trades. */
 export function m15Agrees(structureState: StructureState, direction: SignalDirection): boolean {
@@ -64,9 +60,6 @@ export function m15Agrees(structureState: StructureState, direction: SignalDirec
     (structureState === "downtrend" && direction === "short")
   );
 }
-
-/** Minimum confirmations required to consider a fired setup for a final signal. */
-export const HIGH_QUALITY_THRESHOLD = 4;
 
 /**
  * 6-point confirmation scoring. Deterministic checks only.

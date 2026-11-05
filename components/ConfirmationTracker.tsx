@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { STRATEGIES, type StrategyId } from "@/lib/types";
+import { ENGINE_VERSION } from "@/lib/engine/version";
 
 const CONFIRMATIONS: Record<StrategyId, string[]> = {
   zones: [
@@ -11,7 +12,6 @@ const CONFIRMATIONS: Record<StrategyId, string[]> = {
     "Momentum (RSI) turning",
     "HTF trend agrees",
     "M15 trend agrees",
-    "Vision AI",
   ],
   setforget: [
     "AOI first touch",
@@ -20,7 +20,6 @@ const CONFIRMATIONS: Record<StrategyId, string[]> = {
     "Momentum (RSI) turning",
     "HTF trend agrees",
     "M15 trend agrees",
-    "Vision AI",
   ],
   fibonacci: [
     "Price in golden zone",
@@ -29,7 +28,6 @@ const CONFIRMATIONS: Record<StrategyId, string[]> = {
     "Momentum (RSI) turning",
     "HTF trend agrees",
     "M15 trend agrees",
-    "Vision AI",
   ],
 };
 
@@ -84,7 +82,7 @@ export default function ConfirmationTracker({ pair, timeframe }: { pair: string;
         {STRATEGIES.map((s) => {
           const live = setups.filter(
             (r) =>
-              (r.dedupe_key.startsWith(`tori-v3:${s.id}:`) || r.dedupe_key.startsWith(`tori-v2:${s.id}:`)) &&
+              r.dedupe_key.startsWith(`${ENGINE_VERSION}:${s.id}:`) &&
               r.pair === pair &&
               r.timeframe === timeframe
           );
@@ -95,7 +93,7 @@ export default function ConfirmationTracker({ pair, timeframe }: { pair: string;
             <div key={s.id}>
               <div className="mb-1 flex items-baseline justify-between">
                 <span className="text-xs font-medium text-neutral-300">{s.label}</span>
-                <span className="font-mono text-xs text-neutral-500">{count}/7</span>
+                <span className="font-mono text-xs text-neutral-500">{count}/6</span>
               </div>
               {!latest && (
                 <div className="mb-1 text-[10px] text-neutral-600">
