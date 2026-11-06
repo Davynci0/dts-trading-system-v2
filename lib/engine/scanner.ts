@@ -392,10 +392,11 @@ const STRATEGY_QUALITY_BONUS: Record<StrategyId, number> = {
  *  as a potential trade. Research suggests this degrades edge, so it is opt-in.
  */
 const ZONES_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.ZONES_MIN_CONFIDENCE ?? 5)));
+const FIB_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.FIB_MIN_CONFIDENCE ?? 6)));
 const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
   zones: ZONES_MIN_CONFIDENCE,
   setforget: 4,
-  fibonacci: 6,
+  fibonacci: FIB_MIN_CONFIDENCE,
 };
 
 /** Pairs allowed to SEND live signals (Telegram + signals table). All pairs
@@ -408,6 +409,10 @@ const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
  *  re-enable a pair by adding it here (or the SIGNAL_PAIRS env) once its live
  *  statistics or a longer research window justify it. */
 const DEFAULT_SIGNAL_PAIRS = ["XAU_USD", "GBP_AUD"];
+
+/** Allow the same setup to fire more than once (no permanent signaled dedup).
+ *  Useful for scalping/re-entry styles. Default false. */
+const ALLOW_REPEAT_SIGNALS = (process.env.ALLOW_REPEAT_SIGNALS ?? "false") === "true";
 
 /** Pairs allowed to send live signals. Override with SIGNAL_PAIRS=XAU_USD,GBP_JPY. */
 export function signalPairs(override?: string | undefined): Set<string> {
@@ -433,8 +438,8 @@ export function setupDisposition(
   minConfidence: number
 ): { eligible: boolean; signaled: boolean; lastSkip: string | null } {
   return {
-    eligible: prior?.signaled !== true && count >= minConfidence,
-    signaled: prior?.signaled === true,
+    eligible: (ALLOW_REPEAT_SIGNALS || prior?.signaled !== true) && count >= minConfidence,
+    signaled: !ALLOW_REPEAT_SIGNALS && prior?.signaled === true,
     lastSkip: prior?.lastSkip ?? null,
   };
 }
@@ -555,7 +560,7 @@ async function reconcileAndSignal(args: {
   // recorded as skipped-for-risk) — done for these setups. Setups on the
   // rejected side stay eligible for a future, separate signal.
   for (const f of winners) {
-    await persist(f, { signaled: true, lastSkip: null });
+    await persist(f, { signaled: ALLOW_REPEAT_SIGNALS ? false : true, lastSkip: null });
   }
   for (const f of fired) {
     if (!winners.includes(f)) {
