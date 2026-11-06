@@ -1,8 +1,8 @@
 /**
- * Telegram is the system's single communication channel (Section 8) and now
- * carries ONLY the actionable trade: the final signal with entry/SL/TP.
- * Watching, confirmation-update and skipped-for-risk notes stay in the
- * dashboard feed and are never pushed to Telegram.
+ * Telegram is the system's communication channel (Section 8). It sends:
+ *  - early zone-touch alerts when price enters a buy/sell zone, and
+ *  - the final actionable trade signal with entry/SL/TP once all confirmations line up.
+ * Watching, confirmation-update and skipped-for-risk notes stay in the dashboard feed.
  * Credentials come from TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID env vars only.
  */
 export async function sendTelegramMessage(text: string): Promise<void> {
@@ -30,7 +30,30 @@ export async function sendTelegramMessage(text: string): Promise<void> {
 const pairLabel = (pair: string) => pair.replace("_", "/");
 const dirLabel = (d: "long" | "short") => (d === "long" ? "🟢 LONG" : "🔴 SHORT");
 
-/** Final signal: threshold reached. Includes structure-based SL/TP + R + confidence + context note. */
+/** Zone-touch alert: price just entered a buy (demand) or sell (supply) zone.
+ *  This is an early-warning notification, separate from the final trade signal.
+ */
+export async function sendZoneAlert(opts: {
+  pair: string;
+  direction: "long" | "short";
+  zoneKind: "demand" | "supply";
+  zoneBottom: number;
+  zoneTop: number;
+  touches: number;
+  price: number;
+}): Promise<void> {
+  const label = opts.zoneKind === "demand" ? "🟩 BUY ZONE" : "🟥 SELL ZONE";
+  const dir = dirLabel(opts.direction);
+  await sendTelegramMessage(
+    [
+      `🎯 *ZONE TOUCH: ${pairLabel(opts.pair)} ${label}*`,
+      `${dir} · price \`${opts.price.toFixed(5)}\``,
+      `Zone \`${opts.zoneBottom.toFixed(5)} – ${opts.zoneTop.toFixed(5)}\` · ${opts.touches} prior touch${opts.touches === 1 ? "" : "es"}`,
+      `_Waiting for remaining confirmations before a signal is sent._`,
+    ].join("\n")
+  );
+}
+
 export async function sendFinalSignal(opts: {
   pair: string;
   direction: "long" | "short";

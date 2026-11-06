@@ -28,4 +28,4 @@ export {
   EXECUTION_HTF,
   type M15Analysis,
 } from "./execution";
-export { computeRiskLevels, type RiskLevels, type RiskResult } from "./risk";
+export { computeRiskLevels, MIN_RR, type RiskLevels, type RiskResult } from "./risk";

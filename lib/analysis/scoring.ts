@@ -16,6 +16,9 @@ import { inGoldenZone } from "./fibonacci";
 import { detectZoneEntry } from "./zones";
 import { setForgetEntry, type SetForgetSetup } from "./setForget";
 
+const REQUIRE_HTF_TREND = (process.env.REQUIRE_HTF_TREND ?? "true") !== "false";
+const REQUIRE_M15_TREND = (process.env.REQUIRE_M15_TREND ?? "true") !== "false";
+
 export interface ScoringContext {
   instrument: string;
   candles: Candle[];
@@ -41,6 +44,8 @@ export interface ScoreResult {
   fired: boolean;
   /** False when Weekly/Daily direction conflicts with this setup. */
   topDownAligned: boolean;
+  /** False when M15 structure conflicts with this setup. */
+  m15Aligned: boolean;
   /** true when no core trigger exists at all — caller should not track state */
   hasTrigger: boolean;
   /** the setup's trigger for risk context */
@@ -59,6 +64,16 @@ export function m15Agrees(structureState: StructureState, direction: SignalDirec
     (structureState === "uptrend" && direction === "long") ||
     (structureState === "downtrend" && direction === "short")
   );
+}
+
+function htfTrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolean {
+  if (!REQUIRE_HTF_TREND) return true;
+  return ctx.topDown ? topDownAgrees(ctx.topDown, direction) : htfAgrees(ctx.htfCandles, direction);
+}
+
+function m15TrendAgrees(pivots: Pivot[], direction: SignalDirection): boolean {
+  if (!REQUIRE_M15_TREND) return true;
+  return m15Agrees(classifyStructure(pivots), direction);
 }
 
 /**
@@ -85,10 +100,8 @@ export function scoreSetup(
     confirmations["Rejection candle in zone"] = isRejectionCandle(candles, direction);
     confirmations["Zone fresh (≤1 touch)"] = zoneIsVeryFresh(entry.zone.touches);
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
-    confirmations["HTF trend agrees"] = ctx.topDown
-      ? topDownAgrees(ctx.topDown, direction)
-      : htfAgrees(htfCandles, direction);
-    confirmations["M15 trend agrees"] = m15Agrees(classifyStructure(ctx.pivots), direction);
+    confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
+    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx.pivots, direction);
   } else if (strategy === "setforget") {
     const entry = setForgetEntry(candles, ctx.setForget ?? null);
     if (!entry) {
@@ -103,10 +116,8 @@ export function scoreSetup(
       { zones: ctx.zones, pivots: ctx.pivots, instrument: ctx.instrument, atrValue: ctx.atrValue }
     );
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
-    confirmations["HTF trend agrees"] = ctx.topDown
-      ? topDownAgrees(ctx.topDown, direction)
-      : htfAgrees(htfCandles, direction);
-    confirmations["M15 trend agrees"] = m15Agrees(classifyStructure(ctx.pivots), direction);
+    confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
+    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx.pivots, direction);
   } else {
     const fib = ctx.fib;
     if (!fib || !inGoldenZone(candles, fib)) {
@@ -123,16 +134,15 @@ export function scoreSetup(
       atrValue: ctx.atrValue,
     });
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
-    confirmations["HTF trend agrees"] = ctx.topDown
-      ? topDownAgrees(ctx.topDown, direction)
-      : htfAgrees(htfCandles, direction);
-    confirmations["M15 trend agrees"] = m15Agrees(classifyStructure(ctx.pivots), direction);
+    confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
+    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx.pivots, direction);
   }
 
   const count = Object.values(confirmations).filter(Boolean).length;
-  // Top-down agreement is a confirmation point, not a veto — a single
+  // Top-down / M15 agreement are confirmation points, not vetoes — a single
   // strategy reaching the threshold can fire on its own (user requirement).
-  const topDownAligned = !ctx.topDown || topDownAgrees(ctx.topDown, direction);
+  const topDownAligned = !REQUIRE_HTF_TREND || !ctx.topDown || topDownAgrees(ctx.topDown, direction);
+  const m15Aligned = m15TrendAgrees(ctx.pivots, direction);
   return {
     strategy,
     direction,
@@ -140,6 +150,7 @@ export function scoreSetup(
     count,
     fired: count >= SIGNAL_THRESHOLD,
     topDownAligned,
+    m15Aligned,
     hasTrigger: true,
     trigger,
   };
@@ -153,6 +164,7 @@ function noTrigger(strategy: StrategyId): ScoreResult {
     count: 0,
     fired: false,
     topDownAligned: false,
+    m15Aligned: false,
     hasTrigger: false,
     trigger: null,
   };

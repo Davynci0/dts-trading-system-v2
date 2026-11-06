@@ -165,6 +165,9 @@ export default function Dashboard() {
           // overlays freeze but price still prints new bars, and the chart must
           // never go stale.
           const jsonCandles = (json.candles ?? []) as Candle[];
+          if (jsonCandles.length === 0) {
+            throw new Error(`No candles returned for ${pair}`);
+          }
           const sig = JSON.stringify({
             n: jsonCandles.length,
             t: jsonCandles[jsonCandles.length - 1]?.time ?? null,
@@ -243,7 +246,7 @@ export default function Dashboard() {
   }
 
   return (
-    <div className="relative flex h-full gap-4 p-4">
+    <div className="relative flex h-full flex-col gap-4 p-4 lg:flex-row">
       <div className="flex min-w-0 flex-1 flex-col gap-3">
         {/* toolbar */}
         <div className="flex flex-wrap items-center gap-2">
@@ -325,7 +328,7 @@ export default function Dashboard() {
         )}
 
         {/* chart — takes ~2/3 of the viewport height, with engine overlays */}
-        <div className="h-[67vh] shrink-0 rounded-lg border border-neutral-800 bg-[#0b0e11]">
+        <div className="h-[50vh] min-h-[320px] shrink-0 rounded-lg border border-neutral-800 bg-[#0b0e11] lg:h-[67vh]">
           {loading && candles.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-neutral-500">
               Loading candles…
@@ -347,7 +350,7 @@ export default function Dashboard() {
       </div>
 
       {/* side panels */}
-      <aside className="flex w-80 shrink-0 flex-col gap-4 overflow-y-auto">
+      <aside className="flex w-full shrink-0 flex-col gap-4 overflow-y-auto lg:w-80">
         <ConfirmationTracker pair={pair} timeframe={timeframe} />
         <SignalFeed />
       </aside>

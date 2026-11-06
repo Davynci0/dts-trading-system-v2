@@ -6,7 +6,9 @@ import { significantPivots, type Pivot } from "./pivots";
 export const STOP_BUFFER_ATR_FRACTION = 0.25; // room beyond the swing so the stop isn't on the wick
 export const MIN_STOP_ATR = 0.5; // a stop inside half an ATR sits within normal candle noise
 export const MAX_STOP_ATR_MULT = 3; // structure further than this × ATR away is too much risk, skip
-export const MIN_RR = 2.0; // the structural target must pay at least 1:2
+// Minimum structural reward-to-risk. Override with MIN_R_MULTIPLE env var.
+// Set to 0 to let market structure alone decide the target (no fixed R:R floor).
+export const MIN_RR = Math.max(0, Number(process.env.MIN_R_MULTIPLE ?? 2.0));
 export const RISK_PCT_PER_TRADE = 0.01; // 1% account risk per trade
 const STRUCTURE_SWING_ATR = 0.5; // only swings this many ATR in size count as structure
 
@@ -55,11 +57,10 @@ interface Candidate {
  * - Stop: beyond the nearest significant swing that is at least MIN_STOP_ATR
  *   away, plus a small ATR buffer.
  * - Target: the nearest structural level ahead — a swing extreme or an
- *   opposing supply/demand zone — that pays at least MIN_RR. With no level
- *   ahead (e.g. price at new highs) it falls back to a measured move of the
- *   last swing leg.
- * - Skipped (but still returned with its levels, so it can be scored) when the
- *   structure puts the stop too far away or can't pay MIN_RR.
+ *   opposing supply/demand zone. With no level ahead (e.g. price at new highs)
+ *   it falls back to a measured move of the last swing leg.
+ * - Skipped when the structure puts the stop too far away. When MIN_RR > 0,
+ *   it also requires the chosen target to pay at least MIN_RR.
  */
 export function computeRiskLevels(opts: {
   instrument: string;

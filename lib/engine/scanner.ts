@@ -6,17 +6,16 @@ import {
   computeRiskLevels,
   analyzeM15,
   EXECUTION_HTF,
-  m15Agrees,
   topDownAgrees,
+  MIN_RR,
   type ScoringContext,
   type ScoreResult,
 } from "@/lib/analysis";
 import { analyzeTopDown } from "@/lib/analysis/topDown";
-import { classifyStructure } from "@/lib/analysis/structure";
 import { buildSetupKey } from "@/lib/analysis/setupKey";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
 import { findOpenTrades } from "@/lib/engine/supersede";
-import { sendFinalSignal } from "@/lib/telegram";
+import { sendFinalSignal, sendZoneAlert } from "@/lib/telegram";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 import { fetchQuoteUsdRates, quoteUsdRateFor } from "@/lib/fx";
@@ -40,6 +39,8 @@ interface SetupState {
   /** last reason this setup was considered but not sent (dedupes feed events). */
   lastSkip: string | null;
   lastSeen: number; // unix seconds
+  /** true once a zone-touch Telegram alert has been sent for this setup. */
+  zoneAlerted?: boolean;
 }
 
 export interface ScanEvent {
@@ -158,6 +159,25 @@ export async function runScan(opts: {
             events.push({ pair, timeframe: tf, strategy, kind: "update", detail: `${scored.count}/6` });
           }
 
+          // Early zone-touch alert: notify as soon as price enters a buy/sell zone,
+          // before the full confirmation stack lines up. Deduplicated per zone.
+          let zoneAlerted = prior?.zoneAlerted === true;
+          if (strategy === "zones" && !zoneAlerted && sendTelegrams && zoneAlertPairs().has(pair)) {
+            const zone = scored.trigger?.zone;
+            if (zone && zone.active) {
+              await sendZoneAlert({
+                pair,
+                direction: scored.direction,
+                zoneKind: zone.kind,
+                zoneBottom: zone.bottom,
+                zoneTop: zone.top,
+                touches: zone.touches,
+                price: entry,
+              }).catch(() => undefined);
+              zoneAlerted = true;
+            }
+          }
+
           // Send-eligible ONLY when the strategy's researched minimum is met
           // and the setup has never actually signaled. Considered-but-not-sent
           // setups (risk/alignment skip, open trade, lost conflict) remain
@@ -175,6 +195,7 @@ export async function runScan(opts: {
               signaled: prior?.signaled === true,
               lastSkip: watchNote,
               lastSeen: now,
+              zoneAlerted,
             });
             continue;
           }
@@ -204,6 +225,7 @@ export async function runScan(opts: {
             signaled: prior?.signaled === true,
             lastSkip: prior?.lastSkip ?? null,
             lastSeen: now,
+            zoneAlerted,
           });
         }
 
@@ -343,8 +365,8 @@ interface Firing {
  *  feed doesn't repeat itself and the setup is re-considered when it changes. */
 function skipReasonFor(f: Firing): string {
   if (!f.risk.ok) return f.risk.reason;
-  if (f.risk.levels.rMultiple < 2) {
-    return `structure only pays ${f.risk.levels.rMultiple.toFixed(2)}R (min 2)`;
+  if (f.risk.levels.rMultiple < MIN_RR) {
+    return `structure only pays ${f.risk.levels.rMultiple.toFixed(2)}R (min ${MIN_RR})`;
   }
   return `counter-trend: neither HTF nor M15 structure agrees with the ${f.direction}`;
 }
@@ -365,9 +387,13 @@ const STRATEGY_QUALITY_BONUS: Record<StrategyId, number> = {
  *    - fibonacci >= 6 (confluence-grade, below): PF 1.23, 31 trades, halves 0.94/1.69
  *  Fibonacci's standalone edge at 5 is negative, so it only sends at a perfect
  *  6/6 where it doubles as confluence for a zones/setforget setup.
+ *
+ *  Override: set ZONES_MIN_CONFIDENCE=1 (or 3) to treat every buy/sell-zone touch
+ *  as a potential trade. Research suggests this degrades edge, so it is opt-in.
  */
+const ZONES_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.ZONES_MIN_CONFIDENCE ?? 5)));
 const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
-  zones: 5,
+  zones: ZONES_MIN_CONFIDENCE,
   setforget: 4,
   fibonacci: 6,
 };
@@ -386,6 +412,12 @@ const DEFAULT_SIGNAL_PAIRS = ["XAU_USD", "GBP_AUD"];
 /** Pairs allowed to send live signals. Override with SIGNAL_PAIRS=XAU_USD,GBP_JPY. */
 export function signalPairs(override?: string | undefined): Set<string> {
   const raw = override ?? process.env.SIGNAL_PAIRS;
+  return new Set((raw && raw.trim()) ? raw.split(",").map((s) => s.trim()) : DEFAULT_SIGNAL_PAIRS);
+}
+
+/** Pairs that send early zone-touch Telegram alerts. Defaults to SIGNAL_PAIRS. */
+function zoneAlertPairs(override?: string | undefined): Set<string> {
+  const raw = override ?? process.env.ZONE_ALERT_PAIRS ?? process.env.SIGNAL_PAIRS;
   return new Set((raw && raw.trim()) ? raw.split(",").map((s) => s.trim()) : DEFAULT_SIGNAL_PAIRS);
 }
 
@@ -435,6 +467,7 @@ async function reconcileAndSignal(args: {
       signaled: f.prior?.signaled === true,
       lastSkip: f.prior?.lastSkip ?? null,
       lastSeen: now,
+      zoneAlerted: f.prior?.zoneAlerted === true,
       ...patch,
     }).catch(() => undefined);
 
@@ -475,9 +508,9 @@ async function reconcileAndSignal(args: {
   // higher or execution timeframe. (The strategy confirmation minimum was
   // already required before the setup entered this reconciliation.)
   const highOdds = (f: Firing) => {
-    if (!f.risk.ok || f.risk.levels.rMultiple < 2) return false;
+    if (!f.risk.ok) return false;
     if (f.scored.count < STRATEGY_MIN_CONFIDENCE[f.scored.strategy]) return false;
-    const trendAligned = f.scored.topDownAligned || m15Agrees(classifyStructure(ctx.pivots), f.direction);
+    const trendAligned = f.scored.topDownAligned || f.scored.m15Aligned;
     if (!trendAligned) return false;
     return true;
   };
