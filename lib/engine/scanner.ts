@@ -41,6 +41,8 @@ interface SetupState {
   lastSeen: number; // unix seconds
   /** true once a zone-touch Telegram alert has been sent for this setup. */
   zoneAlerted?: boolean;
+  /** timestamp of the last signal actually sent for this setup (used with ALLOW_REPEAT_SIGNALS). */
+  lastSignaledAt?: number;
 }
 
 export interface ScanEvent {
@@ -183,8 +185,29 @@ export async function runScan(opts: {
           // setups (risk/alignment skip, open trade, lost conflict) remain
           // eligible so later scans can send them when conditions change.
           const disposition = setupDisposition(scored.count, prior, minConfidence);
+          const recentlySignaled =
+            ALLOW_REPEAT_SIGNALS &&
+            prior?.lastSignaledAt != null &&
+            now - prior.lastSignaledAt < REPEAT_SIGNAL_COOLDOWN_MIN * 60;
+          const cooldownNote = `repeat-signal cooldown (${REPEAT_SIGNAL_COOLDOWN_MIN}min)`;
+
           const watchOnly = !signalPairs().has(pair);
           const watchNote = "watch-only pair — 6-month research shows no durable edge at the current gate";
+          if (disposition.eligible && recentlySignaled) {
+            if (prior?.lastSkip !== cooldownNote) {
+              events.push({ pair, timeframe: tf, strategy, kind: "skipped", detail: cooldownNote });
+            }
+            await saveSetup(supabase, pair, tf, setupKey, {
+              confirmations: scored.confirmations,
+              count: scored.count,
+              signaled: prior?.signaled === true,
+              lastSkip: cooldownNote,
+              lastSeen: now,
+              zoneAlerted,
+              lastSignaledAt: prior?.lastSignaledAt,
+            });
+            continue;
+          }
           if (disposition.eligible && watchOnly) {
             if (prior?.lastSkip !== watchNote) {
               events.push({ pair, timeframe: tf, strategy, kind: "skipped", detail: watchNote });
@@ -196,6 +219,7 @@ export async function runScan(opts: {
               lastSkip: watchNote,
               lastSeen: now,
               zoneAlerted,
+              lastSignaledAt: prior?.lastSignaledAt,
             });
             continue;
           }
@@ -226,6 +250,7 @@ export async function runScan(opts: {
             lastSkip: prior?.lastSkip ?? null,
             lastSeen: now,
             zoneAlerted,
+            lastSignaledAt: prior?.lastSignaledAt,
           });
         }
 
@@ -413,6 +438,8 @@ const DEFAULT_SIGNAL_PAIRS = ["XAU_USD", "GBP_AUD"];
 /** Allow the same setup to fire more than once (no permanent signaled dedup).
  *  Useful for scalping/re-entry styles. Default false. */
 const ALLOW_REPEAT_SIGNALS = (process.env.ALLOW_REPEAT_SIGNALS ?? "false") === "true";
+/** Minimum minutes between repeat signals for the same setup. Default 60. */
+const REPEAT_SIGNAL_COOLDOWN_MIN = Math.max(0, Number(process.env.REPEAT_SIGNAL_COOLDOWN_MIN ?? 60));
 
 /** Pairs allowed to send live signals. Override with SIGNAL_PAIRS=XAU_USD,GBP_JPY. */
 export function signalPairs(override?: string | undefined): Set<string> {
@@ -473,6 +500,7 @@ async function reconcileAndSignal(args: {
       lastSkip: f.prior?.lastSkip ?? null,
       lastSeen: now,
       zoneAlerted: f.prior?.zoneAlerted === true,
+      lastSignaledAt: f.prior?.lastSignaledAt,
       ...patch,
     }).catch(() => undefined);
 
@@ -560,7 +588,11 @@ async function reconcileAndSignal(args: {
   // recorded as skipped-for-risk) — done for these setups. Setups on the
   // rejected side stay eligible for a future, separate signal.
   for (const f of winners) {
-    await persist(f, { signaled: ALLOW_REPEAT_SIGNALS ? false : true, lastSkip: null });
+    await persist(f, {
+      signaled: ALLOW_REPEAT_SIGNALS ? false : true,
+      lastSkip: null,
+      lastSignaledAt: now,
+    });
   }
   for (const f of fired) {
     if (!winners.includes(f)) {
