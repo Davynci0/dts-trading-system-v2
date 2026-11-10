@@ -499,7 +499,6 @@ async function reconcileAndSignal(args: {
       signaled: f.prior?.signaled === true,
       lastSkip: f.prior?.lastSkip ?? null,
       lastSeen: now,
-      zoneAlerted: f.prior?.zoneAlerted === true,
       lastSignaledAt: f.prior?.lastSignaledAt,
       ...patch,
     }).catch(() => undefined);
