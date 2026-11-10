@@ -1,4 +1,4 @@
-import { fetchLatestPrice } from "./oanda";
+import { fetchCandles } from "./oanda";
 
 /** OANDA instrument → its quote currency (the last part of the name). */
 export function quoteCurrency(instrument: string): string {
@@ -27,8 +27,9 @@ export async function fetchQuoteUsdRates(instruments: string[]): Promise<Record<
   await Promise.all(
     needed.map(async (conv) => {
       try {
-        const px = await fetchLatestPrice(conv);
-        if (px && px.close > 0) rates[conv] = px.close;
+        const candles = await fetchCandles({ instrument: conv, granularity: "M15", count: 1 });
+        const px = candles[candles.length - 1]?.close;
+        if (px && px > 0) rates[conv] = px;
       } catch {
         // conversion unavailable — sizing for those pairs degrades gracefully
       }
