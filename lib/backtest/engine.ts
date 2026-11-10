@@ -18,7 +18,6 @@ export const SPREAD_PIPS: Record<string, number> = {
   GBP_JPY: 2.5,
   EUR_JPY: 1.4,
   AUD_JPY: 1.6,
-  NZD_JPY: 2.0,
   GBP_AUD: 3.5,
   GBP_NZD: 4.5,
 };

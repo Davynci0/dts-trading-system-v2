@@ -16,7 +16,6 @@ const PAIRS: Pair[] = [
   "GBP_JPY",
   "GBP_USD",
   "AUD_JPY",
-  "NZD_JPY",
   "USD_JPY",
   "EUR_JPY",
   "GBP_AUD",
@@ -40,7 +39,7 @@ async function main() {
   const usdjpy = await fetchLatestPrice("USD_JPY").then((p) => p?.close ?? 152).catch(() => 152);
   const audusd = await fetchLatestPrice("AUD_USD").then((p) => p?.close ?? 0.65).catch(() => 0.65);
   const nzdusd = await fetchLatestPrice("NZD_USD").then((p) => p?.close ?? 0.58).catch(() => 0.58);
-  const rates: Partial<Record<Pair, number>> = { GBP_JPY: 1 / usdjpy, AUD_JPY: 1 / usdjpy, NZD_JPY: 1 / usdjpy, USD_JPY: 1 / usdjpy, EUR_JPY: 1 / usdjpy, GBP_AUD: audusd, GBP_NZD: nzdusd };
+  const rates: Partial<Record<Pair, number>> = { GBP_JPY: 1 / usdjpy, AUD_JPY: 1 / usdjpy, USD_JPY: 1 / usdjpy, EUR_JPY: 1 / usdjpy, GBP_AUD: audusd, GBP_NZD: nzdusd };
 
   const agg = CONFIGS.map(() => ({ n: 0, wins: 0, grossWin: 0, grossLoss: 0 }));
 

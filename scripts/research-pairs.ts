@@ -20,7 +20,6 @@ const PAIRS: Pair[] = [
   "GBP_JPY",
   "GBP_USD",
   "AUD_JPY",
-  "NZD_JPY",
   "USD_JPY",
   "EUR_JPY",
   "GBP_AUD",
