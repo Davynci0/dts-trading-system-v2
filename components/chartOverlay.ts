@@ -84,6 +84,12 @@ export interface OverlayData {
     target: number;
     triggerTime: number;
   }[];
+  /** horizontal support/resistance levels from recent structural pivots */
+  levels?: {
+    kind: "support" | "resistance";
+    price: number;
+    time: number;
+  }[];
 }
 
 export const EMPTY_OVERLAY: OverlayData = { zones: [], aoi: null, fib: null, trendlines: [] };
@@ -277,6 +283,36 @@ class OverlayPaneView implements IPrimitivePaneView {
               "bold 10px monospace",
               "left",
               2
+            );
+          }
+
+          // horizontal support/resistance levels from recent structural pivots
+          for (const lvl of data.levels ?? []) {
+            const y = source.priceToY(lvl.price);
+            const x0 = source.timeToX(lvl.time);
+            if (y == null) continue;
+            const color = lvl.kind === "support" ? "#26a69a" : "#ef5350";
+            ctx.strokeStyle = `${color}0.8)`;
+            ctx.lineWidth = 1;
+            ctx.setLineDash(lvl.kind === "support" ? [3, 5] : [5, 3]);
+            ctx.beginPath();
+            if (x0 != null) {
+              ctx.moveTo(x0, y);
+            } else {
+              ctx.moveTo(0, y);
+            }
+            ctx.lineTo(W, y);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            // label with price at the right edge
+            label(
+              `${lvl.kind === "support" ? "S" : "R"} ${lvl.price.toFixed(data.digits ?? 5)}`,
+              W - 2,
+              y - 5,
+              color,
+              "bold 10px sans-serif",
+              "right",
+              3
             );
           }
 

@@ -110,6 +110,12 @@ export async function GET(req: NextRequest) {
       triggerTime: p.triggerTime,
     }));
 
+    const levels = analysis.levels.map((l) => ({
+      kind: l.kind,
+      price: l.price,
+      time: l.time,
+    }));
+
     return NextResponse.json({
       candles,
       zones,
@@ -117,6 +123,7 @@ export async function GET(req: NextRequest) {
       aoi: aoiOut,
       trendlines,
       headshoulders,
+      levels,
       topDown: {
         weekly: topDown.weekly,
         daily: topDown.daily,

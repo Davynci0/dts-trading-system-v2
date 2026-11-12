@@ -30,6 +30,8 @@ export interface M15Analysis {
   trendlines: Trendline[];
   /** Head-and-shoulders/inverse-H&S patterns currently active. Empty most scans. */
   headShoulders: HeadShouldersPattern[];
+  /** Recent significant swing highs/lows for horizontal S/R levels on the chart. */
+  levels: { kind: "support" | "resistance"; price: number; time: number }[];
   preferredDirection: SignalDirection | null;
   structureState: StructureState;
 }
@@ -45,6 +47,8 @@ export interface M15Analysis {
   trendlines: Trendline[];
   /** Head-and-shoulders/inverse-H&S patterns currently active. Empty most scans. */
   headShoulders: HeadShouldersPattern[];
+  /** Recent significant swing highs/lows for horizontal S/R levels on the chart. */
+  levels: { kind: "support" | "resistance"; price: number; time: number }[];
   preferredDirection: SignalDirection | null;
   structureState: StructureState;
 }
@@ -74,6 +78,24 @@ export function analyzeM15(candles: Candle[]): M15Analysis | null {
     if (hs) headShoulders.push(hs);
   }
 
+  // Horizontal S/R levels: recent significant swing highs/lows (last ~40 structural
+  // pivots, deduplicated to within 0.5×ATR so the chart doesn't get cluttered).
+  const levels: { kind: "support" | "resistance"; price: number; time: number }[] = [];
+  {
+    const recent = structuralPivots.slice(-40);
+    const last = candles[candles.length - 1];
+    const used: { price: number; kind: string }[] = [];
+    for (let i = recent.length - 1; i >= 0 && levels.length < 6; i--) {
+      const p = recent[i];
+      const kind = p.kind === "high" ? "resistance" : "support";
+      // Deduplicate: if we already have a level within 0.5×ATR of this one, skip it
+      const dup = used.some((u) => u.kind === kind && Math.abs(u.price - p.price) < atrValue * 0.5);
+      if (dup) continue;
+      used.push({ price: p.price, kind });
+      levels.push({ kind, price: p.price, time: p.time });
+    }
+  }
+
   return {
     candles,
     pivots,
@@ -84,6 +106,7 @@ export function analyzeM15(candles: Candle[]): M15Analysis | null {
     setForget,
     trendlines,
     headShoulders,
+    levels,
     preferredDirection,
     structureState,
   };
