@@ -110,9 +110,12 @@ export async function runScan(opts: {
         timeframe: "H4",
         strategy: "zones",
         kind: "error",
-        detail: `top-down analysis unavailable: ${(e as Error).message.slice(0, 160)}`,
+        detail: `top-down analysis unavailable (continuing with M15 only): ${(e as Error).message.slice(0, 120)}`,
       });
-      return;
+      // Non-fatal: M15 scanning continues without top-down context.
+      // For pairs with TREND_MODE=M15/HTF-only this doesn't affect signals
+      // (the disabled trend check is auto-true; HTF falls back to H1 candles).
+      // For TREND_MODE=BOTH pairs, scoring falls back to H1-based HTF agreement.
     }
 
     for (const tf of timeframes.filter((t) => t === "M15")) {
