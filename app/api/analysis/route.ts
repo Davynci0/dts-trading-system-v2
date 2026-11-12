@@ -90,11 +90,21 @@ export async function GET(req: NextRequest) {
           }
         : null;
 
+    const trendlines = analysis.trendlines.map((l) => ({
+      kind: l.kind,
+      origin: { time: l.origin.time, price: l.origin.price },
+      definitionAnchor: { time: l.definitionAnchor.time, price: l.definitionAnchor.price },
+      anchors: l.anchors.map((a) => ({ time: a.time, price: a.price })),
+      touches: l.touches,
+      broken: l.broken,
+    }));
+
     return NextResponse.json({
       candles,
       zones,
       fib,
       aoi: aoiOut,
+      trendlines,
       topDown: {
         weekly: topDown.weekly,
         daily: topDown.daily,

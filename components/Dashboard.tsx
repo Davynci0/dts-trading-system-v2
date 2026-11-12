@@ -174,6 +174,7 @@ export default function Dashboard() {
             z: json.zones ?? [],
             f: json.fib ?? null,
             a: json.aoi ?? null,
+            l: json.trendlines ?? [],
             d: json.topDown ?? null,
           });
           if (!initial && sig === analysisSigRef.current) return; // analysis unchanged
@@ -183,6 +184,7 @@ export default function Dashboard() {
             zones: json.zones ?? [],
             aoi: json.aoi ?? null,
             fib: json.fib ?? null,
+            trendlines: json.trendlines ?? [],
           });
           setTopDown(json.topDown ?? null);
           setError(null);

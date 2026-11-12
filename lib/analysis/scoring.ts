@@ -15,6 +15,7 @@ import {
 import { inGoldenZone } from "./fibonacci";
 import { detectZoneEntry } from "./zones";
 import { setForgetEntry, type SetForgetSetup } from "./setForget";
+import { ema, emaSlope } from "./indicators";
 
 const REQUIRE_HTF_TREND = (process.env.REQUIRE_HTF_TREND ?? "true") !== "false";
 const REQUIRE_M15_TREND = (process.env.REQUIRE_M15_TREND ?? "true") !== "false";
@@ -71,9 +72,15 @@ function htfTrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolea
   return ctx.topDown ? topDownAgrees(ctx.topDown, direction) : htfAgrees(ctx.htfCandles, direction);
 }
 
-function m15TrendAgrees(pivots: Pivot[], direction: SignalDirection): boolean {
+function m15TrendAgrees(candles: Candle[], pivots: Pivot[], direction: SignalDirection): boolean {
   if (!REQUIRE_M15_TREND) return true;
-  return m15Agrees(classifyStructure(pivots), direction);
+  const structureOk = m15Agrees(classifyStructure(pivots), direction);
+  if (!structureOk) return false;
+  const last = candles[candles.length - 1];
+  const ema50 = ema(candles, 50);
+  const slope = emaSlope(candles, 50, 5);
+  if (ema50 == null || slope == null) return structureOk;
+  return direction === "long" ? last.close > ema50 && slope > 0 : last.close < ema50 && slope < 0;
 }
 
 /**
@@ -101,7 +108,7 @@ export function scoreSetup(
     confirmations["Zone fresh (≤1 touch)"] = zoneIsVeryFresh(entry.zone.touches);
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
-    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx.pivots, direction);
+    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx.candles, ctx.pivots, direction);
   } else if (strategy === "setforget") {
     const entry = setForgetEntry(candles, ctx.setForget ?? null);
     if (!entry) {
@@ -117,7 +124,7 @@ export function scoreSetup(
     );
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
-    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx.pivots, direction);
+    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx.candles, ctx.pivots, direction);
   } else {
     const fib = ctx.fib;
     if (!fib || !inGoldenZone(candles, fib)) {
@@ -135,14 +142,14 @@ export function scoreSetup(
     });
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
-    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx.pivots, direction);
+    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx.candles, ctx.pivots, direction);
   }
 
   const count = Object.values(confirmations).filter(Boolean).length;
   // Top-down / M15 agreement are confirmation points, not vetoes — a single
   // strategy reaching the threshold can fire on its own (user requirement).
   const topDownAligned = !REQUIRE_HTF_TREND || !ctx.topDown || topDownAgrees(ctx.topDown, direction);
-  const m15Aligned = m15TrendAgrees(ctx.pivots, direction);
+  const m15Aligned = m15TrendAgrees(ctx.candles, ctx.pivots, direction);
   return {
     strategy,
     direction,

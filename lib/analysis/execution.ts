@@ -5,6 +5,7 @@ import { detectZones, type Zone } from "./zones";
 import { findFibSetup, type FibSetup } from "./fibonacci";
 import { findSetForgetSetup, type SetForgetSetup } from "./setForget";
 import { classifyStructure, type StructureState } from "./structure";
+import { detectTrendlines, type Trendline } from "./trendlines";
 
 export const MIN_TRADEABLE_ATR = 0.0003; // ~3 pips on EUR/USD; reject spread-dominated low-volatility bars
 
@@ -25,6 +26,7 @@ export interface M15Analysis {
   zones: Zone[];
   fib: FibSetup | null;
   setForget: SetForgetSetup | null;
+  trendlines: Trendline[];
   preferredDirection: SignalDirection | null;
   structureState: StructureState;
 }
@@ -37,6 +39,7 @@ export interface M15Analysis {
   zones: Zone[];
   fib: FibSetup | null;
   setForget: SetForgetSetup | null;
+  trendlines: Trendline[];
   preferredDirection: SignalDirection | null;
   structureState: StructureState;
 }
@@ -59,6 +62,7 @@ export function analyzeM15(candles: Candle[]): M15Analysis | null {
     preferredDirection ?? undefined
   );
   const setForget = findSetForgetSetup(candles, structuralPivots, atrValue, preferredDirection ?? undefined);
+  const trendlines = detectTrendlines(candles, structuralPivots, atrValue, true, M15_TRENDLINE_LOOKBACK, 3);
 
   return {
     candles,
@@ -68,6 +72,7 @@ export function analyzeM15(candles: Candle[]): M15Analysis | null {
     zones,
     fib,
     setForget,
+    trendlines,
     preferredDirection,
     structureState,
   };

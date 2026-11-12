@@ -62,3 +62,34 @@ export function rsiSeries(candles: Candle[], period = 14): (number | null)[] {
   }
   return out;
 }
+
+/** Exponential moving average series, aligned to candles (null during warm-up). */
+export function emaSeries(candles: Candle[], period = 50): (number | null)[] {
+  const out: (number | null)[] = new Array(candles.length).fill(null);
+  if (candles.length < period) return out;
+  const k = 2 / (period + 1);
+  let sum = 0;
+  for (let i = 0; i < period; i++) sum += candles[i].close;
+  let prev = sum / period;
+  out[period - 1] = prev;
+  for (let i = period; i < candles.length; i++) {
+    prev = candles[i].close * k + prev * (1 - k);
+    out[i] = prev;
+  }
+  return out;
+}
+
+/** Latest EMA value, or null if there isn't enough data. */
+export function ema(candles: Candle[], period = 50): number | null {
+  const s = emaSeries(candles, period);
+  return s[s.length - 1];
+}
+
+/** EMA slope over the last `lookback` bars (current EMA − EMA lookback bars ago). */
+export function emaSlope(candles: Candle[], period = 50, lookback = 5): number | null {
+  const s = emaSeries(candles, period);
+  const cur = s[s.length - 1];
+  const prev = s[s.length - 1 - lookback];
+  if (cur == null || prev == null) return null;
+  return cur - prev;
+}

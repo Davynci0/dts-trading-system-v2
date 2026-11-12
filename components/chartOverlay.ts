@@ -64,9 +64,18 @@ export interface OverlayData {
   }[];
   /** price display precision on labels (XAU 2, JPY quotes 3, 4-dec majors 5) */
   digits?: number;
+  /** trendlines from structural pivots, drawn as rays from origin through definitionAnchor */
+  trendlines?: {
+    kind: "resistance" | "support";
+    origin: { time: number; price: number };
+    definitionAnchor: { time: number; price: number };
+    anchors: { time: number; price: number }[];
+    touches: number;
+    broken: boolean;
+  }[];
 }
 
-export const EMPTY_OVERLAY: OverlayData = { zones: [], aoi: null, fib: null };
+export const EMPTY_OVERLAY: OverlayData = { zones: [], aoi: null, fib: null, trendlines: [] };
 
 const UP = "rgba(38,166,154,";
 const DOWN = "rgba(239,83,80,";
@@ -214,6 +223,50 @@ class OverlayPaneView implements IPrimitivePaneView {
             ctx.lineWidth = 1;
             const zoneAction = z.kind === "demand" ? "BUY" : "SELL";
             label(`${zoneAction} ZONE (${z.kind})`, x0 + 4, y + (z.kind === "supply" ? 14 : h - 6), `${base}1)`, "bold 11px monospace", "left", 4);
+          }
+
+          // trendlines: ray from origin through definitionAnchor, extended to right edge
+          for (const l of data.trendlines ?? []) {
+            const x0 = source.timeToX(l.origin.time);
+            const y0 = source.priceToY(l.origin.price);
+            const x1 = source.timeToX(l.definitionAnchor.time);
+            const y1 = source.priceToY(l.definitionAnchor.price);
+            if (x0 == null || y0 == null || x1 == null || y1 == null || x1 === x0) continue;
+            const slopePx = (y1 - y0) / (x1 - x0);
+            const yW = y0 + slopePx * (W - x0);
+            const color = l.kind === "support" ? UP : DOWN;
+            ctx.strokeStyle = l.broken ? "rgba(148,163,184,0.65)" : `${color}0.95)`;
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash(l.broken ? [6, 4] : []);
+            ctx.beginPath();
+            ctx.moveTo(x0, y0);
+            ctx.lineTo(W, yW);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.lineWidth = 1;
+
+            // anchor dots
+            for (const a of l.anchors) {
+              const ax = source.timeToX(a.time);
+              const ay = source.priceToY(a.price);
+              if (ax == null || ay == null) continue;
+              ctx.fillStyle = l.broken ? "rgba(148,163,184,0.8)" : `${color}1)`;
+              ctx.beginPath();
+              ctx.arc(ax, ay, 3, 0, Math.PI * 2);
+              ctx.fill();
+            }
+
+            const labelY = y1 != null ? y1 : yW;
+            const labelX = Math.min(x1 + 8, W - 10);
+            label(
+              `${l.kind === "support" ? "SUPPORT" : "RESISTANCE"} ${l.touches} touches${l.broken ? " (broken)" : ""}`,
+              labelX,
+              labelY - 6,
+              l.broken ? "rgba(148,163,184,0.9)" : `${color}1)`,
+              "bold 10px monospace",
+              "left",
+              2
+            );
           }
 
           // settled trades: path from entry to where TP/SL was actually hit

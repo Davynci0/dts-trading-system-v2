@@ -43,6 +43,8 @@ interface SetupState {
   zoneAlerted?: boolean;
   /** timestamp of the last signal actually sent for this setup (used with ALLOW_REPEAT_SIGNALS). */
   lastSignaledAt?: number;
+  /** confirmation count at the time of the last signal. */
+  lastSignaledCount?: number;
 }
 
 export interface ScanEvent {
@@ -189,11 +191,17 @@ export async function runScan(opts: {
             ALLOW_REPEAT_SIGNALS &&
             prior?.lastSignaledAt != null &&
             now - prior.lastSignaledAt < REPEAT_SIGNAL_COOLDOWN_MIN * 60;
-          const cooldownNote = `repeat-signal cooldown (${REPEAT_SIGNAL_COOLDOWN_MIN}min)`;
+          const noNewConfirmations =
+            ALLOW_REPEAT_SIGNALS &&
+            prior?.lastSignaledCount != null &&
+            scored.count <= prior.lastSignaledCount;
+          const cooldownNote = recentlySignaled
+            ? `repeat-signal cooldown (${REPEAT_SIGNAL_COOLDOWN_MIN}min)`
+            : "no new confirmations since last signal";
 
           const watchOnly = !signalPairs().has(pair);
           const watchNote = "watch-only pair — 6-month research shows no durable edge at the current gate";
-          if (disposition.eligible && recentlySignaled) {
+          if (disposition.eligible && (recentlySignaled || noNewConfirmations)) {
             if (prior?.lastSkip !== cooldownNote) {
               events.push({ pair, timeframe: tf, strategy, kind: "skipped", detail: cooldownNote });
             }
@@ -205,6 +213,7 @@ export async function runScan(opts: {
               lastSeen: now,
               zoneAlerted,
               lastSignaledAt: prior?.lastSignaledAt,
+              lastSignaledCount: prior?.lastSignaledCount,
             });
             continue;
           }
@@ -220,6 +229,7 @@ export async function runScan(opts: {
               lastSeen: now,
               zoneAlerted,
               lastSignaledAt: prior?.lastSignaledAt,
+              lastSignaledCount: prior?.lastSignaledCount,
             });
             continue;
           }
@@ -393,7 +403,7 @@ function skipReasonFor(f: Firing): string {
   if (f.risk.levels.rMultiple < MIN_RR) {
     return `structure only pays ${f.risk.levels.rMultiple.toFixed(2)}R (min ${MIN_RR})`;
   }
-  return `counter-trend: neither HTF nor M15 structure agrees with the ${f.direction}`;
+  return `counter-trend: HTF and/or M15 structure disagrees with the ${f.direction}`;
 }
 
 /** Research-ranked strategy preference: setforget (PF 2.19) > zones (1.50) >
@@ -500,6 +510,7 @@ async function reconcileAndSignal(args: {
       lastSkip: f.prior?.lastSkip ?? null,
       lastSeen: now,
       lastSignaledAt: f.prior?.lastSignaledAt,
+      lastSignaledCount: f.prior?.lastSignaledCount,
       ...patch,
     }).catch(() => undefined);
 
@@ -542,7 +553,9 @@ async function reconcileAndSignal(args: {
   const highOdds = (f: Firing) => {
     if (!f.risk.ok) return false;
     if (f.scored.count < STRATEGY_MIN_CONFIDENCE[f.scored.strategy]) return false;
-    const trendAligned = f.scored.topDownAligned || f.scored.m15Aligned;
+    // Both HTF and M15 must agree when their respective REQUIRE flags are enabled.
+    // (A disabled check evaluates to true, so this degrades gracefully.)
+    const trendAligned = f.scored.topDownAligned && f.scored.m15Aligned;
     if (!trendAligned) return false;
     return true;
   };
@@ -591,6 +604,7 @@ async function reconcileAndSignal(args: {
       signaled: ALLOW_REPEAT_SIGNALS ? false : true,
       lastSkip: null,
       lastSignaledAt: now,
+      lastSignaledCount: f.scored.count,
     });
   }
   for (const f of fired) {
