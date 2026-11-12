@@ -18,6 +18,7 @@ export {
   type StructureEvent,
 } from "./structure";
 export { findFibSetup, inGoldenZone, type FibSetup } from "./fibonacci";
+export { detectHeadShoulders, type HeadShouldersPattern } from "./headshoulders";
 export { findSetForgetSetup, setForgetEntry, type SetForgetSetup } from "./setForget";
 export { analyzeTopDown, topDownAgrees, type TopDownAnalysis, type TopDownCandles } from "./topDown";
 export { scoreSetup, SIGNAL_THRESHOLD, m15Agrees, trendModeFor, type ScoringContext, type ScoreResult, type TrendMode } from "./scoring";

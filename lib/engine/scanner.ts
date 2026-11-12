@@ -145,6 +145,7 @@ export async function runScan(opts: {
           setForget,
           topDown,
           trendMode: trendModeFor(pair),
+          headShoulders: m15.headShoulders,
         };
 
         // Each strategy is evaluated independently. We collect the setups that

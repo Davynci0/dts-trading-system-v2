@@ -15,6 +15,7 @@ import {
 import { inGoldenZone } from "./fibonacci";
 import { detectZoneEntry } from "./zones";
 import { setForgetEntry, type SetForgetSetup } from "./setForget";
+import type { HeadShouldersPattern } from "./headshoulders";
 import { ema, emaSlope } from "./indicators";
 
 const REQUIRE_HTF_TREND = (process.env.REQUIRE_HTF_TREND ?? "true") !== "false";
@@ -48,6 +49,8 @@ export interface ScoringContext {
   topDown?: TopDownAnalysis;
   /** Per-pair trend filter override; defaults from REQUIRE_* env vars. */
   trendMode?: { htf: boolean; m15: boolean };
+  /** Active H&S / inverse-H&S reversal patterns (neckline break just fired). */
+  headShoulders?: HeadShouldersPattern[];
 }
 
 export interface ScoreResult {
@@ -136,10 +139,16 @@ export function scoreSetup(
     trigger = { setForget: entry.setup };
     confirmations["AOI first touch"] = true; // core trigger: untested 50–61.8% area
     confirmations["Rejection candle in AOI"] = isRejectionCandle(candles, direction);
-    confirmations["AOI overlaps another POI"] = goldenZoneHasPoi(
-      { goldenTop: entry.setup.aoiTop, goldenBottom: entry.setup.aoiBottom },
-      { zones: ctx.zones, pivots: ctx.pivots, instrument: ctx.instrument, atrValue: ctx.atrValue }
+    // H&S neckline break at the same direction as the AOI = structural confluence.
+    const hsAligned = (ctx.headShoulders ?? []).some(
+      (hs) => hs.direction === (entry.direction === "long" ? "long" : "short")
     );
+    confirmations["AOI overlaps another POI"] =
+      hsAligned ||
+      goldenZoneHasPoi(
+        { goldenTop: entry.setup.aoiTop, goldenBottom: entry.setup.aoiBottom },
+        { zones: ctx.zones, pivots: ctx.pivots, instrument: ctx.instrument, atrValue: ctx.atrValue }
+      );
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
     confirmations["M15 trend agrees"] = m15TrendAgrees(ctx, direction);

@@ -206,6 +206,7 @@ export default function Chart({
       overlay.fib != null ||
       overlay.aoi != null ||
       overlay.position != null ||
+      (overlay.trendlines?.length ?? 0) > 0 ||
       (overlay.history?.length ?? 0) > 0;
     if (has) {
       const p = new OverlayPrimitive(overlay);

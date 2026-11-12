@@ -13,6 +13,8 @@ const LAYERS = [
   { id: "zones", label: "Zones" },
   { id: "fib", label: "Fib" },
   { id: "aoi", label: "AOI" },
+  { id: "trendlines", label: "Trendlines" },
+  { id: "headshoulders", label: "H&S" },
   { id: "position", label: "Trade plan" },
   { id: "history", label: "Results" },
 ] as const;
@@ -47,6 +49,8 @@ export default function Dashboard() {
     aoi: true,
     position: true,
     history: true,
+    trendlines: true,
+    headshoulders: true,
   });
   const analysisSigRef = useRef<string>("");
 
@@ -120,6 +124,8 @@ export default function Dashboard() {
       zones: layers.zones ? overlay.zones : [],
       fib: layers.fib ? overlay.fib : null,
       aoi: layers.aoi ? overlay.aoi : null,
+      trendlines: layers.trendlines ? overlay.trendlines : undefined,
+      headshoulders: layers.headshoulders ? overlay.headshoulders : undefined,
       position: layers.position ? position : null,
       history: layers.history ? history : [],
       digits: (() => {
@@ -175,6 +181,7 @@ export default function Dashboard() {
             f: json.fib ?? null,
             a: json.aoi ?? null,
             l: json.trendlines ?? [],
+            hs: json.headshoulders ?? [],
             d: json.topDown ?? null,
           });
           if (!initial && sig === analysisSigRef.current) return; // analysis unchanged
@@ -185,6 +192,7 @@ export default function Dashboard() {
             aoi: json.aoi ?? null,
             fib: json.fib ?? null,
             trendlines: json.trendlines ?? [],
+            headshoulders: json.headshoulders ?? [],
           });
           setTopDown(json.topDown ?? null);
           setError(null);

@@ -99,12 +99,24 @@ export async function GET(req: NextRequest) {
       broken: l.broken,
     }));
 
+    const headshoulders = analysis.headShoulders.map((p) => ({
+      direction: p.direction,
+      ls: { time: p.ls.time, price: p.ls.price },
+      n1: { time: p.n1.time, price: p.n1.price },
+      h: { time: p.h.time, price: p.h.price },
+      n2: { time: p.n2.time, price: p.n2.price },
+      rs: { time: p.rs.time, price: p.rs.price },
+      target: p.target,
+      triggerTime: p.triggerTime,
+    }));
+
     return NextResponse.json({
       candles,
       zones,
       fib,
       aoi: aoiOut,
       trendlines,
+      headshoulders,
       topDown: {
         weekly: topDown.weekly,
         daily: topDown.daily,

@@ -6,6 +6,7 @@ import { findFibSetup, type FibSetup } from "./fibonacci";
 import { findSetForgetSetup, type SetForgetSetup } from "./setForget";
 import { classifyStructure, type StructureState } from "./structure";
 import { detectTrendlines, type Trendline } from "./trendlines";
+import { detectHeadShoulders, type HeadShouldersPattern } from "./headshoulders";
 
 export const MIN_TRADEABLE_ATR = 0.0003; // ~3 pips on EUR/USD; reject spread-dominated low-volatility bars
 
@@ -27,6 +28,8 @@ export interface M15Analysis {
   fib: FibSetup | null;
   setForget: SetForgetSetup | null;
   trendlines: Trendline[];
+  /** Head-and-shoulders/inverse-H&S patterns currently active. Empty most scans. */
+  headShoulders: HeadShouldersPattern[];
   preferredDirection: SignalDirection | null;
   structureState: StructureState;
 }
@@ -40,6 +43,8 @@ export interface M15Analysis {
   fib: FibSetup | null;
   setForget: SetForgetSetup | null;
   trendlines: Trendline[];
+  /** Head-and-shoulders/inverse-H&S patterns currently active. Empty most scans. */
+  headShoulders: HeadShouldersPattern[];
   preferredDirection: SignalDirection | null;
   structureState: StructureState;
 }
@@ -63,6 +68,11 @@ export function analyzeM15(candles: Candle[]): M15Analysis | null {
   );
   const setForget = findSetForgetSetup(candles, structuralPivots, atrValue, preferredDirection ?? undefined);
   const trendlines = detectTrendlines(candles, structuralPivots, atrValue, true, M15_TRENDLINE_LOOKBACK, 3);
+  const headShoulders: HeadShouldersPattern[] = [];
+  {
+    const hs = detectHeadShoulders(candles, structuralPivots, atrValue);
+    if (hs) headShoulders.push(hs);
+  }
 
   return {
     candles,
@@ -73,6 +83,7 @@ export function analyzeM15(candles: Candle[]): M15Analysis | null {
     fib,
     setForget,
     trendlines,
+    headShoulders,
     preferredDirection,
     structureState,
   };

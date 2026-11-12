@@ -73,6 +73,17 @@ export interface OverlayData {
     touches: number;
     broken: boolean;
   }[];
+  /** head-and-shoulders reversal patterns on the M15 chart */
+  headshoulders?: {
+    direction: "short" | "long";
+    ls: { time: number; price: number };
+    n1: { time: number; price: number };
+    h: { time: number; price: number };
+    n2: { time: number; price: number };
+    rs: { time: number; price: number };
+    target: number;
+    triggerTime: number;
+  }[];
 }
 
 export const EMPTY_OVERLAY: OverlayData = { zones: [], aoi: null, fib: null, trendlines: [] };
@@ -267,6 +278,63 @@ class OverlayPaneView implements IPrimitivePaneView {
               "left",
               2
             );
+          }
+
+          // head-and-shoulders: zigzag through LS→N1→H→N2→RS + neckline + target.
+          for (const p of data.headshoulders ?? []) {
+            const pts = [p.ls, p.n1, p.h, p.n2, p.rs]
+              .map((pt, i) => ({ ...pt, px: source.timeToX(pt.time), py: source.priceToY(pt.price) }));
+            const valid = pts.every((g) => g.px != null && g.py != null);
+            if (!valid) continue;
+            const color = p.direction === "short" ? DOWN : UP;
+            // zigzag through the 5 pivots
+            ctx.strokeStyle = `${color}0.95)`;
+            ctx.lineWidth = 1.5;
+            ctx.setLineDash([5, 4]);
+            ctx.beginPath();
+            ctx.moveTo(pts[0].px!, pts[0].py!);
+            for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].px!, pts[i].py!);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.lineWidth = 1;
+            // pivot dots + labels
+            const labels = ["LS", "N1", "H", "N2", "RS"];
+            for (let i = 0; i < pts.length; i++) {
+              const g = pts[i];
+              ctx.fillStyle = `${color}1)`;
+              ctx.beginPath();
+              ctx.arc(g.px!, g.py!, 4, 0, Math.PI * 2);
+              ctx.fill();
+              // text label above/below the pivot
+              const above = i === 0 || i === 2 || i === 4 ? p.direction === "short" : p.direction === "long";
+              label(labels[i], g.px!, g.py! + (above ? -12 : 16), `${color}1)`, "bold 9px monospace", "left", 2);
+            }
+            // neckline (N1→N2 extended right)
+            const [n1px, n1py] = [source.timeToX(p.n1.time), source.priceToY(p.n1.price)];
+            const [n2px, n2py] = [source.timeToX(p.n2.time), source.priceToY(p.n2.price)];
+            if (n1px != null && n1py != null && n2px != null && n2py != null && n2px !== n1px) {
+              const slope = (n2py - n1py) / (n2px - n1px);
+              ctx.strokeStyle = "rgba(217,119,6,0.9)"; // amber
+              ctx.lineWidth = 2;
+              ctx.beginPath();
+              ctx.moveTo(n1px, n1py);
+              ctx.lineTo(W, n1py + slope * (W - n1px));
+              ctx.stroke();
+              ctx.lineWidth = 1;
+              label("NECKLINE", W - 6, n1py + slope * (W - n1px) - 8, "rgba(217,119,6,1)", "bold 9px monospace", "right", 2);
+            }
+            // target line
+            const ty = source.priceToY(p.target);
+            if (ty != null) {
+              ctx.strokeStyle = "rgba(217,119,6,0.7)";
+              ctx.setLineDash([8, 4]);
+              ctx.beginPath();
+              ctx.moveTo(0, ty);
+              ctx.lineTo(W, ty);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              label(`H&S target ${p.target.toFixed(5)}`, W - 6, ty - 6, "rgba(217,119,6,1)", "bold 9px monospace", "right", 2);
+            }
           }
 
           // settled trades: path from entry to where TP/SL was actually hit
