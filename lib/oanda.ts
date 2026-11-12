@@ -29,8 +29,8 @@ interface OandaCandle {
 }
 
 /** Retry helper with exponential backoff. Used for transient OANDA 5xx/network errors.
- *  Practice environments regularly emit 504s — retrying usually recovers within 1–3s. */
-async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+ *  Practice environments regularly emit 504s — retrying usually recovers within 2–5s. */
+async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 4): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     try {
@@ -43,7 +43,7 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
         /ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(msg) ||
         /socket/i.test(msg);
       if (!isRetryable || attempt === maxAttempts - 1) throw e;
-      const delayMs = 500 * 2 ** attempt + Math.random() * 250;
+      const delayMs = 800 * 2 ** attempt + Math.random() * 400;
       await new Promise((r) => setTimeout(r, delayMs));
     }
   }

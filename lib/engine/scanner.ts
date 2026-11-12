@@ -304,11 +304,15 @@ export async function runScan(opts: {
     1,
     Math.min(Number(process.env.SCAN_CONCURRENCY ?? 3), pairs.length || 1)
   );
+  // Small stagger when starting pair scans (reduces OANDA burst pressure
+  // that their practice gateway can interpret as burst traffic → 504s).
+  const STAGGER_MS = Number(process.env.SCAN_STAGGER_MS ?? 250);
   let cursor = 0;
   const worker = async () => {
     while (cursor < pairs.length) {
       const idx = cursor++;
       await scanOnePair(pairs[idx]);
+      if (cursor < pairs.length) await new Promise((r) => setTimeout(r, STAGGER_MS));
     }
   };
   await Promise.all(Array.from({ length: concurrency }, () => worker()));
