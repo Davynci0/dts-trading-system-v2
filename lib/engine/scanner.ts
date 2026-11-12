@@ -20,6 +20,8 @@ import { sendFinalSignal, sendZoneAlert } from "@/lib/telegram";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 import { fetchQuoteUsdRates, quoteUsdRateFor } from "@/lib/fx";
+import { renderSetupPng } from "@/lib/vision/chartRender";
+import { validateSetupVision, type VisionVerdict } from "@/lib/vision/openrouter";
 
 const STRATEGY_LABELS: Record<StrategyId, string> = {
   zones: "Supply/Demand Zone",
@@ -467,6 +469,11 @@ const DEFAULT_SIGNAL_PAIRS = ["XAU_USD", "GBP_AUD"];
 const ALLOW_REPEAT_SIGNALS = (process.env.ALLOW_REPEAT_SIGNALS ?? "false") === "true";
 /** Minimum minutes between repeat signals for the same setup. Default 60. */
 const REPEAT_SIGNAL_COOLDOWN_MIN = Math.max(0, Number(process.env.REPEAT_SIGNAL_COOLDOWN_MIN ?? 60));
+/** Whether to run AI vision validation before sending a signal. Default true.
+ *  Vision can only REJECT a signal; it never creates a setup. */
+const AI_VISION_ENABLED = (process.env.AI_VISION_ENABLED ?? "true") !== "false";
+/** Minimum AI vision confidence (1–10) to approve a signal. Default 5. */
+const VISION_MIN_CONFIDENCE = Math.max(1, Math.min(10, Number(process.env.VISION_MIN_CONFIDENCE ?? 5)));
 
 /** Pairs allowed to send live signals. Override with SIGNAL_PAIRS=XAU_USD,GBP_JPY. */
 export function signalPairs(override?: string | undefined): Set<string> {
@@ -647,6 +654,67 @@ async function reconcileAndSignal(args: {
       .filter(Boolean)
       .join(" ") || null;
 
+    // ── AI Vision validation ──────────────────────────────────────────────
+    // The deterministic engine has already passed ALL confirmations and risk.
+    // Here a vision model gets a second set of eyes on the chart. It can only
+    // REJECT a signal — never create one. Vision failure is non-fatal: on any
+    // error we send the deterministic signal and note the failure.
+    let visionVerdict: VisionVerdict | null = null;
+    let visionNote: string | null = null;
+    let visionRejected = false;
+
+    if (AI_VISION_ENABLED) {
+      try {
+        const png = await renderSetupPng(candles, {
+          trendlines: ctx.topDown
+            ? [ctx.topDown.actionLine, ctx.topDown.safetyLine].filter(
+                (l): l is NonNullable<typeof l> => l != null
+              )
+            : [],
+          zones: ctx.zones.filter((z) => z.active),
+          fib: primary.scored.trigger?.fib ?? ctx.fib ?? undefined,
+          entry: L.entry,
+          stopLoss: L.stopLoss,
+          takeProfit: L.takeProfit,
+        });
+        visionVerdict = await validateSetupVision({
+          instrument: pair,
+          direction: winnerSide,
+          strategy: confluenceLabel,
+          entry: L.entry,
+          stopLoss: L.stopLoss,
+          takeProfit: L.takeProfit,
+          rMultiple: L.rMultiple,
+          confirmationsMet: Object.entries(primary.scored.confirmations)
+            .filter(([, v]) => v)
+            .map(([k]) => k),
+          trendMode: trendModeFor(pair),
+          imageBase64: png.toString("base64"),
+        });
+
+        if (visionVerdict) {
+          visionNote = `[AI ${visionVerdict.confidence}/10] ` 
+            + `${visionVerdict.structure} ${visionVerdict.confluence}`
+            + ` Red flags: ${visionVerdict.redFlags.length ? visionVerdict.redFlags.join("; ") : "none"}.`
+            .slice(0, 300);
+
+          if (!visionVerdict.supports || visionVerdict.confidence < VISION_MIN_CONFIDENCE) {
+            visionRejected = true;
+          }
+        } else {
+          visionNote = "[ vision analysis unavailable ]";
+        }
+      } catch (e) {
+        visionNote = `[ vision error: ${(e as Error).message.slice(0, 60)} ]`;
+      }
+    }
+    // ── end AI Vision ───────────────────────────────────────────────────
+
+    const effectiveStatus = visionRejected ? "skipped" : "active";
+    const effectiveSkipReason = visionRejected
+      ? `AI vision rejects (${visionVerdict?.confidence ?? "?"}/10): ${visionVerdict?.note.slice(0, 200)}`
+      : null;
+
     if (supabase) {
       await supabase.from("signals").insert({
         pair,
@@ -660,10 +728,19 @@ async function reconcileAndSignal(args: {
         r_multiple: L.rMultiple,
         confidence,
         confirmations: primary.scored.confirmations,
-        vision_note: arbitrationNote,
+        vision_note: visionNote ?? note,
+        vision_verdict: visionRejected ? "rejects" : visionVerdict ? "supports" : "skipped",
         confluence_strategies: confluence,
-        status: "active",
+        status: effectiveStatus,
+        skip_reason: effectiveSkipReason,
       });
+    }
+    if (visionRejected) {
+      events.push({
+        pair, timeframe: tf, strategy: primary.strategy, kind: "skipped",
+        detail: `AI vision rejects (${visionVerdict?.confidence ?? "?"}/10): ${visionVerdict?.note.slice(0, 80)}`,
+      });
+      return;
     }
     if (sendTelegrams) {
       await sendFinalSignal({
@@ -679,7 +756,7 @@ async function reconcileAndSignal(args: {
         stopBasis: L.stopBasis,
         targetBasis: L.targetBasis,
         confidence,
-        visionNote: arbitrationNote,
+        visionNote: visionNote ?? note,
         positionUnits: L.positionUnits,
         riskAmount: L.riskAmount,
       }).catch(() => undefined);

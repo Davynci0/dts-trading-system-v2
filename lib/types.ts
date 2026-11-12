@@ -25,6 +25,7 @@ export interface Signal {
   confidence: number;
   confirmations: Record<string, boolean>;
   vision_note: string | null;
+  vision_verdict: "supports" | "rejects" | "skipped" | "error" | null;
   status: "active" | "closed" | "skipped";
   skip_reason: string | null;
   /** null until price later touches TP (win), SL (loss), or the row expires */
