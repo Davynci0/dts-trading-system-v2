@@ -199,6 +199,11 @@ export default function SignalFeed() {
             {s.vision_note && (
               <div className="mt-1 text-neutral-500">AI: {s.vision_note}</div>
             )}
+            {s.vision_verdict === "rejects" && (
+              <div className="mt-1 text-red-500 font-mono text-xs">
+                ⛔ AI vision rejected this setup ({s.confidence}/10)
+              </div>
+            )}
           </li>
           );
         })}

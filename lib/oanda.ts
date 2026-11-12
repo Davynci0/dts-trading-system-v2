@@ -28,7 +28,29 @@ interface OandaCandle {
   mid: { o: string; h: string; l: string; c: string };
 }
 
-/** Fetch historical candles from the OANDA v20 REST API. */
+/** Retry helper with exponential backoff. Used for transient OANDA 5xx/network errors.
+ *  Practice environments regularly emit 504s — retrying usually recovers within 1–3s. */
+async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 3): Promise<T> {
+  let lastErr: unknown;
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      const msg = (e as Error).message;
+      const isRetryable = /OANDA 5\d\d/.test(msg) ||
+        /fetch failed/i.test(msg) ||
+        /ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(msg) ||
+        /socket/i.test(msg);
+      if (!isRetryable || attempt === maxAttempts - 1) throw e;
+      const delayMs = 500 * 2 ** attempt + Math.random() * 250;
+      await new Promise((r) => setTimeout(r, delayMs));
+    }
+  }
+  throw lastErr;
+}
+
+/** Fetch historical candles from the OANDA v20 REST API. Retries on transient 5xx. */
 export async function fetchCandles({
   instrument,
   granularity,
@@ -45,15 +67,16 @@ export async function fetchCandles({
     `${oandaHost()}/v3/instruments/${instrument}/candles` +
     `?granularity=${granularity}${range}&price=M`;
 
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-    cache: "no-store",
+  const json = await withRetry(async () => {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      cache: "no-store",
+    });
+    if (!res.ok) {
+      throw new Error(`OANDA ${res.status}: ${await res.text()}`);
+    }
+    return res.json() as Promise<{ candles: OandaCandle[] }>;
   });
-  if (!res.ok) {
-    throw new Error(`OANDA ${res.status}: ${await res.text()}`);
-  }
-
-  const json = (await res.json()) as { candles: OandaCandle[] };
   return json.candles
     .filter((c) => c.complete || includeIncomplete)
     .map((c) => ({
@@ -71,16 +94,18 @@ export async function fetchLatestPrice(instrument: string): Promise<Candle | nul
   const apiKey = process.env.OANDA_API_KEY;
   if (!apiKey) throw new Error("OANDA_API_KEY is not set");
   const url = `${oandaHost()}/v3/instruments/${instrument}/price`;
-  const res = await fetch(url, {
-    headers: { Authorization: `Bearer ${apiKey}` },
-    cache: "no-store",
+  const json = await withRetry(async () => {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      cache: "no-store",
+    });
+    if (!res.ok) throw new Error(`OANDA ${res.status}: ${await res.text()}`);
+    return res.json() as Promise<{
+      time: string;
+      bids: { price: string }[];
+      asks: { price: string }[];
+    }>;
   });
-  if (!res.ok) throw new Error(`OANDA ${res.status}: ${await res.text()}`);
-  const json = (await res.json()) as {
-    time: string;
-    bids: { price: string }[];
-    asks: { price: string }[];
-  };
   const bid = Number(json.bids[0]?.price);
   const ask = Number(json.asks[0]?.price);
   if (!bid) return null;
