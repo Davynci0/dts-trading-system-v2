@@ -20,6 +20,20 @@ import { ema, emaSlope } from "./indicators";
 const REQUIRE_HTF_TREND = (process.env.REQUIRE_HTF_TREND ?? "true") !== "false";
 const REQUIRE_M15_TREND = (process.env.REQUIRE_M15_TREND ?? "true") !== "false";
 
+/** Per-pair trend filter mode. Override the global REQUIRE_* settings per pair.
+ *  Values: BOTH (default from global), M15 (M15 only), HTF (HTF only), NONE.
+ *  Set via TREND_MODE_XAU_USD=M15, TREND_MODE_GBP_JPY=BOTH, etc. */
+export type TrendMode = "BOTH" | "M15" | "HTF" | "NONE";
+
+export function trendModeFor(instrument: string): { htf: boolean; m15: boolean } {
+  const raw = process.env[`TREND_MODE_${instrument}`]?.toUpperCase();
+  if (raw === "M15") return { htf: false, m15: true };
+  if (raw === "HTF") return { htf: true, m15: false };
+  if (raw === "NONE") return { htf: false, m15: false };
+  if (raw === "BOTH") return { htf: true, m15: true };
+  return { htf: REQUIRE_HTF_TREND, m15: REQUIRE_M15_TREND };
+}
+
 export interface ScoringContext {
   instrument: string;
   candles: Candle[];
@@ -32,6 +46,8 @@ export interface ScoringContext {
   setForget?: SetForgetSetup | null;
   /** Present in live/top-down runs; absent only for legacy test callers. */
   topDown?: TopDownAnalysis;
+  /** Per-pair trend filter override; defaults from REQUIRE_* env vars. */
+  trendMode?: { htf: boolean; m15: boolean };
 }
 
 export interface ScoreResult {
@@ -68,17 +84,19 @@ export function m15Agrees(structureState: StructureState, direction: SignalDirec
 }
 
 function htfTrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolean {
-  if (!REQUIRE_HTF_TREND) return true;
+  const mode = ctx.trendMode ?? { htf: REQUIRE_HTF_TREND, m15: REQUIRE_M15_TREND };
+  if (!mode.htf) return true;
   return ctx.topDown ? topDownAgrees(ctx.topDown, direction) : htfAgrees(ctx.htfCandles, direction);
 }
 
-function m15TrendAgrees(candles: Candle[], pivots: Pivot[], direction: SignalDirection): boolean {
-  if (!REQUIRE_M15_TREND) return true;
-  const structureOk = m15Agrees(classifyStructure(pivots), direction);
+function m15TrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolean {
+  const mode = ctx.trendMode ?? { htf: REQUIRE_HTF_TREND, m15: REQUIRE_M15_TREND };
+  if (!mode.m15) return true;
+  const structureOk = m15Agrees(classifyStructure(ctx.pivots), direction);
   if (!structureOk) return false;
-  const last = candles[candles.length - 1];
-  const ema50 = ema(candles, 50);
-  const slope = emaSlope(candles, 50, 5);
+  const last = ctx.candles[ctx.candles.length - 1];
+  const ema50 = ema(ctx.candles, 50);
+  const slope = emaSlope(ctx.candles, 50, 5);
   if (ema50 == null || slope == null) return structureOk;
   return direction === "long" ? last.close > ema50 && slope > 0 : last.close < ema50 && slope < 0;
 }
@@ -108,7 +126,7 @@ export function scoreSetup(
     confirmations["Zone fresh (≤1 touch)"] = zoneIsVeryFresh(entry.zone.touches);
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
-    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx.candles, ctx.pivots, direction);
+    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx, direction);
   } else if (strategy === "setforget") {
     const entry = setForgetEntry(candles, ctx.setForget ?? null);
     if (!entry) {
@@ -124,7 +142,7 @@ export function scoreSetup(
     );
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
-    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx.candles, ctx.pivots, direction);
+    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx, direction);
   } else {
     const fib = ctx.fib;
     if (!fib || !inGoldenZone(candles, fib)) {
@@ -142,14 +160,14 @@ export function scoreSetup(
     });
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
-    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx.candles, ctx.pivots, direction);
+    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx, direction);
   }
 
   const count = Object.values(confirmations).filter(Boolean).length;
   // Top-down / M15 agreement are confirmation points, not vetoes — a single
   // strategy reaching the threshold can fire on its own (user requirement).
   const topDownAligned = !REQUIRE_HTF_TREND || !ctx.topDown || topDownAgrees(ctx.topDown, direction);
-  const m15Aligned = m15TrendAgrees(ctx.candles, ctx.pivots, direction);
+  const m15Aligned = m15TrendAgrees(ctx, direction);
   return {
     strategy,
     direction,

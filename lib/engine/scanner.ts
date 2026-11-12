@@ -7,6 +7,7 @@ import {
   analyzeM15,
   EXECUTION_HTF,
   topDownAgrees,
+  trendModeFor,
   MIN_RR,
   type ScoringContext,
   type ScoreResult,
@@ -138,6 +139,7 @@ export async function runScan(opts: {
           fib,
           setForget,
           topDown,
+          trendMode: trendModeFor(pair),
         };
 
         // Each strategy is evaluated independently. We collect the setups that
@@ -152,7 +154,7 @@ export async function runScan(opts: {
           const entry = candles[candles.length - 1].close;
           const setupKey = setupKeyOf(pair, tf, scored);
           const prior = await loadSetup(supabase, pair, tf, setupKey);
-          const minConfidence = STRATEGY_MIN_CONFIDENCE[strategy];
+          const minConfidence = minConfidenceFor(pair, strategy);
 
           // --- feed events only; Telegram is reserved for the actionable trade ---
           const now = Math.floor(Date.now() / 1000);
@@ -428,11 +430,23 @@ const STRATEGY_QUALITY_BONUS: Record<StrategyId, number> = {
  */
 const ZONES_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.ZONES_MIN_CONFIDENCE ?? 5)));
 const FIB_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.FIB_MIN_CONFIDENCE ?? 6)));
+const SETFORGET_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.SETFORGET_MIN_CONFIDENCE ?? 4)));
 const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
   zones: ZONES_MIN_CONFIDENCE,
-  setforget: 4,
+  setforget: SETFORGET_MIN_CONFIDENCE,
   fibonacci: FIB_MIN_CONFIDENCE,
 };
+
+/** Per-pair gate override: set FIB_MIN_CONFIDENCE_XAU_USD=4 (or ZONES_...,
+ *  SETFORGET_...) to use a different confirmation minimum for one pair.
+ *  Deep research showed XAU/USD fibonacci is profitable at 4/6 with M15-only
+ *  trend, while other pairs need the stricter global gate. */
+export function minConfidenceFor(pair: string, strategy: StrategyId): number {
+  const envName = `${strategy.toUpperCase()}_MIN_CONFIDENCE_${pair}`;
+  const raw = Number(process.env[envName]);
+  if (Number.isFinite(raw) && raw >= 1 && raw <= 6) return Math.round(raw);
+  return STRATEGY_MIN_CONFIDENCE[strategy];
+}
 
 /** Pairs allowed to SEND live signals (Telegram + signals table). All pairs
  *  still scan fully — TA, confirmation trackers, feed events — but watch-only
@@ -552,7 +566,7 @@ async function reconcileAndSignal(args: {
   // already required before the setup entered this reconciliation.)
   const highOdds = (f: Firing) => {
     if (!f.risk.ok) return false;
-    if (f.scored.count < STRATEGY_MIN_CONFIDENCE[f.scored.strategy]) return false;
+    if (f.scored.count < minConfidenceFor(pair, f.scored.strategy)) return false;
     // Both HTF and M15 must agree when their respective REQUIRE flags are enabled.
     // (A disabled check evaluates to true, so this degrades gracefully.)
     const trendAligned = f.scored.topDownAligned && f.scored.m15Aligned;

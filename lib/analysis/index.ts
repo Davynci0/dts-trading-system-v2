@@ -1,5 +1,5 @@
 export { detectPivots, significantPivots, type Pivot } from "./pivots";
-export { atr, atrSeries, rsi, rsiSeries } from "./indicators";
+export { atr, atrSeries, rsi, rsiSeries, ema, emaSeries, emaSlope } from "./indicators";
 export { detectZones, detectZoneEntry, ZONE_ENTRY_WINDOW, type Zone, type ZoneEntry } from "./zones";
 export {
   detectTrendlines,
@@ -20,7 +20,7 @@ export {
 export { findFibSetup, inGoldenZone, type FibSetup } from "./fibonacci";
 export { findSetForgetSetup, setForgetEntry, type SetForgetSetup } from "./setForget";
 export { analyzeTopDown, topDownAgrees, type TopDownAnalysis, type TopDownCandles } from "./topDown";
-export { scoreSetup, SIGNAL_THRESHOLD, m15Agrees, type ScoringContext, type ScoreResult } from "./scoring";
+export { scoreSetup, SIGNAL_THRESHOLD, m15Agrees, trendModeFor, type ScoringContext, type ScoreResult, type TrendMode } from "./scoring";
 export {
   analyzeM15,
   nearbyActiveZones,
