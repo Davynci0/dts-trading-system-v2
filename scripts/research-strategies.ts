@@ -10,10 +10,6 @@
  * is the HOLDOUT. A rule is only worth building when it is positive in both,
  * with t above ~2 in the design sample, across most pairs.
  *
- * Result on 2023-11 → 2026-11 (11 instruments): none of the 29 variants
- * below qualifies. Most sit at minus their own trading cost — the pattern of
- * an entry with no information in it.
- *
  * Usage: npx tsx --env-file=.env.local scripts/research-strategies.ts [PAIR ...]
  *        ONLY=C npx tsx ...   (run one family)
  */

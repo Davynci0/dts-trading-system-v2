@@ -148,7 +148,7 @@ export { pipSize } from "./instruments";
  *  - a structural swing level that formed BEFORE the leg began (old
  *    resistance turned support, or the reverse).
  * Swings made during or after the leg are excluded: the retracement itself
- * prints pivots inside the area, which made the old check pass every time.
+ * prints pivots inside the area, so counting them would always pass.
  */
 export function goldenZoneHasPoi(
   fib: { goldenTop: number; goldenBottom: number },

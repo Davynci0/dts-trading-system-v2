@@ -38,8 +38,7 @@ const NECKLINE_FLAT_ATR = 0.75;
  * The pattern is active when a candle CLOSED through the neckline after the
  * right shoulder, that break is at most BREAK_ACTIVE_BARS old, and price has
  * not closed back across the neckline since. `triggerTime` is the break
- * candle. (All spans are counted in bars — `Candle.time` is in seconds, so a
- * millisecond-style window here once made every old formation "recent".)
+ * candle. All spans are counted in bars (`Candle.time` is in seconds).
  */
 export function detectHeadShoulders(
   candles: Candle[],

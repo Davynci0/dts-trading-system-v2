@@ -106,12 +106,9 @@ const opposing = (direction: SignalDirection): StructureState => (direction === 
 const agreeing = (direction: SignalDirection): StructureState => (direction === "long" ? "uptrend" : "downtrend");
 
 /**
- * The one higher-timeframe fact that separated winners from losers in a year
- * of closed-bar backtests: trades taken AGAINST the weekly swing structure
- * lost 0.10R (in-sample) and 0.31R (out-of-sample) per trade; everything else
- * was flat to slightly positive. Daily, H4 and H1 structure added nothing once
- * the weekly was known — an M15 pullback entry is against H1/H4 by nature.
- * This is the send-gate veto.
+ * Send-gate veto: the trade is AGAINST the weekly swing structure. Only the
+ * weekly vetoes — an M15 pullback entry is against H1/H4 by nature, so those
+ * and the daily are context, not blockers.
  */
 export function topDownOpposes(analysis: TopDownAnalysis, direction: SignalDirection): boolean {
   return analysis.weekly === opposing(direction);

@@ -118,9 +118,7 @@ function entryTime(candles: Candle[]): number {
  * M15 trend = the M15 swing structure (HH+HL / LH+LL on the zigzag-filtered
  * swings the setups are built from). It deliberately does NOT also require
  * price beyond a rising EMA50: every strategy here buys a pullback, and a
- * 50–79% retracement sits on the wrong side of a fast EMA by construction —
- * that extra condition rejected four in five otherwise-valid setups without
- * improving the ones it kept.
+ * 50–79% retracement sits on the wrong side of a fast EMA by construction.
  */
 function m15TrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolean {
   const mode = ctx.trendMode ?? { htf: REQUIRE_HTF_TREND, m15: REQUIRE_M15_TREND };

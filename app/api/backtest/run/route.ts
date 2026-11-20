@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
 import { runBacktest, computeMetrics, LOT_SIZES, type BacktestTrade } from "@/lib/backtest/engine";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { minConfidenceFor } from "@/lib/engine/scanner";
+import { minConfidenceFor, signalPairs } from "@/lib/engine/scanner";
 import type { StrategyId } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -19,9 +19,9 @@ const TIMEFRAME_HOURS: Record<string, number> = {
 /**
  * POST /api/backtest/run
  * Body: {
- *   pairs?: string[],
+ *   pairs?: string[],        // omit for the pairs that send live signals
  *   timeframe?: "M15",
- *   count?: number,
+ *   count?: number,          // M15 candles, 500–5000 (OANDA's per-request cap, ~7 weeks)
  *   accountBalance?: number,
  *   lotSize?: "0.01" | "0.1" | "1",
  *   riskPercent?: number,
@@ -42,9 +42,9 @@ export async function POST(req: NextRequest) {
     minConfidence?: number;
     strategies?: string[];
   };
-  const pairs = body.pairs?.length ? body.pairs : ["XAU_USD"];
+  const pairs = body.pairs?.length ? body.pairs : [...signalPairs()];
   const timeframe = body.timeframe ?? "M15";
-  const count = Math.min(Math.max(body.count ?? 2000, 500), 5000);
+  const count = Math.min(Math.max(body.count ?? 5000, 500), 5000);
   const accountBalance = body.accountBalance ?? 25000;
   const lotSize = body.lotSize;
   const riskPercent = body.riskPercent ?? 0.01;
@@ -80,8 +80,7 @@ export async function POST(req: NextRequest) {
           engine:
             "live send gate (session, weekly veto, M15 structure), closed-bar HTF, one trade per pair, 6-point checklist (no vision), spread+slippage, conservative same-candle SL",
         },
-        notes:
-          "Vision AI excluded — cannot be queried retroactively (Section 7). Confidence buckets: 3 vs 4+ of the 6 non-AI checks.",
+        notes: `Quick run · last ${count} M15 candles (~${Math.round(horizonHours / 24)} days) · live rules`,
       })
       .select("id")
       .single();
@@ -131,6 +130,7 @@ export async function POST(req: NextRequest) {
   const scope = (rows: { pair: string; trade: BacktestTrade }[]) => ({
     inSample: seg(rows, true),
     outOfSample: seg(rows, false),
+    all: computeMetrics(rows.map((r) => r.trade)),
   });
 
   const scopes: Record<string, unknown> = {

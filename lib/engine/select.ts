@@ -15,8 +15,7 @@ export interface SignalCandidate {
   risk: RiskResult;
 }
 
-/** Tie-break between agreeing setups: which one defines the trade's levels.
- *  Zones and set & forget measured slightly ahead of fibonacci over 12 months. */
+/** Tie-break between agreeing setups: which one defines the trade's levels. */
 export const STRATEGY_QUALITY_BONUS: Record<StrategyId, number> = {
   setforget: 8,
   zones: 4,

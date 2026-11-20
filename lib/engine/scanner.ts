@@ -28,8 +28,7 @@ const STRATEGY_LABELS: Record<StrategyId, string> = {
   fibonacci: "Fibonacci Retracement",
 };
 
-/** Strategies enabled for live signals. Structure and trendline removed after
- *  backtest research showed they lost on the recent XAU/USD M15 window. */
+/** Strategies enabled for live signals. */
 const ENABLED_STRATEGIES: StrategyId[] = ["zones", "setforget", "fibonacci"];
 
 
@@ -208,7 +207,7 @@ export async function runScan(opts: {
             : "no new confirmations since last signal";
 
           const watchOnly = !signalPairs().has(pair);
-          const watchNote = "watch-only pair — 6-month research shows no durable edge at the current gate";
+          const watchNote = "watch-only pair — not in SIGNAL_PAIRS, so setups are tracked but not sent";
           if (disposition.eligible && (recentlySignaled || noNewConfirmations)) {
             if (prior?.lastSkip !== cooldownNote) {
               events.push({ pair, timeframe: tf, strategy, kind: "skipped", detail: cooldownNote });
@@ -417,17 +416,12 @@ function skipReasonFor(pair: string, f: Firing): string {
 }
 
 /** Per-strategy minimum confirmations required before a signal is sent.
- *  Re-measured on 12 months of M15 data for all eight pairs with closed-bar
- *  higher timeframes and the live send gate (the earlier 52-day XAU study
- *  read still-forming HTF candles, which inflated every trend-related number):
- *    - 3/6 was the worst bucket for every strategy (zones −0.05R, set & forget
- *      −0.25R, fibonacci −0.01R per trade); 4/6 and above were flat to positive.
- *    - above 4 there was no consistent gain, so zones and set & forget send at 4.
- *    - fibonacci is the weakest and by far the most frequent setup (about
- *      breakeven after costs at any gate), so it stays at a perfect 6/6.
+ *  Zones and set & forget send at 4 of 6 — 3/6 is the weakest bucket for
+ *  every strategy and nothing is gained above 4. Fibonacci is the most
+ *  frequent setup and the weakest, so it needs a perfect 6/6.
  *
  *  Override with ZONES_MIN_CONFIDENCE / SETFORGET_MIN_CONFIDENCE /
- *  FIB_MIN_CONFIDENCE (1–6).
+ *  FIB_MIN_CONFIDENCE (1–6); check the effect with scripts/backtest.ts.
  */
 const ZONES_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.ZONES_MIN_CONFIDENCE ?? 4)));
 const FIB_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.FIB_MIN_CONFIDENCE ?? 6)));
@@ -449,13 +443,7 @@ export function minConfidenceFor(pair: string, strategy: StrategyId): number {
 
 /** Pairs allowed to SEND live signals (Telegram + signals table). All pairs
  *  still scan fully — TA, confirmation trackers, feed events — but watch-only
- *  pairs cannot put capital at risk. Chosen from the 6-month ranking at the
- *  live gate (scripts/research-rank.ts, ~12.4k M15 candles, IS/OOS split):
- *    XAU_USD:  the only pair positive over the full window (PF 1.14, avgR +0.10, DD 7.6R)
- *    GBP_AUD:  the only FX pair not negative (PF 1.00, both halves ~neutral, DD 12.5R)
- *  Everything else measured PF 0.63-0.85 with heavy IS/OOS regime flips —
- *  re-enable a pair by adding it here (or the SIGNAL_PAIRS env) once its live
- *  statistics or a longer research window justify it. */
+ *  pairs cannot put capital at risk. Override with the SIGNAL_PAIRS env. */
 const DEFAULT_SIGNAL_PAIRS = ["XAU_USD", "GBP_AUD"];
 
 /** Allow the same setup to fire more than once (no permanent signaled dedup).

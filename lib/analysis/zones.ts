@@ -64,9 +64,8 @@ export function detectZones(candles: Candle[]): Zone[] {
   };
 
   // Single forward pass: zone state is always current as of candle i, so the
-  // duplicate check below sees which earlier zones are STILL alive. (Marking
-  // invalidation in a second pass left every zone "active" during detection —
-  // a dead zone then suppressed any fresh zone forming in the same band.)
+  // duplicate check below sees which earlier zones are STILL alive — an
+  // invalidated zone must not suppress a fresh one forming in the same band.
   for (let i = 15; i < candles.length; i++) {
     advance(i);
 

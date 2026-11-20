@@ -11,10 +11,9 @@ export const MAX_STOP_ATR_MULT = 3; // structure further than this × ATR away i
 export const MIN_RR = Math.max(0, Number(process.env.MIN_R_MULTIPLE ?? 2.0));
 export const RISK_PCT_PER_TRADE = 0.01; // 1% account risk per trade
 const STRUCTURE_SWING_ATR = 0.5; // only swings this many ATR in size count as structure
-// Trading costs (spread + slippage) may be at most this share of the risk.
-// A year of M15 backtests put the average at 13% of risk per trade — the
-// entire loss of the system — because stops sat a few pips from entry on
-// pairs with multi-pip spreads. Override with MAX_COST_SHARE (0 disables).
+// Trading costs (spread + slippage) may be at most this share of the risk: a
+// stop a few pips from entry on a pair with a multi-pip spread gives most of
+// its edge to the broker. Override with MAX_COST_SHARE (0 disables).
 export const MAX_COST_SHARE = Math.max(0, Number(process.env.MAX_COST_SHARE ?? 0.1));
 /** Fib depth past which a retracement has stopped being a pullback. */
 const DEEP_RETRACE = 0.786;

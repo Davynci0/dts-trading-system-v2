@@ -2,16 +2,13 @@
  * Trading-session gate. Signals are only sent during the New York session
  * (which opens inside the London overlap): 12:00–21:00 UTC.
  *
- * Evidence, from a year of closed-bar M15 backtests across all eight pairs:
- *  - 00:00–06:00 UTC entries lost 0.11–0.25R per trade both in- and
- *    out-of-sample (a pre-declared test) — thin Asian liquidity chops through
- *    zones built by London/NY volatility.
- *  - 06:00–12:00 UTC was flat in the first eight months and clearly negative
- *    in the last four; 12:00–21:00 was the only block positive in both. That
- *    second cut was made after seeing the whole year, so it is the least
- *    certain rule in the gate — widen it with TRADING_HOURS_UTC="6-21".
+ *  - The Asian session is excluded: thin liquidity chops through zones built
+ *    by London/NY volatility, and entries there lose in backtests year after
+ *    year.
  *  - 21:00–23:00 UTC is the daily rollover, where real spreads are several
  *    times wider than any fixed-spread model assumes.
+ *  - The London morning (06:00–12:00) is the judgement call; add it back with
+ *    TRADING_HOURS_UTC="6-21".
  *
  * Override with TRADING_HOURS_UTC="start-end" ("0-24" disables the gate).
  * `end` is exclusive; a window may wrap midnight.

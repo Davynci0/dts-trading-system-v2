@@ -90,6 +90,11 @@ export interface MetricsCore {
   winRate: number;
   profitFactor: number;
   avgR: number;
+  /** sum of R over the trades */
+  totalR: number;
+  /** avgR divided by its standard error — below ~2 the average is not
+   *  distinguishable from zero, whatever the profit factor says */
+  tStat: number;
   maxDrawdownR: number;
   /** Absolute P&L in account currency using the fixed position size. */
   totalPnl: number;
@@ -102,6 +107,8 @@ export interface MetricsCore {
 export interface ScopedMetrics {
   inSample: MetricsCore;
   outOfSample: MetricsCore;
+  /** the whole run; present on runs stored by the current engine */
+  all?: MetricsCore;
 }
 
 export interface BacktestReport {
@@ -117,7 +124,7 @@ export interface BacktestReport {
 export function computeMetrics(trades: BacktestTrade[], quoteUsdRate = 1): MetricsCore {
   const n = trades.length;
   if (n === 0) {
-    return { trades: 0, wins: 0, winRate: 0, profitFactor: 0, avgR: 0, maxDrawdownR: 0, totalPnl: 0, confidence3: 0, confidence4: 0, confidence5: 0 };
+    return { trades: 0, wins: 0, winRate: 0, profitFactor: 0, avgR: 0, totalR: 0, tStat: 0, maxDrawdownR: 0, totalPnl: 0, confidence3: 0, confidence4: 0, confidence5: 0 };
   }
   const wins = trades.filter((t) => t.rAchieved > 0);
   const grossWin = wins.reduce((s, t) => s + t.rAchieved, 0);
@@ -134,6 +141,9 @@ export function computeMetrics(trades: BacktestTrade[], quoteUsdRate = 1): Metri
     maxDd = Math.max(maxDd, peak - equity);
   }
 
+  const totalR = trades.reduce((s, t) => s + t.rAchieved, 0);
+  const sd = Math.sqrt(trades.reduce((s, t) => s + (t.rAchieved - totalR / n) ** 2, 0) / Math.max(1, n - 1));
+
   const totalPnl =
     trades.reduce(
       (s, t) => s + t.rAchieved * Math.abs(t.entry - t.stopLoss) * t.units,
@@ -145,7 +155,9 @@ export function computeMetrics(trades: BacktestTrade[], quoteUsdRate = 1): Metri
     wins: wins.length,
     winRate: wins.length / n,
     profitFactor: pf,
-    avgR: trades.reduce((s, t) => s + t.rAchieved, 0) / n,
+    avgR: totalR / n,
+    totalR,
+    tStat: sd > 0 ? totalR / n / (sd / Math.sqrt(n)) : 0,
     maxDrawdownR: maxDd,
     totalPnl,
     confidence3: trades.filter((t) => t.confirmations === 3).length,
@@ -433,12 +445,14 @@ export function runBacktest(opts: {
     combined: {
       inSample: computeMetrics(inSample, quoteUsdRate),
       outOfSample: computeMetrics(outOfSample, quoteUsdRate),
+      all: computeMetrics(trades, quoteUsdRate),
     },
   };
   for (const strategy of ALL_STRATEGIES) {
     scopes[`strategy:${strategy}`] = {
       inSample: computeMetrics(inSample.filter((t) => t.strategy === strategy), quoteUsdRate),
       outOfSample: computeMetrics(outOfSample.filter((t) => t.strategy === strategy), quoteUsdRate),
+      all: computeMetrics(trades.filter((t) => t.strategy === strategy), quoteUsdRate),
     };
   }
 
