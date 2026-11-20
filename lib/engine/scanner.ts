@@ -178,7 +178,15 @@ export async function runScan(opts: {
           // Early zone-touch alert: notify as soon as price enters a buy/sell zone,
           // before the full confirmation stack lines up. Deduplicated per zone.
           let zoneAlerted = prior?.zoneAlerted === true;
-          if (strategy === "zones" && !zoneAlerted && sendTelegrams && zoneAlertPairs().has(pair)) {
+          // (only while the zones strategy is itself allowed to send — an early
+          // warning for a watch-only strategy is noise)
+          if (
+            strategy === "zones" &&
+            signalStrategies().has("zones") &&
+            !zoneAlerted &&
+            sendTelegrams &&
+            zoneAlertPairs().has(pair)
+          ) {
             const zone = scored.trigger?.zone;
             if (zone && zone.active) {
               await sendZoneAlert({
