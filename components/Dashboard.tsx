@@ -7,21 +7,27 @@ import ConfirmationTracker from "@/components/ConfirmationTracker";
 import AskAIButton from "@/components/AskAIButton";
 import { PAIRS, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
 import { pipSize } from "@/lib/analysis/confirmations";
-import { EMPTY_OVERLAY, type OverlayData } from "@/components/chartOverlay";
+import { CHART_COLORS, EMPTY_OVERLAY, type OverlayData } from "@/components/chartOverlay";
 
+/**
+ * Chart layers in three groups: the four strategies (each in its own colour,
+ * all on), context a trader may want behind them (key levels on, the rest
+ * off so the chart starts clean), and the system's own trades.
+ */
 const LAYERS = [
-  { id: "breakout", label: "Breakout" },
-  { id: "zones", label: "Zones" },
-  { id: "fib", label: "Fib" },
-  { id: "aoi", label: "AOI" },
-  { id: "trendlines", label: "Trendlines" },
-  { id: "levels", label: "S/R" },
-  { id: "headshoulders", label: "H&S" },
-  { id: "structure", label: "Structure" },
-  { id: "position", label: "Trade plan" },
-  { id: "history", label: "Results" },
+  { id: "breakout", label: "Breakout", group: "Strategies", color: CHART_COLORS.breakout, on: true },
+  { id: "aoi", label: "Set & forget", group: "Strategies", color: CHART_COLORS.aoi, on: true },
+  { id: "zones", label: "Zones", group: "Strategies", color: CHART_COLORS.demand, on: true },
+  { id: "fib", label: "Fibonacci", group: "Strategies", color: CHART_COLORS.fib, on: true },
+  { id: "levels", label: "Key levels", group: "Context", color: null, on: true },
+  { id: "structure", label: "Structure", group: "Context", color: null, on: false },
+  { id: "trendlines", label: "Trendlines", group: "Context", color: null, on: false },
+  { id: "headshoulders", label: "H&S", group: "Context", color: null, on: false },
+  { id: "position", label: "Trade plan", group: "Trades", color: null, on: true },
+  { id: "history", label: "Results", group: "Trades", color: null, on: true },
 ] as const;
 type LayerId = (typeof LAYERS)[number]["id"];
+const LAYER_GROUPS = ["Strategies", "Context", "Trades"] as const;
 
 interface TopDownSummary {
   weekly: string;
@@ -61,18 +67,11 @@ export default function Dashboard() {
   const [telegramStatus, setTelegramStatus] = useState<string | null>(null);
   const [scanStatus, setScanStatus] = useState<string | null>(null);
   const [pairSignals, setPairSignals] = useState<Signal[]>([]);
-  const [layers, setLayers] = useState<Record<LayerId, boolean>>({
-    breakout: true,
-    zones: true,
-    fib: true,
-    aoi: true,
-    position: true,
-    history: true,
-    trendlines: true,
-    levels: true,
-    headshoulders: true,
-    structure: true,
-  });
+  const [layers, setLayers] = useState<Record<LayerId, boolean>>(
+    () => Object.fromEntries(LAYERS.map((l) => [l.id, l.on])) as Record<LayerId, boolean>
+  );
+  /** set when the chart shows a past moment (?asOf=…) instead of the live market */
+  const [asOf, setAsOf] = useState<string | null>(null);
   const analysisSigRef = useRef<string>("");
 
   // this pair's signals: the unsettled one is drawn as a trade plan, settled ones as results
@@ -159,6 +158,67 @@ export default function Dashboard() {
     };
   }, [overlay, layers, pairSignals, candles, pair]);
 
+  /** One line on the daily trend: both strategies' trend filters and what they allow. */
+  const trendLine = useMemo(() => {
+    const b = overlay.breakout;
+    if (!b || !gate) return null;
+    const arrow = (t: number) => (t === 1 ? "▲ up" : t === -1 ? "▼ down" : "unknown");
+    const allows = gate.weeklyBlocks
+      ? "pullbacks blocked by the weekly structure"
+      : gate.longAllowed
+        ? "buys only"
+        : gate.shortAllowed
+          ? "sells only"
+          : "no pullback trades";
+    const tone = gate.longAllowed ? "text-emerald-400" : gate.shortAllowed ? "text-rose-400" : "text-amber-400";
+    return { text: `Daily trend: 50-day ${arrow(b.trend)} · ${gate.trendDays}-day ${arrow(gate.trend)} — ${allows}`, tone };
+  }, [overlay.breakout, gate]);
+
+  /** Colour key for the four strategies, with what each is waiting on right now. */
+  const legend = useMemo(() => {
+    const pip = pipSize(pair);
+    const digits = pip >= 0.1 ? 2 : pip >= 0.01 ? 3 : 5;
+    const px = (n: number) => n.toFixed(digits);
+    const against = (tradeable: boolean | undefined) => (tradeable === false ? " · against the trend" : "");
+
+    const b = overlay.breakout;
+    let breakout = "no daily trend yet";
+    if (b && b.trend !== 0) {
+      const levels = [b.asian ? (b.trend === 1 ? b.asian.high : b.asian.low) : null, b.channel ? (b.trend === 1 ? b.channel.high : b.channel.low) : null].filter(
+        (x): x is number => x != null
+      );
+      // the first level price would reach: the lowest high for a buy, the highest low for a sell
+      const first = levels.length ? (b.trend === 1 ? Math.min(...levels) : Math.max(...levels)) : null;
+      breakout =
+        first == null
+          ? "no level yet"
+          : `${b.trend === 1 ? "buy on a close above" : "sell on a close below"} ${px(first)}${b.asianWindowOpen || b.channelWindowOpen ? "" : " · window closed"}`;
+    }
+
+    const a = overlay.aoi;
+    const aoi = a ? `${a.direction === "long" ? "buy" : "sell"} AOI ${px(a.bottom)}–${px(a.top)}${against(a.tradeable)}` : "no untested AOI";
+
+    const ready = overlay.zones.filter((z) => z.tradeable !== false);
+    const zones =
+      overlay.zones.length === 0
+        ? "no active zone nearby"
+        : ready.length === 0
+          ? `${overlay.zones.length} nearby, none with the trend`
+          : `${ready.length} ${ready[0].kind === "demand" ? "buy" : "sell"} zone${ready.length > 1 ? "s" : ""} with the trend, nearest ${px(ready[0].bottom)}–${px(ready[0].top)}`;
+
+    const f = overlay.fib;
+    const fib = !f || f.isSetup === false
+      ? "no setup"
+      : `${f.direction === "long" ? "buy" : "sell"} zone ${px(f.goldenBottom)}–${px(f.goldenTop)}${f.inZone ? " · price inside" : ""}${against(f.tradeable)}`;
+
+    return [
+      { name: "Breakout", color: CHART_COLORS.breakout, state: breakout, active: !!b && b.trend !== 0 },
+      { name: "Set & forget", color: CHART_COLORS.aoi, state: aoi, active: !!a && a.tradeable !== false },
+      { name: "Zones", color: CHART_COLORS.demand, state: zones, active: ready.length > 0 },
+      { name: "Fibonacci", color: CHART_COLORS.fib, state: fib, active: !!f && f.isSetup !== false && f.tradeable !== false },
+    ];
+  }, [overlay, pair]);
+
   async function scanNow() {
     setScanStatus("scanning…");
     try {
@@ -183,8 +243,10 @@ export default function Dashboard() {
     const controller = new AbortController();
     let stopped = false;
 
+    // ?asOf=2026-11-19T07:15Z shows the analysis as it stood at that moment
+    const review = new URLSearchParams(window.location.search).get("asOf");
     const loadAnalysis = (initial: boolean) =>
-      fetch(`/api/analysis?instrument=${pair}&granularity=M15&count=500`, {
+      fetch(`/api/analysis?instrument=${pair}&granularity=M15&count=500${review ? `&to=${encodeURIComponent(review)}` : ""}`, {
         signal: controller.signal,
       })
         .then(async (res) => {
@@ -227,6 +289,7 @@ export default function Dashboard() {
           });
           setTopDown(json.topDown ?? null);
           setGate(json.gate ?? null);
+          setAsOf(json.asOf ?? null);
           setError(null);
         })
         .catch((e: Error) => {
@@ -247,9 +310,10 @@ export default function Dashboard() {
     loadAnalysis(true);
     // 2) TA refresh every 15 min (new M15 bar) — the signature
     // check inside loadAnalysis skips the re-render when analysis is unchanged
-    const taTimer = setInterval(() => loadAnalysis(false), 15 * 60 * 1000);
+    //    (a past moment does not change, so a review loads once)
+    const taTimer = review ? undefined : setInterval(() => loadAnalysis(false), 15 * 60 * 1000);
     // 3) fast live tick — updates only the forming bar via a cheap 1-candle call
-    const liveTimer = setInterval(() => {
+    const liveTimer = review ? undefined : setInterval(() => {
       fetch(`/api/live?instrument=${pair}&granularity=M15`, {
         signal: controller.signal,
       })
@@ -314,19 +378,31 @@ export default function Dashboard() {
           <span className="rounded border border-neutral-700 bg-neutral-700 px-2.5 py-1.5 text-sm text-white">
             M15
           </span>
-          <div className="flex overflow-hidden rounded border border-neutral-700">
-            {LAYERS.map((l) => (
-              <button
-                key={l.id}
-                onClick={() => setLayers((prev) => ({ ...prev, [l.id]: !prev[l.id] }))}
-                className={`px-2 py-1.5 text-xs ${
-                  layers[l.id] ? "bg-neutral-800 text-neutral-100" : "bg-neutral-900 text-neutral-600 line-through"
-                }`}
-              >
-                {l.label}
-              </button>
-            ))}
-          </div>
+          {LAYER_GROUPS.map((group) => (
+            <div key={group} className="flex items-center gap-1.5">
+              <span className="text-[10px] uppercase tracking-wide text-neutral-600">{group}</span>
+              <div className="flex overflow-hidden rounded border border-neutral-700">
+                {LAYERS.filter((l) => l.group === group).map((l) => (
+                  <button
+                    key={l.id}
+                    onClick={() => setLayers((prev) => ({ ...prev, [l.id]: !prev[l.id] }))}
+                    aria-pressed={layers[l.id]}
+                    className={`flex items-center gap-1.5 px-2 py-1.5 text-xs ${
+                      layers[l.id] ? "bg-neutral-800 text-neutral-100" : "bg-neutral-900 text-neutral-600"
+                    }`}
+                  >
+                    {l.color && (
+                      <span
+                        className="inline-block h-2 w-2 rounded-sm"
+                        style={{ backgroundColor: `rgb(${l.color})`, opacity: layers[l.id] ? 1 : 0.3 }}
+                      />
+                    )}
+                    {l.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
           <div className="ml-auto flex items-center gap-2">
             <button
               onClick={scanNow}
@@ -344,57 +420,43 @@ export default function Dashboard() {
           </div>
         </div>
 
+        {asOf && (
+          <p className="rounded border border-amber-900/70 bg-amber-950/40 px-3 py-2 text-xs text-amber-200">
+            Reviewing the chart as it stood at {new Date(asOf).toUTCString().slice(5, 22)} UTC — live updates are paused.{" "}
+            <button onClick={() => window.location.assign(window.location.pathname)} className="underline">
+              Back to live
+            </button>
+          </p>
+        )}
+
         {topDown && (
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 border-y border-neutral-800 py-1.5 font-mono text-[11px] text-neutral-500">
-            <span className="text-neutral-300">Top-down</span>
-            <span>W {topDown.weekly}</span>
-            <span>D {topDown.daily}</span>
-            <span>H4 {topDown.h4}</span>
-            {topDown.h1 ? <span>H1 {topDown.h1}</span> : null}
-            <span
-              className={
-                topDown.bias === "bullish"
-                  ? "text-emerald-400"
-                  : topDown.bias === "bearish"
-                    ? "text-rose-400"
-                    : "text-zinc-400"
-              }
-            >
-              Bias {topDown.bias}
-            </span>
-            {topDown.m15 ? <span>M15 {topDown.m15}</span> : null}
-            {overlay.breakout && (
-              <>
-                <span className="text-neutral-300">Breakout</span>
-                <span className={overlay.breakout.trend === 1 ? "text-emerald-400" : overlay.breakout.trend === -1 ? "text-rose-400" : "text-zinc-400"}>
-                  50-day trend {overlay.breakout.trend === 1 ? "up — buys only" : overlay.breakout.trend === -1 ? "down — sells only" : "unknown"}
-                </span>
-                <span className={overlay.breakout.asianWindowOpen ? "text-emerald-400" : "text-neutral-500"}>
-                  Asian-range window {overlay.breakout.asianWindowOpen ? "open" : "closed"} (07–11 UTC)
-                </span>
-                <span className={overlay.breakout.channelWindowOpen ? "text-emerald-400" : "text-neutral-500"}>
-                  1-week window {overlay.breakout.channelWindowOpen ? "open" : "closed"} (07–20 UTC)
-                </span>
-              </>
-            )}
-            {gate?.pullback && (
-              <>
-                <span className="text-neutral-300">Pullbacks</span>
-                <span className={gate.weeklyBlocks ? "text-amber-400" : gate.trend === 1 ? "text-emerald-400" : gate.trend === -1 ? "text-rose-400" : "text-zinc-400"}>
-                  {gate.trendDays}-day trend {gate.trend === 1 ? "up" : gate.trend === -1 ? "down" : "unknown"}
-                  {gate.weeklyBlocks
-                    ? " — blocked by the weekly structure"
-                    : gate.longAllowed
-                      ? " — buys only"
-                      : gate.shortAllowed
-                        ? " — sells only"
-                        : ""}
-                </span>
+          <div className="space-y-1.5 border-y border-neutral-800 py-2 text-[11px]">
+            {/* what the market is doing, and what that allows */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-neutral-500">
+              {trendLine && <span className={trendLine.tone}>{trendLine.text}</span>}
+              {gate && (
                 <span className={gate.inSession ? "text-emerald-400" : "text-neutral-500"}>
-                  session {gate.inSession ? "open" : "closed"} ({gate.sessionHours})
+                  Session {gate.inSession ? "open" : "closed"} ({gate.sessionHours})
                 </span>
-              </>
-            )}
+              )}
+              <span className="font-mono text-neutral-600">
+                W {topDown.weekly} · D {topDown.daily} · H4 {topDown.h4}
+                {topDown.h1 ? ` · H1 ${topDown.h1}` : ""}
+                {topDown.m15 ? ` · M15 ${topDown.m15}` : ""}
+              </span>
+            </div>
+            {/* the four strategies: colour key and what each is waiting on */}
+            <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2 xl:grid-cols-4">
+              {legend.map((item) => (
+                <div key={item.name} className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="inline-block h-2 w-2 shrink-0 translate-y-[-1px] rounded-sm" style={{ backgroundColor: `rgb(${item.color})` }} />
+                  <span className="shrink-0 font-medium text-neutral-200">{item.name}</span>
+                  <span className={`truncate ${item.active ? "text-neutral-300" : "text-neutral-600"}`} title={item.state}>
+                    {item.state}
+                  </span>
+                </div>
+              ))}
+            </div>
           </div>
         )}
 

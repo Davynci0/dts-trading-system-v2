@@ -19,14 +19,22 @@ import { signalStrategies } from "@/lib/engine/scanner";
 export const maxDuration = 60;
 
 /**
- * GET /api/analysis?instrument=XAU_USD&granularity=M15&count=500
- * Chart TA is always M15. Weekly/Daily/H4/H1 are bias context only.
+ * GET /api/analysis?instrument=XAU_USD&granularity=M15&count=500[&to=<ISO time>]
+ * Everything the chart draws, from the same engine the scanner uses. Chart TA
+ * is always M15; weekly/daily/H4/H1 are context. `to` returns the analysis as
+ * it stood at that moment, for reviewing a past setup.
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const instrument = sp.get("instrument") ?? "XAU_USD";
   const granularity = sp.get("granularity") ?? "M15";
   const count = Math.min(Number(sp.get("count") ?? 500), 5000);
+  const toParam = sp.get("to");
+  const toMs = toParam ? Date.parse(toParam) : NaN;
+  if (toParam && !Number.isFinite(toMs)) {
+    return NextResponse.json({ error: "`to` must be an ISO date-time, e.g. 2026-11-19T07:15:00Z" }, { status: 400 });
+  }
+  const to = Number.isFinite(toMs) ? new Date(toMs).toISOString() : undefined;
 
   if (granularity !== "M15") {
     return NextResponse.json({ error: "Chart technical analysis is locked to M15" }, { status: 400 });
@@ -34,12 +42,12 @@ export async function GET(req: NextRequest) {
 
   try {
     const [candles, weekly, daily, h4, h1] = await Promise.all([
-      fetchCandles({ instrument, granularity: "M15", count }),
-      fetchCandles({ instrument, granularity: "W", count: 52 }),
-      fetchCandles({ instrument, granularity: "D", count: 120 }), // top-down reads the last 90, the 100-day trend needs more
-      fetchCandles({ instrument, granularity: "H4", count: 120 }),
+      fetchCandles({ instrument, granularity: "M15", count, to }),
+      fetchCandles({ instrument, granularity: "W", count: 52, to }),
+      fetchCandles({ instrument, granularity: "D", count: 120, to }), // top-down reads the last 90, the 100-day trend needs more
+      fetchCandles({ instrument, granularity: "H4", count: 120, to }),
       // 300 closed hours: top-down reads the last 120, the key levels all of them
-      fetchCandles({ instrument, granularity: "H1", count: 300 }),
+      fetchCandles({ instrument, granularity: "H1", count: 300, to }),
     ]);
     const analysis = analyzeM15(candles, instrument);
     if (!analysis) {
@@ -48,18 +56,28 @@ export async function GET(req: NextRequest) {
 
     const topDown = analyzeTopDown({ weekly, daily: daily.slice(-90), h4, h1: h1.slice(-120) });
     const last = candles[candles.length - 1];
-    // Draw all active zones on the chart, not just the ones near current price,
-    // so the user can see the full technical landscape.
+
+    // The pullback strategies' trend rule (lib/analysis/pullback.ts): a setup
+    // the rule does not allow is still drawn, but muted.
+    const pullbackTrend = dailyTrend(daily, PULLBACK_TREND_DAYS);
+    const allowed = (direction: "long" | "short") =>
+      pullbackTrend === (direction === "long" ? 1 : -1) && !topDownOpposes(topDown, direction);
+
+    // Supply/demand: the six active zones nearest to price — one far from the
+    // market is not something the trader is waiting on.
+    const distance = (z: { top: number; bottom: number }) =>
+      last.close > z.top ? last.close - z.top : last.close < z.bottom ? z.bottom - last.close : 0;
     const zones = analysis.zones
       .filter((z) => z.active)
-      .sort((a, b) => b.startIndex - a.startIndex)
-      .slice(0, 12)
+      .sort((a, b) => distance(a) - distance(b))
+      .slice(0, 6)
       .map((z) => ({
         kind: z.kind,
         top: z.top,
         bottom: z.bottom,
         startTime: z.startTime,
         touches: z.touches,
+        tradeable: allowed(z.kind === "demand" ? "long" : "short"),
       }));
 
     // Fibonacci: draw the swing the SCANNER would trade (analysis.fib — an
@@ -85,6 +103,7 @@ export async function GET(req: NextRequest) {
           range: swingFib.range,
           isSetup: engineFib != null,
           inZone: engineFib != null && inGoldenZone(candles, engineFib),
+          tradeable: engineFib != null && allowed(engineFib.direction),
         }
       : null;
 
@@ -122,7 +141,6 @@ export async function GET(req: NextRequest) {
     // when one of them is allowed to send.
     const [sessionStart, sessionEnd] = tradingHoursUtc();
     const sending = signalStrategies();
-    const pullbackTrend = dailyTrend(daily, PULLBACK_TREND_DAYS);
     const gate = {
       strategies: [...sending],
       pullback: [...sending].some((s) => s !== "breakout"),
@@ -130,8 +148,8 @@ export async function GET(req: NextRequest) {
       sessionHours: `${String(sessionStart).padStart(2, "0")}:00–${String(sessionEnd).padStart(2, "0")}:00 UTC`,
       trend: pullbackTrend,
       trendDays: PULLBACK_TREND_DAYS,
-      longAllowed: pullbackTrend === 1 && !topDownOpposes(topDown, "long"),
-      shortAllowed: pullbackTrend === -1 && !topDownOpposes(topDown, "short"),
+      longAllowed: allowed("long"),
+      shortAllowed: allowed("short"),
       // the daily trend allows this side but the weekly structure opposes it
       weeklyBlocks:
         (pullbackTrend === 1 && topDownOpposes(topDown, "long")) || (pullbackTrend === -1 && topDownOpposes(topDown, "short")),
@@ -147,6 +165,8 @@ export async function GET(req: NextRequest) {
             startTime: sf.legLow.time,
             legEndTime: candles[Math.min(sf.legEndIndex, candles.length - 1)].time,
             tested: sf.tested,
+            leg: { lowTime: sf.legLow.time, lowPrice: sf.legLow.price, highTime: sf.legHigh.time, highPrice: sf.legHigh.price },
+            tradeable: allowed(sf.direction),
           }
         : null;
 
@@ -193,6 +213,7 @@ export async function GET(req: NextRequest) {
       structure: structure.slice(-18),
       breakout,
       gate,
+      asOf: to ?? null,
       topDown: {
         weekly: topDown.weekly,
         daily: topDown.daily,

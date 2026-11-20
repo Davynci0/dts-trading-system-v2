@@ -14,7 +14,8 @@ export interface OandaCandleQuery {
   instrument: string; // e.g. "EUR_USD"
   granularity: string; // e.g. "M5" | "M15" | "H1" | "H4" | "D"
   count?: number; // max 5000 per OANDA
-  /** ISO timestamps; when both set they replace `count` (used by the backtester) */
+  /** ISO timestamps. Both set: that range replaces `count` (the backtester).
+   *  Only `to`: the last `count` candles up to that moment (reviewing the past). */
   from?: string;
   to?: string;
   /** include the still-forming candle (for live charts) */
@@ -62,7 +63,12 @@ export async function fetchCandles({
   const apiKey = process.env.OANDA_API_KEY;
   if (!apiKey) throw new Error("OANDA_API_KEY is not set");
 
-  const range = from && to ? `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}` : `&count=${count}`;
+  const range =
+    from && to
+      ? `&from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`
+      : to
+        ? `&count=${count}&to=${encodeURIComponent(to)}`
+        : `&count=${count}`;
   const url =
     `${oandaHost()}/v3/instruments/${instrument}/candles` +
     `?granularity=${granularity}${range}&price=M`;

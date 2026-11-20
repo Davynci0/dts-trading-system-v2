@@ -19,6 +19,8 @@ export interface OverlayData {
     startTime: number;
     /** times price has returned to the zone (0 = untouched) */
     touches?: number;
+    /** false when the trend rule does not allow a trade from this zone */
+    tradeable?: boolean;
   }[];
   /** Alex G Set & Forget: the 50–61.8% AOI of the most recent structure-breaking leg */
   aoi: {
@@ -28,6 +30,9 @@ export interface OverlayData {
     startTime: number;
     legEndTime: number;
     tested: boolean;
+    /** the impulse leg the AOI is measured on */
+    leg?: { lowTime: number; lowPrice: number; highTime: number; highPrice: number };
+    tradeable?: boolean;
   } | null;
   fib: {
     direction: "long" | "short";
@@ -44,6 +49,7 @@ export interface OverlayData {
     isSetup?: boolean;
     /** true while the latest closed candle is inside the golden zone */
     inZone?: boolean;
+    tradeable?: boolean;
   } | null;
   /** pending signal's trade plan (entry/SL/TP), drawn as a position tool */
   position?: {
@@ -121,20 +127,45 @@ export interface OverlayData {
 
 export const EMPTY_OVERLAY: OverlayData = { zones: [], aoi: null, fib: null, trendlines: [] };
 
-const UP = "rgba(38,166,154,";
-const DOWN = "rgba(239,83,80,";
+/**
+ * One colour per idea, used the same way everywhere (chart, legend, tracker):
+ * the four strategies each own a hue, and green/red are kept for direction
+ * and results.
+ */
+export const CHART_COLORS = {
+  breakout: "245,158,11", // amber
+  demand: "38,166,154", // teal — buy zones
+  supply: "239,83,80", // red — sell zones
+  fib: "167,139,250", // violet
+  aoi: "56,189,248", // sky
+  level: "203,213,225", // slate — support / resistance
+  muted: "100,116,139",
+  ink: "229,231,235",
+  win: "38,166,154",
+  loss: "239,83,80",
+} as const;
+
+const rgba = (rgb: string, alpha: number) => `rgba(${rgb},${alpha})`;
+const FONT = '600 10px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
+const FONT_SMALL = '600 9px ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif';
 
 interface PaneSource {
   timeToX(time: number): number | null;
   priceToY(price: number): number | null;
-  width(): number;
 }
 
 /**
- * Custom pane primitive that draws the engine's detected overlays directly on
- * the chart canvas: trendlines extended through their real pivot anchors,
- * supply/demand zone boxes extending right from the base, and the fibonacci
- * golden-zone box. All coordinates come straight from the detection engine.
+ * Draws the engine's analysis on the candle pane. The visual rules:
+ *
+ *  - a strategy's AREA (zone, golden zone, AOI) is a soft box with a solid
+ *    accent bar on its left edge and one label inside its top-left corner;
+ *  - a LEVEL (breakout trigger, support/resistance) is a line with a short
+ *    tag at the right edge;
+ *  - anything the trend rule does not allow is drawn muted — outline only —
+ *    so what can actually be traded is what stands out;
+ *  - labels never overprint each other: one that finds no room is dropped.
+ *
+ * All coordinates come straight from the detection engine.
  */
 class OverlayPaneView implements IPrimitivePaneView {
   constructor(
@@ -148,423 +179,315 @@ class OverlayPaneView implements IPrimitivePaneView {
       draw(target: RenderTarget) {
         target.useMediaCoordinateSpace(({ context: ctx, mediaSize }) => {
           const W = mediaSize.width;
+          const C = CHART_COLORS;
           const fmt = (n: number) => n.toFixed(data.digits ?? 2);
+          const X = (t: number) => source.timeToX(t);
+          const Y = (p: number) => source.priceToY(p);
 
-          // labels are collected, then laid out last so none overprint each other
-          interface Label { text: string; x: number; y: number; color: string; font: string; align: "left" | "right"; prio: number }
+          // ── labels: collected while drawing, laid out at the end ─────────
+          interface Label { text: string; x: number; y: number; rgb: string; align: "left" | "right"; prio: number; small?: boolean; dim?: boolean }
           const labels: Label[] = [];
-          const label = (text: string, x: number, y: number, color: string, font: string, align: "left" | "right", prio: number) =>
-            labels.push({ text, x, y, color, font, align, prio });
+          const tag = (text: string, x: number, y: number, rgb: string, align: "left" | "right", prio: number, opts: { small?: boolean; dim?: boolean } = {}) =>
+            labels.push({ text, x, y, rgb, align, prio, ...opts });
 
-          // fib: anchored to the actual swing, with ratio levels drawn
-          if (data.fib) {
-            const f = data.fib;
-            const xSwing0 = source.timeToX(f.swingLow.time);
-            const xSwing1 = source.timeToX(f.swingHigh.time);
-            const x0 = xSwing0 != null ? Math.min(xSwing0, xSwing1 ?? xSwing0) : 0;
-            const base = f.direction === "long" ? UP : DOWN;
-
-            // golden zone box: from the swing end to the right edge
-            const yTop = source.priceToY(f.goldenTop);
-            const yBottom = source.priceToY(f.goldenBottom);
-            const xZone = xSwing1 ?? x0;
-            if (yTop != null && yBottom != null) {
-              const y = Math.min(yTop, yBottom);
-              const h = Math.max(Math.abs(yBottom - yTop), 4);
-              ctx.fillStyle = `${base}0.22)`;
-              ctx.fillRect(xZone, y, W - xZone, h);
-              ctx.strokeStyle = `${base}0.85)`;
-              ctx.lineWidth = 1.5;
-              ctx.setLineDash([4, 3]);
-              ctx.strokeRect(xZone, y, W - xZone, h);
-              ctx.setLineDash([]);
-              ctx.lineWidth = 1;
-              const tradeAction = f.direction === "long" ? "BUY" : "SELL";
-              const zoneText =
-                f.isSetup === false
-                  ? "Fib reference — Golden (61.8–78.6%), no setup"
-                  : `${tradeAction} ZONE — Golden (61.8–78.6%)${f.inZone ? " · price inside" : ""}`;
-              label(zoneText, xZone + 6, y - 4, `${base}1)`, "bold 11px monospace", "left", 3);
+          // ── primitives ───────────────────────────────────────────────────
+          type Emphasis = "live" | "ready" | "muted";
+          /** A strategy area from x0 to the right edge. Returns the label anchor, or null when off-screen. */
+          const area = (x0: number, priceA: number, priceB: number, rgb: string, emphasis: Emphasis) => {
+            const yA = Y(priceA);
+            const yB = Y(priceB);
+            if (yA == null || yB == null) return null;
+            const top = Math.min(yA, yB);
+            const height = Math.max(Math.abs(yB - yA), 3);
+            const left = Math.max(x0, 0);
+            if (left >= W) return null;
+            if (emphasis !== "muted") {
+              ctx.fillStyle = rgba(rgb, emphasis === "live" ? 0.2 : 0.11);
+              ctx.fillRect(left, top, W - left, height);
             }
-
-            // Retracement levels are measured from the END of the swing: 0% is
-            // where the move finished (the high of an up-swing, the low of a
-            // down-swing) and 100% is where it began.
-            const swingEnd = f.direction === "long" ? f.swingHigh.price : f.swingLow.price;
-            const swingOrigin = f.direction === "long" ? f.swingLow.price : f.swingHigh.price;
-            const levels: { price: number; label: string; strong: boolean }[] = [
-              { price: swingEnd, label: "0%", strong: true },
-              { price: f.level50, label: "50%", strong: false },
-              { price: f.level618, label: "61.8%", strong: true },
-              { price: f.level786, label: "78.6%", strong: true },
-              { price: swingOrigin, label: "100%", strong: true },
-            ];
-            for (const lv of levels) {
-              const y = source.priceToY(lv.price);
-              if (y == null) continue;
-              ctx.strokeStyle = lv.strong ? `${base}0.75)` : `${base}0.5)`;
-              ctx.lineWidth = lv.strong ? 1.5 : 1;
-              ctx.setLineDash(lv.strong ? [] : [3, 4]);
-              ctx.beginPath();
-              ctx.moveTo(x0, y);
-              ctx.lineTo(W, y);
-              ctx.stroke();
-              ctx.setLineDash([]);
-              label(`${lv.label} ${fmt(lv.price)}`, x0 + 4, y - 2, `${base}${lv.strong ? "1)" : "0.8)"}`, lv.strong ? "bold 10px monospace" : "10px monospace", "left", 3);
-            }
-
-            // swing anchor markers
-            for (const s of [f.swingLow, f.swingHigh]) {
-              const x = source.timeToX(s.time);
-              const y = source.priceToY(s.price);
-              if (x == null || y == null) continue;
-              ctx.fillStyle = `${base}1)`;
-              ctx.beginPath();
-              ctx.arc(x, y, 4, 0, Math.PI * 2);
-              ctx.fill();
-            }
-          }
-
-          // Alex G Set & Forget AOI: the 50–61.8% retrace of the impulse leg
-          if (data.aoi) {
-            const a = data.aoi;
-            const x0 = source.timeToX(a.legEndTime);
-            const yTop = source.priceToY(a.top);
-            const yBottom = source.priceToY(a.bottom);
-            if (x0 != null && yTop != null && yBottom != null) {
-              const y = Math.min(yTop, yBottom);
-              const h = Math.max(Math.abs(yBottom - yTop), 4);
-              const base = a.direction === "long" ? UP : DOWN;
-              ctx.fillStyle = `${base}${a.tested ? "0.08)" : "0.22)"}`;
-              ctx.fillRect(x0, y, W - x0, h);
-              ctx.strokeStyle = `${base}${a.tested ? "0.55)" : "0.85)"}`;
-              ctx.lineWidth = 1.5;
-              ctx.setLineDash([6, 4]);
-              ctx.strokeRect(x0, y, W - x0, h);
-              ctx.setLineDash([]);
-              ctx.lineWidth = 1;
-              const aoiAction = a.direction === "long" ? "BUY" : "SELL";
-              label(
-                `${aoiAction} ZONE — AOI 50–61.8% ${a.tested ? "(tested)" : "(untested)"}`,
-                x0 + 6,
-                y + (a.direction === "short" ? 14 : h - 6),
-                `${base}1)`,
-                "bold 11px monospace",
-                "left",
-                2
-              );
-            }
-          }
-
-          // supply/demand zone boxes (extend forward until invalidated)
-          for (const z of data.zones) {
-            const x0 = source.timeToX(z.startTime);
-            const yTop = source.priceToY(z.top);
-            const yBottom = source.priceToY(z.bottom);
-            if (x0 == null || yTop == null || yBottom == null) continue;
-            const y = Math.min(yTop, yBottom);
-            const h = Math.max(Math.abs(yBottom - yTop), 4); // ensure visible even for tiny zones
-            const base = z.kind === "demand" ? UP : DOWN;
-            ctx.fillStyle = `${base}0.22)`;
-            ctx.fillRect(x0, y, W - x0, h);
-            ctx.strokeStyle = `${base}0.85)`;
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([4, 3]);
-            ctx.strokeRect(x0, y, W - x0, h);
-            ctx.setLineDash([]);
+            ctx.strokeStyle = rgba(rgb, emphasis === "muted" ? 0.35 : 0.55);
             ctx.lineWidth = 1;
-            const zoneAction = z.kind === "demand" ? "BUY" : "SELL";
-            const visits =
-              z.touches == null ? "" : z.touches === 0 ? " · untouched" : z.touches === 1 ? " · 1 touch" : ` · ${z.touches} touches`;
-            label(`${zoneAction} ZONE (${z.kind}${visits})`, x0 + 4, y + (z.kind === "supply" ? 14 : h - 6), `${base}1)`, "bold 11px monospace", "left", 4);
-          }
-
-          // trendlines: ray from origin through definitionAnchor, extended to right edge
-          for (const l of data.trendlines ?? []) {
-            const x0 = source.timeToX(l.origin.time);
-            const y0 = source.priceToY(l.origin.price);
-            const x1 = source.timeToX(l.definitionAnchor.time);
-            const y1 = source.priceToY(l.definitionAnchor.price);
-            if (x0 == null || y0 == null || x1 == null || y1 == null || x1 === x0) continue;
-            const slopePx = (y1 - y0) / (x1 - x0);
-            const yW = y0 + slopePx * (W - x0);
-            const color = l.kind === "support" ? UP : DOWN;
-            ctx.strokeStyle = l.broken ? "rgba(148,163,184,0.65)" : `${color}0.95)`;
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash(l.broken ? [6, 4] : []);
+            ctx.setLineDash(emphasis === "muted" ? [3, 3] : []);
+            ctx.strokeRect(left + 0.5, top + 0.5, W - left, height - 1);
+            ctx.setLineDash([]);
+            if (x0 >= 0) {
+              // accent bar where the area begins
+              ctx.fillStyle = rgba(rgb, emphasis === "muted" ? 0.5 : 0.95);
+              ctx.fillRect(left, top, 3, height);
+            }
+            // label sits inside the top-left corner, or above a box too thin to hold it
+            return { x: left + 8, y: height >= 16 ? top + 13 : top - 4 };
+          };
+          const line = (x0: number, x1: number, y: number, rgb: string, alpha: number, width = 1, dash: number[] = []) => {
+            ctx.strokeStyle = rgba(rgb, alpha);
+            ctx.lineWidth = width;
+            ctx.setLineDash(dash);
             ctx.beginPath();
-            ctx.moveTo(x0, y0);
-            ctx.lineTo(W, yW);
+            ctx.moveTo(x0, y);
+            ctx.lineTo(x1, y);
             ctx.stroke();
             ctx.setLineDash([]);
             ctx.lineWidth = 1;
+          };
+          const segment = (ax: number, ay: number, bx: number, by: number, rgb: string, alpha: number, width = 1, dash: number[] = []) => {
+            ctx.strokeStyle = rgba(rgb, alpha);
+            ctx.lineWidth = width;
+            ctx.setLineDash(dash);
+            ctx.beginPath();
+            ctx.moveTo(ax, ay);
+            ctx.lineTo(bx, by);
+            ctx.stroke();
+            ctx.setLineDash([]);
+            ctx.lineWidth = 1;
+          };
+          const dot = (x: number, y: number, rgb: string, radius = 3) => {
+            ctx.fillStyle = rgba(rgb, 1);
+            ctx.beginPath();
+            ctx.arc(x, y, radius, 0, Math.PI * 2);
+            ctx.fill();
+          };
+          const side = (direction: "long" | "short") => (direction === "long" ? "BUY" : "SELL");
+          const emphasisOf = (tradeable: boolean | undefined, live = false): Emphasis =>
+            tradeable === false ? "muted" : live ? "live" : "ready";
+          const againstTrend = (tradeable: boolean | undefined) => (tradeable === false ? " · against the trend" : "");
 
-            // anchor dots
-            for (const a of l.anchors) {
-              const ax = source.timeToX(a.time);
-              const ay = source.priceToY(a.price);
-              if (ax == null || ay == null) continue;
-              ctx.fillStyle = l.broken ? "rgba(148,163,184,0.8)" : `${color}1)`;
-              ctx.beginPath();
-              ctx.arc(ax, ay, 3, 0, Math.PI * 2);
-              ctx.fill();
-            }
-
-            const labelY = y1 != null ? y1 : yW;
-            const labelX = Math.min(x1 + 8, W - 10);
-            label(
-              `${l.kind === "support" ? "SUPPORT" : "RESISTANCE"} ${l.touches} touches${l.broken ? " (broken)" : ""}`,
-              labelX,
-              labelY - 6,
-              l.broken ? "rgba(148,163,184,0.9)" : `${color}1)`,
-              "bold 10px monospace",
-              "left",
-              2
-            );
-          }
-
-          // support/resistance: a thin band where the swings cluster and a line
-          // at the level. Flipped levels (both ceiling and floor) are the ones
-          // that grade a signal, so they are drawn solid; the rest are dashed.
+          // ── context: support / resistance ────────────────────────────────
+          // A line at each level with a short tag on the right. Levels that have
+          // been both ceiling and floor ("flipped") are the ones that grade a
+          // signal, so they are solid; the rest are dotted.
           for (const lvl of data.levels ?? []) {
-            const y = source.priceToY(lvl.price);
+            const y = Y(lvl.price);
             if (y == null) continue;
-            const tone = lvl.kind === "support" ? UP : DOWN;
-            const yTop = source.priceToY(lvl.top);
-            const yBottom = source.priceToY(lvl.bottom);
-            if (yTop != null && yBottom != null && yBottom - yTop >= 1) {
-              ctx.fillStyle = `${tone}0.07)`;
-              ctx.fillRect(0, yTop, W, yBottom - yTop);
-            }
-            ctx.strokeStyle = `${tone}${lvl.flipped ? "0.9)" : "0.65)"}`;
-            ctx.lineWidth = lvl.flipped ? 1.5 : 1;
-            ctx.setLineDash(lvl.flipped ? [] : [5, 4]);
-            ctx.beginPath();
-            ctx.moveTo(0, y);
-            ctx.lineTo(W, y);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.lineWidth = 1;
-            label(
-              `${lvl.kind === "support" ? "S" : "R"} ${fmt(lvl.price)} · ${lvl.touches} touches${lvl.flipped ? " · flipped" : ""}`,
-              W - 2,
-              y - 5,
-              `${tone}1)`,
-              "bold 10px monospace",
-              "right",
-              3
-            );
-          }
-
-          // head-and-shoulders: zigzag through LS→N1→H→N2→RS + neckline + target.
-          for (const p of data.headshoulders ?? []) {
-            const pts = [p.ls, p.n1, p.h, p.n2, p.rs]
-              .map((pt) => ({ ...pt, px: source.timeToX(pt.time), py: source.priceToY(pt.price) }));
-            const valid = pts.every((g) => g.px != null && g.py != null);
-            if (!valid) continue;
-            const color = p.direction === "short" ? DOWN : UP;
-            // zigzag through the 5 pivots
-            ctx.strokeStyle = `${color}0.95)`;
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash([5, 4]);
-            ctx.beginPath();
-            ctx.moveTo(pts[0].px!, pts[0].py!);
-            for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].px!, pts[i].py!);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.lineWidth = 1;
-            // pivot dots + labels
-            const labels = ["LS", "N1", "H", "N2", "RS"];
-            for (let i = 0; i < pts.length; i++) {
-              const g = pts[i];
-              ctx.fillStyle = `${color}1)`;
-              ctx.beginPath();
-              ctx.arc(g.px!, g.py!, 4, 0, Math.PI * 2);
-              ctx.fill();
-              // text label above/below the pivot
-              const above = i === 0 || i === 2 || i === 4 ? p.direction === "short" : p.direction === "long";
-              label(labels[i], g.px!, g.py! + (above ? -12 : 16), `${color}1)`, "bold 9px monospace", "left", 2);
-            }
-            // neckline (N1→N2 extended right)
-            const [n1px, n1py] = [source.timeToX(p.n1.time), source.priceToY(p.n1.price)];
-            const [n2px, n2py] = [source.timeToX(p.n2.time), source.priceToY(p.n2.price)];
-            if (n1px != null && n1py != null && n2px != null && n2py != null && n2px !== n1px) {
-              const slope = (n2py - n1py) / (n2px - n1px);
-              ctx.strokeStyle = "rgba(217,119,6,0.9)"; // amber
-              ctx.lineWidth = 2;
-              ctx.beginPath();
-              ctx.moveTo(n1px, n1py);
-              ctx.lineTo(W, n1py + slope * (W - n1px));
-              ctx.stroke();
-              ctx.lineWidth = 1;
-              label("NECKLINE", W - 6, n1py + slope * (W - n1px) - 8, "rgba(217,119,6,1)", "bold 9px monospace", "right", 2);
-            }
-            // target line
-            const ty = source.priceToY(p.target);
-            if (ty != null) {
-              ctx.strokeStyle = "rgba(217,119,6,0.7)";
-              ctx.setLineDash([8, 4]);
-              ctx.beginPath();
-              ctx.moveTo(0, ty);
-              ctx.lineTo(W, ty);
-              ctx.stroke();
-              ctx.setLineDash([]);
-              label(`${p.direction === "short" ? "H&S" : "Inverse H&S"} target ${fmt(p.target)}`, W - 6, ty - 6, "rgba(217,119,6,1)", "bold 9px monospace", "right", 2);
-            }
-          }
-
-          // trend breakout: the Asian range box and the one-week channel. Only
-          // the level on the trend's side is a trigger; it is drawn solid and
-          // labelled, the opposite side stays faint.
-          if (data.breakout) {
-            const b = data.breakout;
-            const AMBER = "rgba(245,158,11,";
-            const SLATE = "rgba(148,163,184,";
-            const side = b.trend === 1 ? "BUY" : b.trend === -1 ? "SELL" : null;
-            const triggerLine = (price: number, fromX: number, text: string, live: boolean) => {
-              const y = source.priceToY(price);
-              if (y == null) return;
-              ctx.strokeStyle = `${AMBER}${live ? "0.95)" : "0.55)"}`;
-              ctx.lineWidth = live ? 2 : 1.5;
-              ctx.setLineDash(live ? [] : [6, 4]);
-              ctx.beginPath();
-              ctx.moveTo(Math.max(0, fromX), y);
-              ctx.lineTo(W, y);
-              ctx.stroke();
-              ctx.setLineDash([]);
-              ctx.lineWidth = 1;
-              label(text, W - 6, y - 4, `${AMBER}1)`, "bold 10px monospace", "right", 1);
-            };
-            if (b.asian) {
-              const x0 = source.timeToX(b.asian.startTime);
-              const x1 = source.timeToX(b.asian.endTime);
-              const yTop = source.priceToY(b.asian.high);
-              const yBottom = source.priceToY(b.asian.low);
-              if (x0 != null && yTop != null && yBottom != null) {
-                const xEnd = x1 != null ? x1 : W;
-                ctx.fillStyle = `${SLATE}0.10)`;
-                ctx.fillRect(x0, yTop, Math.max(xEnd - x0, 2), yBottom - yTop);
-                ctx.strokeStyle = `${SLATE}0.55)`;
-                ctx.lineWidth = 1;
-                ctx.strokeRect(x0, yTop, Math.max(xEnd - x0, 2), yBottom - yTop);
-                label("Asian range", x0 + 4, yTop + 12, `${SLATE}1)`, "10px monospace", "left", 4);
-                if (side) {
-                  const level = b.trend === 1 ? b.asian.high : b.asian.low;
-                  triggerLine(level, xEnd, `${side} on a close ${b.trend === 1 ? "above" : "below"} ${fmt(level)} · Asian range${b.asianWindowOpen ? "" : " (window closed)"}`, b.asianWindowOpen);
-                }
+            const from = Math.max(X(lvl.time) ?? 0, 0);
+            if (lvl.flipped) {
+              const yTop = Y(lvl.top);
+              const yBottom = Y(lvl.bottom);
+              if (yTop != null && yBottom != null) {
+                ctx.fillStyle = rgba(C.level, 0.05);
+                ctx.fillRect(from, Math.min(yTop, yBottom), W - from, Math.max(Math.abs(yBottom - yTop), 1));
               }
             }
-            if (b.channel && side) {
-              const level = b.trend === 1 ? b.channel.high : b.channel.low;
-              triggerLine(level, 0, `${side} on a close ${b.trend === 1 ? "above" : "below"} ${fmt(level)} · 1-week ${b.trend === 1 ? "high" : "low"}${b.channelWindowOpen ? "" : " (window closed)"}`, b.channelWindowOpen);
-            }
+            line(from, W, y, C.level, lvl.flipped ? 0.6 : 0.35, 1, lvl.flipped ? [] : [2, 4]);
+            const name = lvl.flipped ? "S/R" : lvl.kind === "support" ? "S" : "R";
+            tag(`${name} ${fmt(lvl.price)}${lvl.touches > 1 ? ` ×${lvl.touches}` : ""}`, W - 4, y - 3, C.level, "right", 6, { small: true, dim: !lvl.flipped });
           }
 
-          // market structure: a thin zigzag through the engine's swing points,
-          // each tagged HH / HL / LH / LL against the previous swing of its kind
+          // ── context: market structure ────────────────────────────────────
           if (data.structure && data.structure.length > 1) {
             const pts = data.structure
-              .map((sp) => ({ ...sp, px: source.timeToX(sp.time), py: source.priceToY(sp.price) }))
+              .map((sp) => ({ ...sp, px: X(sp.time), py: Y(sp.price) }))
               .filter((sp): sp is typeof sp & { px: number; py: number } => sp.px != null && sp.py != null);
-            ctx.strokeStyle = "rgba(148,163,184,0.45)";
+            ctx.strokeStyle = rgba(C.muted, 0.45);
             ctx.lineWidth = 1;
             ctx.beginPath();
             pts.forEach((sp, i) => (i === 0 ? ctx.moveTo(sp.px, sp.py) : ctx.lineTo(sp.px, sp.py)));
             ctx.stroke();
             for (const sp of pts) {
-              // off-screen swings keep their place in the zigzag but get no
-              // label — the layout would otherwise pile them up at the edge
-              if (sp.px < 0 || sp.px > W) continue;
-              // HH and HL are bullish structure, LH and LL bearish
-              const tone = sp.label === "HH" || sp.label === "HL" ? UP : sp.label === "LH" || sp.label === "LL" ? DOWN : "rgba(148,163,184,";
-              ctx.fillStyle = `${tone}1)`;
-              ctx.beginPath();
-              ctx.arc(sp.px, sp.py, 2.5, 0, Math.PI * 2);
-              ctx.fill();
-              label(sp.label, sp.px - 8, sp.py + (sp.kind === "high" ? -8 : 18), `${tone}1)`, "bold 10px monospace", "left", 5);
+              if (sp.px < 0 || sp.px > W) continue; // off-screen swings keep their place in the zigzag, no label
+              const bullish = sp.label === "HH" || sp.label === "HL";
+              const bearish = sp.label === "LH" || sp.label === "LL";
+              tag(sp.label, sp.px - 7, sp.py + (sp.kind === "high" ? -7 : 15), bullish ? C.demand : bearish ? C.supply : C.muted, "left", 8, { small: true });
             }
           }
 
-          // settled trades: path from entry to where TP/SL was actually hit
-          for (const h of data.history ?? []) {
-            const xA = source.timeToX(h.startTime);
-            const xB = source.timeToX(h.endTime);
-            const yA = source.priceToY(h.entry);
-            const yB = source.priceToY(h.exitPrice);
-            if (xA == null || xB == null || yA == null || yB == null) continue;
-            if (xB < 0) continue; // finished before the visible range — nothing to anchor a label to
-            const color = h.outcome === "win" ? "#26a69a" : "#ef5350";
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 1.5;
-            ctx.setLineDash(h.skipped ? [4, 3] : []);
-            ctx.beginPath();
-            ctx.moveTo(xA, yA);
-            ctx.lineTo(xB, yB);
-            ctx.stroke();
-            ctx.setLineDash([]);
-            ctx.fillStyle = color;
-            ctx.beginPath();
-            ctx.arc(xA, yA, 3, 0, Math.PI * 2);
-            ctx.fill();
-            ctx.beginPath();
-            ctx.arc(xB, yB, 5, 0, Math.PI * 2);
-            ctx.fill();
-            const verb = h.outcome === "win" ? `TP +${h.r.toFixed(1)}R` : "SL −1R";
-            label(`${h.skipped ? "skip " : ""}${h.direction === "long" ? "L" : "S"} ${verb}`, xB + 6, yB - 4, color, "bold 10px monospace", "left", 1);
+          // ── context: trendlines ──────────────────────────────────────────
+          for (const l of data.trendlines ?? []) {
+            const x0 = X(l.origin.time);
+            const y0 = Y(l.origin.price);
+            const x1 = X(l.definitionAnchor.time);
+            const y1 = Y(l.definitionAnchor.price);
+            if (x0 == null || y0 == null || x1 == null || y1 == null || x1 === x0) continue;
+            const rgb = l.broken ? C.muted : l.kind === "support" ? C.demand : C.supply;
+            const yEdge = y0 + ((y1 - y0) / (x1 - x0)) * (W - x0);
+            segment(x0, y0, W, yEdge, rgb, l.broken ? 0.5 : 0.8, 1, l.broken ? [5, 4] : []);
+            for (const a of l.anchors) {
+              const ax = X(a.time);
+              const ay = Y(a.price);
+              if (ax != null && ay != null) dot(ax, ay, rgb, 2.5);
+            }
+            tag(`Trendline · ${l.kind} ×${l.touches}${l.broken ? " · broken" : ""}`, Math.min(x1 + 8, W - 10), y1 - 5, rgb, "left", 7, { small: true, dim: l.broken });
           }
-          ctx.lineWidth = 1;
 
-          // pending trade plan: shaded reward/risk boxes with entry, SL and TP lines
+          // ── context: head and shoulders ──────────────────────────────────
+          for (const p of data.headshoulders ?? []) {
+            const pts = [p.ls, p.n1, p.h, p.n2, p.rs].map((pt) => ({ px: X(pt.time), py: Y(pt.price) }));
+            if (!pts.every((g) => g.px != null && g.py != null)) continue;
+            const rgb = p.direction === "short" ? C.supply : C.demand;
+            for (let i = 1; i < pts.length; i++) segment(pts[i - 1].px!, pts[i - 1].py!, pts[i].px!, pts[i].py!, rgb, 0.8, 1, [4, 3]);
+            ["LS", "", "H", "", "RS"].forEach((name, i) => {
+              if (!name) return;
+              dot(pts[i].px!, pts[i].py!, rgb, 2.5);
+              tag(name, pts[i].px! - 6, pts[i].py! + (p.direction === "short" ? -7 : 15), rgb, "left", 7, { small: true });
+            });
+            const [n1, n2] = [pts[1], pts[3]];
+            if (n2.px !== n1.px) {
+              const yEdge = n1.py! + ((n2.py! - n1.py!) / (n2.px! - n1.px!)) * (W - n1.px!);
+              segment(n1.px!, n1.py!, W, yEdge, C.level, 0.6);
+              tag(`${p.direction === "short" ? "H&S" : "Inverse H&S"} neckline`, W - 4, yEdge - 3, C.level, "right", 7, { small: true });
+            }
+            const ty = Y(p.target);
+            if (ty != null) {
+              line(Math.max(pts[4].px!, 0), W, ty, rgb, 0.5, 1, [6, 4]);
+              tag(`H&S target ${fmt(p.target)}`, W - 4, ty - 3, rgb, "right", 7, { small: true });
+            }
+          }
+
+          // ── strategy: supply / demand zones ──────────────────────────────
+          for (const z of data.zones) {
+            const rgb = z.kind === "demand" ? C.demand : C.supply;
+            const at = area(X(z.startTime) ?? 0, z.top, z.bottom, rgb, emphasisOf(z.tradeable));
+            if (!at) continue;
+            const visits = z.touches == null ? "" : z.touches === 0 ? " · untouched" : z.touches === 1 ? " · 1 touch" : ` · ${z.touches} touches`;
+            tag(`ZONE · ${z.kind === "demand" ? "BUY" : "SELL"} ${fmt(z.bottom)}–${fmt(z.top)}${visits}${againstTrend(z.tradeable)}`, at.x, at.y, rgb, "left", 3, { dim: z.tradeable === false });
+          }
+
+          // ── strategy: set & forget AOI ───────────────────────────────────
+          if (data.aoi) {
+            const a = data.aoi;
+            if (a.leg) {
+              const [lx, ly, hx, hy] = [X(a.leg.lowTime), Y(a.leg.lowPrice), X(a.leg.highTime), Y(a.leg.highPrice)];
+              if (lx != null && ly != null && hx != null && hy != null) segment(lx, ly, hx, hy, C.aoi, 0.6, 1, [5, 3]);
+            }
+            const at = area(X(a.legEndTime) ?? 0, a.top, a.bottom, C.aoi, a.tested ? "muted" : emphasisOf(a.tradeable));
+            if (at) {
+              tag(`SET & FORGET · ${side(a.direction)} AOI ${fmt(a.bottom)}–${fmt(a.top)}${a.tested ? " · already tested" : ""}${againstTrend(a.tradeable)}`, at.x, at.y, C.aoi, "left", 2, { dim: a.tested || a.tradeable === false });
+            }
+          }
+
+          // ── strategy: fibonacci golden zone ──────────────────────────────
+          if (data.fib) {
+            const f = data.fib;
+            const up = f.direction === "long";
+            const end = up ? f.swingHigh : f.swingLow; // 0% — where the swing finished
+            const origin = up ? f.swingLow : f.swingHigh; // 100% — where it began
+            const [ox, oy, ex, ey] = [X(origin.time), Y(origin.price), X(end.time), Y(end.price)];
+            const reference = f.isSetup === false;
+            if (ox != null && oy != null && ex != null && ey != null) {
+              // the swing being measured: present, but never louder than the candles
+              segment(ox, oy, ex, ey, C.fib, reference ? 0.3 : 0.5, 1, [5, 3]);
+              dot(ox, oy, C.fib, 2.5);
+              dot(ex, ey, C.fib, 2.5);
+              // an anchor scrolled out of view gets no label (it would be pinned to the edge)
+              if (ox >= 0 && ox <= W) tag("100%", ox - 12, oy + (up ? 14 : -6), C.fib, "left", 6, { small: true, dim: true });
+              if (ex >= 0 && ex <= W) tag("0%", ex - 6, ey + (up ? -6 : 14), C.fib, "left", 6, { small: true, dim: true });
+            }
+            const from = ex ?? 0;
+            const at = area(from, f.goldenTop, f.goldenBottom, C.fib, reference ? "muted" : emphasisOf(f.tradeable, f.inZone === true));
+            const y50 = Y(f.level50);
+            if (y50 != null) {
+              line(Math.max(from, 0), W, y50, C.fib, 0.35, 1, [2, 4]);
+              tag("50%", W - 4, y50 - 3, C.fib, "right", 7, { small: true, dim: true });
+            }
+            if (at) {
+              const text = reference
+                ? `FIB reference · 61.8–78.6% ${fmt(f.goldenBottom)}–${fmt(f.goldenTop)} · no setup`
+                : `FIBONACCI · ${side(f.direction)} 61.8–78.6% ${fmt(f.goldenBottom)}–${fmt(f.goldenTop)}${f.inZone ? " · price inside" : ""}${againstTrend(f.tradeable)}`;
+              tag(text, at.x, at.y, C.fib, "left", 2, { dim: reference || f.tradeable === false });
+            }
+          }
+
+          // ── strategy: trend breakout ─────────────────────────────────────
+          // The Asian range is a bracket over its own hours; only the level on
+          // the trend's side is a trigger, drawn as one amber line.
+          if (data.breakout) {
+            const b = data.breakout;
+            const action = b.trend === 1 ? "BUY" : b.trend === -1 ? "SELL" : null;
+            const beyond = b.trend === 1 ? "above" : "below";
+            let rangeEnd = 0;
+            if (b.asian) {
+              const x0 = X(b.asian.startTime);
+              const x1 = X(b.asian.endTime);
+              const yTop = Y(b.asian.high);
+              const yBottom = Y(b.asian.low);
+              if (x0 != null && yTop != null && yBottom != null) {
+                const xEnd = x1 ?? W;
+                rangeEnd = xEnd;
+                ctx.fillStyle = rgba(C.breakout, 0.05);
+                ctx.fillRect(x0, yTop, Math.max(xEnd - x0, 2), yBottom - yTop);
+                ctx.strokeStyle = rgba(C.breakout, 0.4);
+                ctx.lineWidth = 1;
+                ctx.setLineDash([2, 3]);
+                ctx.strokeRect(x0 + 0.5, yTop + 0.5, Math.max(xEnd - x0, 2), yBottom - yTop);
+                ctx.setLineDash([]);
+                tag("Asian range", Math.max(x0, 0) + 6, yTop + 12, C.breakout, "left", 7, { small: true, dim: true });
+              }
+            }
+            if (action) {
+              const asianLevel = b.asian ? (b.trend === 1 ? b.asian.high : b.asian.low) : null;
+              const weekLevel = b.channel ? (b.trend === 1 ? b.channel.high : b.channel.low) : null;
+              const same = asianLevel != null && weekLevel != null && Math.abs(asianLevel - weekLevel) < 1e-9;
+              const trigger = (level: number, from: number, what: string, open: boolean) => {
+                const y = Y(level);
+                if (y == null) return;
+                line(Math.max(from, 0), W, y, C.breakout, open ? 0.95 : 0.55, open ? 1.5 : 1, open ? [] : [6, 4]);
+                tag(`BREAKOUT · ${action} ${beyond} ${fmt(level)} · ${what}${open ? "" : " · closed"}`, W - 4, y - 3, C.breakout, "right", 1, { dim: !open });
+              };
+              if (same) {
+                trigger(asianLevel!, 0, "Asian range + 1-week", b.asianWindowOpen || b.channelWindowOpen);
+              } else {
+                if (asianLevel != null) trigger(asianLevel, rangeEnd, "Asian range", b.asianWindowOpen);
+                if (weekLevel != null) trigger(weekLevel, 0, `1-week ${b.trend === 1 ? "high" : "low"}`, b.channelWindowOpen);
+              }
+            }
+          }
+
+          // ── results: settled trades ──────────────────────────────────────
+          for (const h of data.history ?? []) {
+            const [xA, xB, yA, yB] = [X(h.startTime), X(h.endTime), Y(h.entry), Y(h.exitPrice)];
+            if (xA == null || xB == null || yA == null || yB == null || xB < 0) continue;
+            const rgb = h.outcome === "win" ? C.win : C.loss;
+            segment(xA, yA, xB, yB, rgb, 0.9, 1.5, h.skipped ? [4, 3] : []);
+            dot(xA, yA, rgb, 2.5);
+            dot(xB, yB, rgb, 4);
+            const result = h.outcome === "win" ? `+${h.r.toFixed(1)}R` : "−1R";
+            tag(`${h.skipped ? "skipped " : ""}${h.direction === "long" ? "BUY" : "SELL"} ${result}`, xB + 7, yB - 3, rgb, "left", 4, { small: true });
+          }
+
+          // ── the open trade plan ──────────────────────────────────────────
           if (data.position) {
             const p = data.position;
-            const x0 = source.timeToX(p.startTime) ?? 0;
-            const yE = source.priceToY(p.entry);
-            const yS = source.priceToY(p.stopLoss);
-            const yT = source.priceToY(p.takeProfit);
+            const x0 = Math.max(X(p.startTime) ?? 0, 0);
+            const [yE, yS, yT] = [Y(p.entry), Y(p.stopLoss), Y(p.takeProfit)];
             if (yE != null && yS != null && yT != null) {
-              ctx.fillStyle = "rgba(38,166,154,0.10)";
+              ctx.fillStyle = rgba(C.win, 0.09);
               ctx.fillRect(x0, Math.min(yE, yT), W - x0, Math.abs(yT - yE));
-              ctx.fillStyle = "rgba(239,83,80,0.10)";
+              ctx.fillStyle = rgba(C.loss, 0.09);
               ctx.fillRect(x0, Math.min(yE, yS), W - x0, Math.abs(yS - yE));
-
-              const levels: [number, string, string][] = [
-                [yT, "#26a69a", `TP ${fmt(p.takeProfit)}  +${p.rewardPips.toFixed(0)} pips  ${p.rMultiple.toFixed(1)}R`],
-                [yE, "#d1d4dc", `${p.skipped ? "SKIPPED " : ""}${p.direction.toUpperCase()} ${fmt(p.entry)}`],
-                [yS, "#ef5350", `SL ${fmt(p.stopLoss)}  −${p.riskPips.toFixed(0)} pips`],
-              ];
-              for (const [y, color, text] of levels) {
-                ctx.strokeStyle = color;
-                ctx.lineWidth = 1.5;
-                ctx.setLineDash(p.skipped ? [6, 4] : []);
-                ctx.beginPath();
-                ctx.moveTo(x0, y);
-                ctx.lineTo(W, y);
-                ctx.stroke();
-                label(text, W - 6, y - 4, color, "bold 10px monospace", "right", 0);
-              }
-              ctx.setLineDash([]);
-              ctx.lineWidth = 1;
+              const dash = p.skipped ? [6, 4] : [];
+              line(x0, W, yT, C.win, 0.95, 1.5, dash);
+              line(x0, W, yE, C.ink, 0.95, 1.5, dash);
+              line(x0, W, yS, C.loss, 0.95, 1.5, dash);
+              tag(`TARGET ${fmt(p.takeProfit)} · +${p.rMultiple.toFixed(p.rMultiple % 1 ? 2 : 0)}R`, W - 4, yT - 3, C.win, "right", 0);
+              tag(`${p.skipped ? "SKIPPED " : ""}${side(p.direction)} ${fmt(p.entry)}`, W - 4, yE - 3, C.ink, "right", 0);
+              tag(`STOP ${fmt(p.stopLoss)}`, W - 4, yS - 3, C.loss, "right", 0);
             }
           }
 
-          // lay out labels by priority; one that cannot find a free slot is dropped, never overprinted
+          // ── label layout: by priority; no room means no label ────────────
           const placed: { x0: number; y0: number; x1: number; y1: number }[] = [];
-          const H = 13;
           labels.sort((a, b) => a.prio - b.prio);
           for (const l of labels) {
-            ctx.font = l.font;
-            const w = ctx.measureText(l.text).width + 8;
-            const left = Math.max(2, Math.min(l.align === "right" ? l.x - w + 4 : l.x - 4, W - w - 2));
-            for (const dy of [0, H, -H, 2 * H, -2 * H, 3 * H, -3 * H]) {
-              const top = l.y - 10 + dy;
+            ctx.font = l.small ? FONT_SMALL : FONT;
+            const H = l.small ? 12 : 14;
+            const w = ctx.measureText(l.text).width + (l.small ? 8 : 12);
+            const left = Math.max(2, Math.min(l.align === "right" ? l.x - w : l.x, W - w - 2));
+            for (const dy of [0, H + 1, -(H + 1), 2 * (H + 1), -2 * (H + 1), 3 * (H + 1), -3 * (H + 1)]) {
+              const top = l.y - H + 3 + dy;
               if (top < 0 || top + H > mediaSize.height) continue;
-              if (placed.some((p) => left < p.x1 && left + w > p.x0 && top < p.y1 && top + H > p.y0)) continue;
+              if (placed.some((p) => left < p.x1 + 2 && left + w > p.x0 - 2 && top < p.y1 + 1 && top + H > p.y0 - 1)) continue;
               placed.push({ x0: left, y0: top, x1: left + w, y1: top + H });
-              ctx.fillStyle = "rgba(11,14,17,0.85)";
+              ctx.fillStyle = "rgba(11,14,17,0.88)";
               ctx.fillRect(left, top, w, H);
-              ctx.fillStyle = l.color;
+              if (!l.small) {
+                // strategy tags carry their colour as a bar; context tags stay plain
+                ctx.fillStyle = rgba(l.rgb, l.dim ? 0.5 : 1);
+                ctx.fillRect(left, top, 2, H);
+              }
+              ctx.fillStyle = rgba(l.rgb, l.dim ? 0.7 : 1);
               ctx.textAlign = "left";
-              ctx.fillText(l.text, left + 4, top + 10);
+              ctx.textBaseline = "middle";
+              ctx.fillText(l.text, left + (l.small ? 4 : 7), top + H / 2 + 0.5);
+              ctx.textBaseline = "alphabetic";
               break;
             }
           }
@@ -594,7 +517,6 @@ export class OverlayPrimitive implements ISeriesPrimitive<Time> {
         return x == null ? null : (x as number);
       },
       priceToY: (p) => series.priceToCoordinate(p) as number | null,
-      width: () => 0,
     };
     this._view = new OverlayPaneView(source, this.data);
   }

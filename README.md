@@ -149,11 +149,11 @@ npx tsx scripts/verify-risk.ts     # stops, targets, sizing, cost cap
 
 ## Routes
 
-- `/` — dashboard: M15 chart with the engine's overlays (breakout levels, support/resistance, zones, fib, AOI, trendlines, structure, trade plan), daily trend and entry-window status, live confirmation tracker, signal feed, Ask AI, Scan now
+- `/` — dashboard: M15 chart with the four strategies drawn in their own colours (breakout amber, set & forget blue, zones green/red, Fibonacci violet; a setup against the trend is drawn muted), key levels, optional structure/trendlines, the open trade plan and past results; a legend says what each strategy is waiting on. `/?asOf=2026-11-19T07:15Z` shows the chart as it stood at that moment
 - `/backtests` — stored backtest runs and the quick run
 - `/login` — Supabase auth
 - `/api/candles` — OANDA candle proxy (key stays server-side)
-- `/api/analysis` — everything the chart draws, from the same engine the scanner uses
+- `/api/analysis` — everything the chart draws, from the same engine the scanner uses (`&to=<ISO time>` for a past moment)
 - `/api/scan` — run the engine (GET = scheduled, POST = dashboard)
 - `/api/signals`, `/api/setups` — live feed + confirmation state
 - `/api/risk/preview` — stop / target / sizing check from live structure
