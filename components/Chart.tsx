@@ -154,7 +154,7 @@ export default function Chart({
       const visibleBars = timeframe === "M15" ? 180 : 150;
       chartRef.current?.timeScale().setVisibleLogicalRange({
         from: Math.max(0, candles.length - visibleBars),
-        to: candles.length + 5,
+        to: candles.length + 14, // room on the right for level labels, clear of the candles
       });
     }
   }, [candles, timeframe, viewKey]);
@@ -208,6 +208,8 @@ export default function Chart({
       overlay.position != null ||
       (overlay.trendlines?.length ?? 0) > 0 ||
       (overlay.levels?.length ?? 0) > 0 ||
+      (overlay.headshoulders?.length ?? 0) > 0 ||
+      (overlay.structure?.length ?? 0) > 0 ||
       (overlay.history?.length ?? 0) > 0;
     if (has) {
       const p = new OverlayPrimitive(overlay);

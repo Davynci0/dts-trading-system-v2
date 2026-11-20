@@ -166,19 +166,18 @@ check("K: stop anchors on real swing, not the 0.3-pip wiggle", rK.ok && Math.abs
 {
   const aud: Candle[] = [];
   for (let i = 0; i < 60; i++) {
-    const c = i % 2 === 0 ? 1.95 : 1.9506;
-    aud.push({ time: 1_700_000_000 + i * 900, open: c, high: c + 0.0006, low: c - 0.0006, close: c, volume: 1 });
+    const c = i % 2 === 0 ? 1.95 : 1.9515;
+    aud.push({ time: 1_700_000_000 + i * 900, open: c, high: c + 0.0015, low: c - 0.0015, close: c, volume: 1 });
   }
   const ap = piv(aud);
-  const audAtr = atr(aud)!;
-  // far enough that GBP/AUD's entry cost (2.25 pips) stays under 10% of the risk
-  const swingLow = 1.95 - 0.0024 - 0.25 * audAtr;
+  // far enough that GBP/AUD's trading cost (4 pips) stays under 10% of the risk
+  const swingLow = 1.95 - 0.004;
   const rM = computeRiskLevels({
     instrument: "GBP_AUD",
     direction: "long",
     entry: 1.95,
     candles: aud,
-    pivots: [ap(20, "low", swingLow), ap(40, "high", 1.96)],
+    pivots: [ap(20, "low", swingLow), ap(40, "high", 1.965)],
     accountBalance: 10000,
     quoteUsdRate: 0.65, // AUD/USD
   });
@@ -219,7 +218,7 @@ check("K: stop anchors on real swing, not the 0.3-pip wiggle", rK.ok && Math.abs
   }
   const np = piv(nzd);
   // a tight zone right under price: the thesis stop would be ~6 pips away,
-  // but GBP/NZD costs 2.75 pips to enter — nearly half the risk
+  // but GBP/NZD costs 5 pips a round trip — most of the risk
   const rO = computeRiskLevels({
     instrument: "GBP_NZD",
     direction: "long",
@@ -230,7 +229,7 @@ check("K: stop anchors on real swing, not the 0.3-pip wiggle", rK.ok && Math.abs
     accountBalance: 10000,
     quoteUsdRate: 0.58,
   });
-  const cost = 0.000275;
+  const cost = 0.0005;
   check("O: a too-tight stop is widened to the cost floor", rO.levels != null && Math.abs(rO.levels.stopDistance - cost / 0.1) < 1e-9, rO.levels ? `${(rO.levels.stopDistance * 1e4).toFixed(1)} pips` : "no levels");
   check("O: the basis says why it was widened", !!rO.levels?.stopBasis.includes("widened so costs"), rO.levels?.stopBasis ?? "");
   check("O: costs end at ≤10% of the risk", rO.levels != null && cost / rO.levels.stopDistance <= 0.1 + 1e-9, rO.levels ? `${((cost / rO.levels.stopDistance) * 100).toFixed(1)}%` : "");

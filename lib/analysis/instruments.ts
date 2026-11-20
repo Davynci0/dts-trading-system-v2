@@ -31,12 +31,13 @@ export function typicalSpread(instrument: string): number {
 }
 
 /**
- * What one entry costs in price terms: half the spread (mid → fill) plus
- * slippage. Stops are quoted from the fill, so this is the share of the risk
- * that is lost the moment the trade is opened.
+ * What one trade costs in price terms, charged once at entry: the full spread
+ * plus slippage. Candles are MID prices, so a long buys half a spread above
+ * mid and its stop/target are hit on the bid, half a spread below — the
+ * round trip pays the whole spread, not half of it.
  */
-export function entryCost(instrument: string): number {
-  return typicalSpread(instrument) / 2 + SLIPPAGE_PIPS * pipSize(instrument);
+export function tradeCost(instrument: string): number {
+  return typicalSpread(instrument) + SLIPPAGE_PIPS * pipSize(instrument);
 }
 
 /**

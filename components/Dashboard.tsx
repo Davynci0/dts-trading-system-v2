@@ -16,6 +16,7 @@ const LAYERS = [
   { id: "trendlines", label: "Trendlines" },
   { id: "levels", label: "S/R" },
   { id: "headshoulders", label: "H&S" },
+  { id: "structure", label: "Structure" },
   { id: "position", label: "Trade plan" },
   { id: "history", label: "Results" },
 ] as const;
@@ -32,6 +33,14 @@ interface TopDownSummary {
   safetyLine: { kind: string; touches: number } | null;
 }
 
+/** What the send gate currently allows on this pair (from /api/analysis). */
+interface GateSummary {
+  inSession: boolean;
+  sessionHours: string;
+  longAllowed: boolean;
+  shortAllowed: boolean;
+}
+
 export default function Dashboard() {
   const [pair, setPair] = useState<Pair>("XAU_USD");
   const timeframe: Timeframe = "M15";
@@ -39,6 +48,7 @@ export default function Dashboard() {
   const [liveCandle, setLiveCandle] = useState<Candle | null>(null);
   const [overlay, setOverlay] = useState<OverlayData>(EMPTY_OVERLAY);
   const [topDown, setTopDown] = useState<TopDownSummary | null>(null);
+  const [gate, setGate] = useState<GateSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [telegramStatus, setTelegramStatus] = useState<string | null>(null);
@@ -53,6 +63,7 @@ export default function Dashboard() {
     trendlines: true,
     levels: true,
     headshoulders: true,
+    structure: true,
   });
   const analysisSigRef = useRef<string>("");
 
@@ -129,6 +140,7 @@ export default function Dashboard() {
       trendlines: layers.trendlines ? overlay.trendlines : undefined,
       levels: layers.levels ? overlay.levels : undefined,
       headshoulders: layers.headshoulders ? overlay.headshoulders : undefined,
+      structure: layers.structure ? overlay.structure : undefined,
       position: layers.position ? position : null,
       history: layers.history ? history : [],
       digits: (() => {
@@ -186,6 +198,8 @@ export default function Dashboard() {
             l: json.trendlines ?? [],
             hs: json.headshoulders ?? [],
             lv: json.levels ?? [],
+            st: json.structure ?? [],
+            g: json.gate ?? null,
             d: json.topDown ?? null,
           });
           if (!initial && sig === analysisSigRef.current) return; // analysis unchanged
@@ -198,8 +212,10 @@ export default function Dashboard() {
             trendlines: json.trendlines ?? [],
             levels: json.levels ?? [],
             headshoulders: json.headshoulders ?? [],
+            structure: json.structure ?? [],
           });
           setTopDown(json.topDown ?? null);
+          setGate(json.gate ?? null);
           setError(null);
         })
         .catch((e: Error) => {
@@ -209,6 +225,7 @@ export default function Dashboard() {
             setCandles([]);
             setOverlay(EMPTY_OVERLAY);
             setTopDown(null);
+            setGate(null);
           }
         })
         .finally(() => {
@@ -245,6 +262,7 @@ export default function Dashboard() {
     setLoading(true);
     setOverlay(EMPTY_OVERLAY);
     setTopDown(null);
+    setGate(null);
     setLiveCandle(null);
     analysisSigRef.current = "";
   }
@@ -328,6 +346,20 @@ export default function Dashboard() {
               Bias {topDown.bias}
             </span>
             {topDown.m15 ? <span>M15 {topDown.m15}</span> : null}
+            {gate && (
+              <>
+                <span className="text-neutral-300">Send gate</span>
+                <span className={gate.inSession ? "text-emerald-400" : "text-amber-400"}>
+                  {gate.inSession ? "in session" : `outside session (${gate.sessionHours})`}
+                </span>
+                <span className={gate.longAllowed ? "text-emerald-400" : "text-rose-400"}>
+                  longs {gate.longAllowed ? "allowed" : "blocked by weekly"}
+                </span>
+                <span className={gate.shortAllowed ? "text-emerald-400" : "text-rose-400"}>
+                  shorts {gate.shortAllowed ? "allowed" : "blocked by weekly"}
+                </span>
+              </>
+            )}
           </div>
         )}
 

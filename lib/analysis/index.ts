@@ -23,7 +23,7 @@ export { findSetForgetSetup, setForgetEntry, type SetForgetSetup } from "./setFo
 export { analyzeTopDown, topDownAgrees, topDownOpposes, type TopDownAnalysis, type TopDownCandles } from "./topDown";
 export { legIsIntact } from "./swing";
 export { inTradingSession, tradingHoursUtc } from "./session";
-export { pipSize, typicalSpread, entryCost, roundNumberStep, SPREAD_PIPS, SLIPPAGE_PIPS } from "./instruments";
+export { pipSize, typicalSpread, tradeCost, roundNumberStep, SPREAD_PIPS, SLIPPAGE_PIPS } from "./instruments";
 export { scoreSetup, SIGNAL_THRESHOLD, m15Agrees, trendModeFor, type ScoringContext, type ScoreResult, type TrendMode } from "./scoring";
 export {
   analyzeM15,

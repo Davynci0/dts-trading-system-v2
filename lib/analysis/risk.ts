@@ -1,6 +1,6 @@
 import type { Candle, SignalDirection } from "@/lib/types";
 import { atr } from "./indicators";
-import { entryCost, pipSize } from "./instruments";
+import { tradeCost, pipSize } from "./instruments";
 import { significantPivots, type Pivot } from "./pivots";
 
 export const STOP_BUFFER_ATR_FRACTION = 0.25; // room beyond the swing so the stop isn't on the wick
@@ -11,7 +11,7 @@ export const MAX_STOP_ATR_MULT = 3; // structure further than this × ATR away i
 export const MIN_RR = Math.max(0, Number(process.env.MIN_R_MULTIPLE ?? 2.0));
 export const RISK_PCT_PER_TRADE = 0.01; // 1% account risk per trade
 const STRUCTURE_SWING_ATR = 0.5; // only swings this many ATR in size count as structure
-// Entry costs (half-spread + slippage) may be at most this share of the risk.
+// Trading costs (spread + slippage) may be at most this share of the risk.
 // A year of M15 backtests put the average at 13% of risk per trade — the
 // entire loss of the system — because stops sat a few pips from entry on
 // pairs with multi-pip spreads. Override with MAX_COST_SHARE (0 disables).
@@ -144,7 +144,7 @@ export function computeRiskLevels(opts: {
   const buffer = STOP_BUFFER_ATR_FRACTION * atrValue;
   // the closest a stop may sit: clear of candle noise AND far enough that the
   // spread + slippage paid at entry is a small share of what is being risked
-  const costFloor = MAX_COST_SHARE > 0 ? entryCost(instrument) / MAX_COST_SHARE : 0;
+  const costFloor = MAX_COST_SHARE > 0 ? tradeCost(instrument) / MAX_COST_SHARE : 0;
   const minStop = Math.max(MIN_STOP_ATR * atrValue, costFloor);
   const widenedNote = costFloor > MIN_STOP_ATR * atrValue ? "widened so costs stay a small share of the risk" : "widened to clear candle noise";
 

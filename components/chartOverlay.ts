@@ -17,6 +17,8 @@ export interface OverlayData {
     top: number;
     bottom: number;
     startTime: number;
+    /** times price has returned to the zone (0 = untouched) */
+    touches?: number;
   }[];
   /** Alex G Set & Forget: the 50–61.8% AOI of the most recent structure-breaking leg */
   aoi: {
@@ -38,6 +40,10 @@ export interface OverlayData {
     level618: number;
     level786: number;
     range: number;
+    /** true when this is the swing the scanner would trade; false = reference only */
+    isSetup?: boolean;
+    /** true while the latest closed candle is inside the golden zone */
+    inZone?: boolean;
   } | null;
   /** pending signal's trade plan (entry/SL/TP), drawn as a position tool */
   position?: {
@@ -89,6 +95,13 @@ export interface OverlayData {
     kind: "support" | "resistance";
     price: number;
     time: number;
+  }[];
+  /** market structure: the engine's swing points, labelled HH / HL / LH / LL */
+  structure?: {
+    time: number;
+    price: number;
+    kind: "high" | "low";
+    label: string;
   }[];
 }
 
@@ -153,16 +166,24 @@ class OverlayPaneView implements IPrimitivePaneView {
               ctx.setLineDash([]);
               ctx.lineWidth = 1;
               const tradeAction = f.direction === "long" ? "BUY" : "SELL";
-              label(`${tradeAction} ZONE — Golden (61.8–78.6%)`, xZone + 6, y - 4, `${base}1)`, "bold 11px monospace", "left", 3);
+              const zoneText =
+                f.isSetup === false
+                  ? "Fib reference — Golden (61.8–78.6%), no setup"
+                  : `${tradeAction} ZONE — Golden (61.8–78.6%)${f.inZone ? " · price inside" : ""}`;
+              label(zoneText, xZone + 6, y - 4, `${base}1)`, "bold 11px monospace", "left", 3);
             }
 
-            // ratio + swing level lines: 0%, 50%, 61.8%, 78.6%, 100%
+            // Retracement levels are measured from the END of the swing: 0% is
+            // where the move finished (the high of an up-swing, the low of a
+            // down-swing) and 100% is where it began.
+            const swingEnd = f.direction === "long" ? f.swingHigh.price : f.swingLow.price;
+            const swingOrigin = f.direction === "long" ? f.swingLow.price : f.swingHigh.price;
             const levels: { price: number; label: string; strong: boolean }[] = [
-              { price: f.swingHigh.price, label: "100%", strong: true },
-              { price: f.level618, label: "61.8%", strong: true },
+              { price: swingEnd, label: "0%", strong: true },
               { price: f.level50, label: "50%", strong: false },
+              { price: f.level618, label: "61.8%", strong: true },
               { price: f.level786, label: "78.6%", strong: true },
-              { price: f.swingLow.price, label: "0%", strong: true },
+              { price: swingOrigin, label: "100%", strong: true },
             ];
             for (const lv of levels) {
               const y = source.priceToY(lv.price);
@@ -239,7 +260,9 @@ class OverlayPaneView implements IPrimitivePaneView {
             ctx.setLineDash([]);
             ctx.lineWidth = 1;
             const zoneAction = z.kind === "demand" ? "BUY" : "SELL";
-            label(`${zoneAction} ZONE (${z.kind})`, x0 + 4, y + (z.kind === "supply" ? 14 : h - 6), `${base}1)`, "bold 11px monospace", "left", 4);
+            const visits =
+              z.touches == null ? "" : z.touches === 0 ? " · untouched" : z.touches === 1 ? " · 1 touch" : ` · ${z.touches} touches`;
+            label(`${zoneAction} ZONE (${z.kind}${visits})`, x0 + 4, y + (z.kind === "supply" ? 14 : h - 6), `${base}1)`, "bold 11px monospace", "left", 4);
           }
 
           // trendlines: ray from origin through definitionAnchor, extended to right edge
@@ -291,8 +314,9 @@ class OverlayPaneView implements IPrimitivePaneView {
             const y = source.priceToY(lvl.price);
             const x0 = source.timeToX(lvl.time);
             if (y == null) continue;
-            const color = lvl.kind === "support" ? "#26a69a" : "#ef5350";
-            ctx.strokeStyle = `${color}0.8)`;
+            const tone = lvl.kind === "support" ? UP : DOWN;
+            const color = `${tone}1)`;
+            ctx.strokeStyle = `${tone}0.8)`;
             ctx.lineWidth = 1;
             ctx.setLineDash(lvl.kind === "support" ? [3, 5] : [5, 3]);
             ctx.beginPath();
@@ -306,7 +330,7 @@ class OverlayPaneView implements IPrimitivePaneView {
             ctx.setLineDash([]);
             // label with price at the right edge
             label(
-              `${lvl.kind === "support" ? "S" : "R"} ${lvl.price.toFixed(data.digits ?? 5)}`,
+              `${lvl.kind === "support" ? "S" : "R"} ${fmt(lvl.price)}`,
               W - 2,
               y - 5,
               color,
@@ -319,7 +343,7 @@ class OverlayPaneView implements IPrimitivePaneView {
           // head-and-shoulders: zigzag through LS→N1→H→N2→RS + neckline + target.
           for (const p of data.headshoulders ?? []) {
             const pts = [p.ls, p.n1, p.h, p.n2, p.rs]
-              .map((pt, i) => ({ ...pt, px: source.timeToX(pt.time), py: source.priceToY(pt.price) }));
+              .map((pt) => ({ ...pt, px: source.timeToX(pt.time), py: source.priceToY(pt.price) }));
             const valid = pts.every((g) => g.px != null && g.py != null);
             if (!valid) continue;
             const color = p.direction === "short" ? DOWN : UP;
@@ -369,7 +393,32 @@ class OverlayPaneView implements IPrimitivePaneView {
               ctx.lineTo(W, ty);
               ctx.stroke();
               ctx.setLineDash([]);
-              label(`H&S target ${p.target.toFixed(5)}`, W - 6, ty - 6, "rgba(217,119,6,1)", "bold 9px monospace", "right", 2);
+              label(`${p.direction === "short" ? "H&S" : "Inverse H&S"} target ${fmt(p.target)}`, W - 6, ty - 6, "rgba(217,119,6,1)", "bold 9px monospace", "right", 2);
+            }
+          }
+
+          // market structure: a thin zigzag through the engine's swing points,
+          // each tagged HH / HL / LH / LL against the previous swing of its kind
+          if (data.structure && data.structure.length > 1) {
+            const pts = data.structure
+              .map((sp) => ({ ...sp, px: source.timeToX(sp.time), py: source.priceToY(sp.price) }))
+              .filter((sp): sp is typeof sp & { px: number; py: number } => sp.px != null && sp.py != null);
+            ctx.strokeStyle = "rgba(148,163,184,0.45)";
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            pts.forEach((sp, i) => (i === 0 ? ctx.moveTo(sp.px, sp.py) : ctx.lineTo(sp.px, sp.py)));
+            ctx.stroke();
+            for (const sp of pts) {
+              // off-screen swings keep their place in the zigzag but get no
+              // label — the layout would otherwise pile them up at the edge
+              if (sp.px < 0 || sp.px > W) continue;
+              // HH and HL are bullish structure, LH and LL bearish
+              const tone = sp.label === "HH" || sp.label === "HL" ? UP : sp.label === "LH" || sp.label === "LL" ? DOWN : "rgba(148,163,184,";
+              ctx.fillStyle = `${tone}1)`;
+              ctx.beginPath();
+              ctx.arc(sp.px, sp.py, 2.5, 0, Math.PI * 2);
+              ctx.fill();
+              label(sp.label, sp.px - 8, sp.py + (sp.kind === "high" ? -8 : 18), `${tone}1)`, "bold 10px monospace", "left", 5);
             }
           }
 
@@ -380,6 +429,7 @@ class OverlayPaneView implements IPrimitivePaneView {
             const yA = source.priceToY(h.entry);
             const yB = source.priceToY(h.exitPrice);
             if (xA == null || xB == null || yA == null || yB == null) continue;
+            if (xB < 0) continue; // finished before the visible range — nothing to anchor a label to
             const color = h.outcome === "win" ? "#26a69a" : "#ef5350";
             ctx.strokeStyle = color;
             ctx.lineWidth = 1.5;

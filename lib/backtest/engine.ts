@@ -9,7 +9,7 @@ import {
   type ScoreResult,
   type RiskLevels,
 } from "@/lib/analysis";
-import { entryCost, SPREAD_PIPS, SLIPPAGE_PIPS } from "@/lib/analysis/instruments";
+import { tradeCost, SPREAD_PIPS, SLIPPAGE_PIPS } from "@/lib/analysis/instruments";
 import { analyzeTopDown, type TopDownAnalysis, type TopDownCandles } from "@/lib/analysis/topDown";
 import { passesSendGate, selectSignal, type SignalCandidate } from "@/lib/engine/select";
 
@@ -232,7 +232,7 @@ export function runBacktest(opts: {
     if (typeof minConfidence === "number") return minConfidence;
     return minConfidence[s] ?? 3;
   };
-  const cost = entryCost(pair) * Math.max(0, costMultiplier);
+  const cost = tradeCost(pair) * Math.max(0, costMultiplier);
 
   const trades: BacktestTrade[] = [];
   const open: Partial<Record<StrategyId, BacktestTrade>> = {};

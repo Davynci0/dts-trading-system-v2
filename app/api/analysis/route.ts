@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
 import { analyzeM15, M15_TRENDLINE_LOOKBACK } from "@/lib/analysis/execution";
-import { findRecentSwing } from "@/lib/analysis/fibonacci";
-import { analyzeTopDown } from "@/lib/analysis/topDown";
+import { findRecentSwing, inGoldenZone } from "@/lib/analysis/fibonacci";
+import { analyzeTopDown, topDownOpposes } from "@/lib/analysis/topDown";
+import { inTradingSession, tradingHoursUtc } from "@/lib/analysis/session";
 
 export const maxDuration = 60;
 
@@ -30,7 +31,7 @@ export async function GET(req: NextRequest) {
     ]);
     const analysis = analyzeM15(candles, instrument);
     if (!analysis) {
-      return NextResponse.json({ candles, zones: [], fib: null, aoi: null, topDown: null });
+      return NextResponse.json({ candles, zones: [], fib: null, aoi: null, topDown: null, structure: [], gate: null });
     }
 
     const topDown = analyzeTopDown({ weekly, daily, h4, h1 });
@@ -49,11 +50,16 @@ export async function GET(req: NextRequest) {
         touches: z.touches,
       }));
 
-    // Always draw the most recent significant swing's Fibonacci levels, even
-    // when price is not currently inside the golden zone. Uses the SAME
-    // structural pivots and lookback as the engine's findFibSetup so the
-    // drawn swing is one the scanner would actually trade.
-    const swingFib = findRecentSwing(candles, analysis.structuralPivots, analysis.atrValue, M15_TRENDLINE_LOOKBACK);
+    // Fibonacci: draw the swing the SCANNER would trade (analysis.fib — an
+    // intact leg, chosen with the M15 structure) so the chart and the engine
+    // can never show different retracements. Only when the engine has no
+    // setup does the chart fall back to the most recent intact swing, marked
+    // as a reference rather than a trade zone.
+    const engineFib = analysis.fib;
+    const swingFib =
+      engineFib ?? findRecentSwing(candles, analysis.structuralPivots, analysis.atrValue, M15_TRENDLINE_LOOKBACK);
+    const retrace = (f: NonNullable<typeof swingFib>, ratio: number) =>
+      f.direction === "long" ? f.swingHigh.price - ratio * f.range : f.swingLow.price + ratio * f.range;
     const fib = swingFib
       ? {
           direction: swingFib.direction,
@@ -61,21 +67,40 @@ export async function GET(req: NextRequest) {
           goldenBottom: swingFib.goldenBottom,
           swingLow: { time: swingFib.swingLow.time, price: swingFib.swingLow.price },
           swingHigh: { time: swingFib.swingHigh.time, price: swingFib.swingHigh.price },
-          level50:
-            swingFib.direction === "long"
-              ? swingFib.swingHigh.price - 0.5 * swingFib.range
-              : swingFib.swingLow.price + 0.5 * swingFib.range,
-          level618:
-            swingFib.direction === "long"
-              ? swingFib.swingHigh.price - 0.618 * swingFib.range
-              : swingFib.swingLow.price + 0.618 * swingFib.range,
-          level786:
-            swingFib.direction === "long"
-              ? swingFib.swingHigh.price - 0.786 * swingFib.range
-              : swingFib.swingLow.price + 0.786 * swingFib.range,
+          level50: retrace(swingFib, 0.5),
+          level618: retrace(swingFib, 0.618),
+          level786: retrace(swingFib, 0.786),
           range: swingFib.range,
+          isSetup: engineFib != null,
+          inZone: engineFib != null && inGoldenZone(candles, engineFib),
         }
       : null;
+
+    // Market structure: the zigzag-filtered swings every strategy is built
+    // on, each labelled against the previous swing of its kind.
+    const structure: { time: number; price: number; kind: "high" | "low"; label: string }[] = [];
+    {
+      let prevHigh: number | null = null;
+      let prevLow: number | null = null;
+      for (const p of analysis.structuralPivots) {
+        if (p.kind === "high") {
+          structure.push({ time: p.time, price: p.price, kind: "high", label: prevHigh == null ? "H" : p.price > prevHigh ? "HH" : "LH" });
+          prevHigh = p.price;
+        } else {
+          structure.push({ time: p.time, price: p.price, kind: "low", label: prevLow == null ? "L" : p.price > prevLow ? "HL" : "LL" });
+          prevLow = p.price;
+        }
+      }
+    }
+
+    // The send gate's view of this market right now (lib/engine/select.ts).
+    const [sessionStart, sessionEnd] = tradingHoursUtc();
+    const gate = {
+      inSession: inTradingSession(last.time + 900),
+      sessionHours: `${String(sessionStart).padStart(2, "0")}:00–${String(sessionEnd).padStart(2, "0")}:00 UTC`,
+      longAllowed: !topDownOpposes(topDown, "long"),
+      shortAllowed: !topDownOpposes(topDown, "short"),
+    };
 
     const sf = analysis.setForget;
     const aoiOut =
@@ -124,6 +149,8 @@ export async function GET(req: NextRequest) {
       trendlines,
       headshoulders,
       levels,
+      structure: structure.slice(-18),
+      gate,
       topDown: {
         weekly: topDown.weekly,
         daily: topDown.daily,
