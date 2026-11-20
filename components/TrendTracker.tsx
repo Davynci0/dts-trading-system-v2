@@ -4,13 +4,19 @@ import type { Signal } from "@/lib/types";
 
 /** The trend system's state as /api/analysis reports it. */
 export interface TrendSummary {
-  state: { fast: number; slow: number; adx: number | null; side: "long" | "short" | null; blocked: string | null };
-  adxMax: number;
+  state: { fast: number; slow: number; adx: number | null; ema: number | null; emaAgrees: boolean; side: "long" | "short" | null; blocked: string | null };
+  /** null when there is no ADX cap */
+  adxMax: number | null;
+  fastDays: number;
+  slowDays: number;
+  emaBars: number;
   atr: number | null;
   stopAtr: number;
+  trailAtr: number;
   watch: { id: string; label: string; level: number | null; note: string }[];
   ema20: { time: number; value: number }[];
   ema50: { time: number; value: number }[];
+  emaTrend: { time: number; value: number }[];
 }
 
 const arrow = (t: number) => (t === 1 ? "▲ up" : t === -1 ? "▼ down" : "unknown");
@@ -26,14 +32,19 @@ export default function TrendTracker({ trend, signals, digits = 2 }: { trend: Tr
   const byVariant = new Map(open.map((s) => [s.variant ?? "", s]));
   const st = trend?.state;
   const agree = !!st && st.fast !== 0 && st.fast === st.slow;
-  const calm = !!st && st.adx != null && st.adx < (trend?.adxMax ?? 27);
-  const checks: [string, boolean][] = st
-    ? [
-        [`50-day trend ${arrow(st.fast)}`, st.fast !== 0],
-        [`100-day trend ${arrow(st.slow)}${st.fast !== 0 && st.slow !== 0 && !agree ? " — disagrees" : ""}`, agree],
-        [`Move not stretched: ADX ${st.adx != null ? st.adx.toFixed(0) : "?"} (limit ${trend?.adxMax ?? 27})`, calm],
-      ]
-    : [];
+  const checks: [string, boolean][] =
+    st && trend
+      ? [
+          [`${trend.fastDays}-day trend ${arrow(st.fast)}`, st.fast !== 0],
+          [`${trend.slowDays}-day trend ${arrow(st.slow)}${st.fast !== 0 && st.slow !== 0 && !agree ? " — disagrees" : ""}`, agree],
+          ...(trend.emaBars > 0
+            ? ([[`Price ${st.fast === -1 ? "below" : "above"} its ${trend.emaBars}-candle average${st.ema != null ? ` (${px(st.ema)})` : ""}`, st.emaAgrees]] as [string, boolean][])
+            : []),
+          ...(trend.adxMax != null
+            ? ([[`Move not stretched: ADX ${st.adx != null ? st.adx.toFixed(0) : "?"} (limit ${trend.adxMax})`, st.adx != null && st.adx < trend.adxMax]] as [string, boolean][])
+            : []),
+        ]
+      : [];
 
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
@@ -58,7 +69,8 @@ export default function TrendTracker({ trend, signals, digits = 2 }: { trend: Tr
           </ul>
           {trend.atr != null && (
             <p className="mb-2 text-[10px] text-neutral-500">
-              Stop and trailing distance for a new trade: {px(trend.stopAtr * trend.atr)} ({trend.stopAtr} × ATR). No take-profit.
+              New trade: stop {px(trend.stopAtr * trend.atr)} from entry ({trend.stopAtr} × ATR), then a trailing stop {px(trend.trailAtr * trend.atr)}{" "}
+              behind the best price ({trend.trailAtr} × ATR). No take-profit.
             </p>
           )}
           <ul className="space-y-1.5">

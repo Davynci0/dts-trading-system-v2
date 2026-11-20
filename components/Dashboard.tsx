@@ -175,7 +175,7 @@ export default function Dashboard() {
         startTime: barAt(Math.floor(new Date(s.created_at).getTime() / 1000)).time,
       }));
     return {
-      trend: layers.trend && trend ? { ema20: trend.ema20, ema50: trend.ema50, levels: trendLevels, side: trend.state.side } : null,
+      trend: layers.trend && trend ? { ema20: trend.ema20, ema50: trend.ema50, emaTrend: trend.emaTrend, emaBars: trend.emaBars, levels: trendLevels, side: trend.state.side } : null,
       trails: layers.position ? trails : [],
       zones: layers.zones ? overlay.zones : [],
       fib: layers.fib ? overlay.fib : null,
@@ -199,10 +199,9 @@ export default function Dashboard() {
     if (!trend) return null;
     const st = trend.state;
     const arrow = (t: number) => (t === 1 ? "▲ up" : t === -1 ? "▼ down" : "unknown");
-    const adx = st.adx != null ? st.adx.toFixed(0) : "?";
     const allows = st.side ? `${st.side === "long" ? "buys" : "sells"} only` : `no new entries: ${st.blocked}`;
     const tone = st.side === "long" ? "text-emerald-400" : st.side === "short" ? "text-rose-400" : "text-amber-400";
-    return { text: `Trend system: 50-day ${arrow(st.fast)} · 100-day ${arrow(st.slow)} · ADX ${adx} — ${allows}`, tone };
+    return { text: `Trend system: ${trend.fastDays}-day ${arrow(st.fast)} · ${trend.slowDays}-day ${arrow(st.slow)} — ${allows}`, tone };
   }, [trend]);
 
   /** Colour key for the five strategies, with what each is waiting on right now. */

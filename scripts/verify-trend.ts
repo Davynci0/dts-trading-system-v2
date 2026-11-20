@@ -11,7 +11,9 @@ import {
   trendSetupsAt,
   trendStateAt,
   trendWatchAt,
-  TREND_ADX_MAX,
+  TREND_EMA_BARS,
+  TREND_FAST_DAYS,
+  TREND_SLOW_DAYS,
   TREND_ENTRIES,
   TREND_STOP_ATR,
   TREND_TRAIL_ATR,
@@ -38,17 +40,17 @@ const days = (n: number, step: number, from = 3000): Candle[] =>
   Array.from({ length: n }, (_, i) => bar(D0 + i * DAY, from + step * i, from + step * i + 6, from + step * i - 6, from + step * i));
 const up = days(160, 2);
 const down = days(160, -2, 3600);
-/** 50-day down, 100-day up: a long rise and then a sharp fall */
-const mixed = [...days(150, 2), ...Array.from({ length: 10 }, (_, i) => bar(D0 + (150 + i) * DAY, 3298 - 6 * i, 3304 - 6 * i, 3290 - 6 * i, 3292 - 6 * i - 6))];
+/** A long rise and then `n` days of sharp falls: for some `n` the fast trend has turned down while the slow one is still up. */
+const riseThenFall = (n: number) => [...days(150, 2), ...Array.from({ length: n }, (_, i) => bar(D0 + (150 + i) * DAY, 3298 - 8 * i, 3304 - 8 * i, 3288 - 8 * i, 3290 - 8 * i))];
 
-/** 260 quiet H4 candles swinging ±4 around 3320 (low ADX), starting once the daily averages exist. */
+/** 460 quiet candles swinging ±4 around 3320 — enough for the 400-candle average — starting once the daily averages exist. */
 const H0 = D0 + 160 * DAY;
-const quiet: Candle[] = Array.from({ length: 260 }, (_, i) => {
+const quiet: Candle[] = Array.from({ length: 460 }, (_, i) => {
   const c = 3320 + 4 * Math.sin(i / 2);
   const o = 3320 + 4 * Math.sin((i - 1) / 2);
   return bar(H0 + i * H4, o, Math.max(o, c) + 1.5, Math.min(o, c) - 1.5, c);
 });
-const breakUp = bar(H0 + 260 * H4, quiet[259].close, 3331, quiet[259].close - 1, 3330);
+const breakUp = bar(H0 + 460 * H4, quiet[459].close, 3331, quiet[459].close - 1, 3330);
 const withBreak = [...quiet, breakUp];
 
 // ───────── filters ─────────
@@ -56,19 +58,22 @@ const withBreak = [...quiet, breakUp];
   const s = buildTrendSeries(withBreak, up);
   const i = s.n - 1;
   const st = trendStateAt(s, i);
-  check("filters: both daily trends up and a quiet market allow buys", st.fast === 1 && st.slow === 1 && st.adx < TREND_ADX_MAX && st.side === "long" && st.blocked === null, `fast ${st.fast} slow ${st.slow} adx ${st.adx.toFixed(1)}`);
+  check("filters: both daily trends up and price above its long average allow buys", st.fast === 1 && st.slow === 1 && st.emaAgrees && st.side === "long" && st.blocked === null, `fast ${st.fast} slow ${st.slow} close ${s.c[i]} vs average ${st.ema.toFixed(1)}`);
 
   const sd = trendStateAt(buildTrendSeries(withBreak, down), i);
-  check("filters: both daily trends down allow sells only", sd.side === "short", `${sd.side}`);
+  check("filters: with both daily trends down, a close above the long average is not sold", sd.fast === -1 && sd.side === null && !!sd.blocked?.includes(`${TREND_EMA_BARS}-candle average`), `${sd.blocked}`);
 
-  const sm = trendStateAt(buildTrendSeries(withBreak, mixed), i);
-  check("filters: 50-day and 100-day trends that disagree block every entry", sm.side === null && !!sm.blocked?.includes("disagree"), `fast ${sm.fast} slow ${sm.slow}: ${sm.blocked}`);
+  const below = [...quiet, ...Array.from({ length: 30 }, (_, k) => bar(H0 + (460 + k) * H4, 3296, 3298, 3293, 3295))];
+  const sb = buildTrendSeries(below, down);
+  check("filters: both daily trends down and price below its long average allow sells", trendStateAt(sb, sb.n - 1).side === "short", `${trendStateAt(sb, sb.n - 1).side}`);
+  const su = trendStateAt(buildTrendSeries(below, up), below.length - 1);
+  check("filters: in an uptrend, price below its long average blocks buys", su.side === null && !!su.blocked?.includes("below"), `${su.blocked}`);
 
-  const steep: Candle[] = Array.from({ length: 260 }, (_, k) => bar(H0 + k * H4, 3300 + 3 * k, 3300 + 3 * k + 4, 3300 + 3 * k - 1, 3300 + 3 * k + 3));
-  const ss = buildTrendSeries(steep, up);
-  const stretched = trendStateAt(ss, ss.n - 1);
-  check("filters: a stretched move (high ADX) blocks new entries", stretched.side === null && !!stretched.blocked?.includes("stretched") && stretched.adx >= TREND_ADX_MAX, `adx ${stretched.adx.toFixed(0)}: ${stretched.blocked}`);
-  check("filters: no setups come out of a blocked candle", trendSetupsAt(ss, ss.n - 1).length === 0 && trendSetupsAt(buildTrendSeries(withBreak, mixed), i).length === 0, "none");
+  const disagree = [1, 2, 3, 4, 5, 6, 8, 10, 12].map((n) => trendStateAt(buildTrendSeries(withBreak, riseThenFall(n)), i)).find((x) => x.fast === -1 && x.slow === 1);
+  check(`filters: ${TREND_FAST_DAYS}-day and ${TREND_SLOW_DAYS}-day trends that disagree block every entry`, !!disagree && disagree.side === null && !!disagree.blocked?.includes("disagree"), disagree ? `${disagree.blocked}` : "no such case built");
+
+  const young = buildTrendSeries(withBreak.slice(-200), up);
+  check("filters: too few candles for the long average means no trade", trendStateAt(young, young.n - 1).side === null && trendSetupsAt(young, young.n - 1).length === 0, `${trendStateAt(young, young.n - 1).blocked}`);
 }
 
 // ───────── entries ─────────
@@ -78,11 +83,12 @@ const withBreak = [...quiet, breakUp];
   const setups = trendSetupsAt(s, i);
   const ids = setups.map((x) => x.id);
   check("entries: a close above the range fires every channel breakout", ["don20", "don30", "don60", "don120", "don240"].every((id) => ids.includes(id)), ids.join(","));
-  check("entries: a setup carries a 3-ATR stop and a 3-ATR trailing distance", setups.every((x) => Math.abs(x.stopDistance - TREND_STOP_ATR * s.atr[i]) < 1e-9 && Math.abs(x.trailDistance - TREND_TRAIL_ATR * s.atr[i]) < 1e-9 && x.direction === "long" && x.price === 3330), `stop ${setups[0]?.stopDistance.toFixed(2)}`);
+  check("entries: a setup carries the stop and the trailing distance in ATRs", setups.every((x) => Math.abs(x.stopDistance - TREND_STOP_ATR * s.atr[i]) < 1e-9 && Math.abs(x.trailDistance - TREND_TRAIL_ATR * s.atr[i]) < 1e-9 && x.direction === "long" && x.price === 3330), `stop ${setups[0]?.stopDistance.toFixed(2)}`);
   check("entries: the same break against the daily trend is not taken", trendSetupsAt(buildTrendSeries(withBreak, down), i).length === 0, "none");
+  check("entries: the trailing distance is wider than the stop", TREND_TRAIL_ATR > TREND_STOP_ATR, `${TREND_STOP_ATR} / ${TREND_TRAIL_ATR} ATR`);
   check("entries: nothing fires while price is inside the range", trendSetupsAt(buildTrendSeries(quiet, up), quiet.length - 1).every((x) => !x.id.startsWith("don")), "no channel entry");
 
-  const held = [...withBreak, bar(H0 + 261 * H4, 3330, 3334, 3329, 3333)];
+  const held = [...withBreak, bar(H0 + 461 * H4, 3330, 3334, 3329, 3333)];
   const sh = buildTrendSeries(held, up);
   check("entries: a second close beyond the range is not a new breakout", !entryTriggers(sh, "don20", sh.n - 1, 1), "already broken");
 
@@ -98,9 +104,9 @@ const withBreak = [...quiet, breakUp];
   check("entries: a dip to the 20 EMA that closes back above it is a pullback entry", entryTriggers(sp, "ema20pb", sp.n - 1, 1) && !entryTriggers(sp, "ema20pb", sp.n - 1, -1), `ema ${e20.toFixed(1)}`);
 
   // inside bar, then a close above the candle that contained it
-  const mother = bar(H0 + 261 * H4, 3330, 3336, 3326, 3331);
-  const insideBar = bar(H0 + 262 * H4, 3331, 3334, 3328, 3332);
-  const out = bar(H0 + 263 * H4, 3332, 3339, 3331, 3338);
+  const mother = bar(H0 + 461 * H4, 3330, 3336, 3326, 3331);
+  const insideBar = bar(H0 + 462 * H4, 3331, 3334, 3328, 3332);
+  const out = bar(H0 + 463 * H4, 3332, 3339, 3331, 3338);
   const si = buildTrendSeries([...withBreak, mother, insideBar, out], up);
   check("entries: a close beyond the candle that held an inside bar is an inside-bar entry", entryTriggers(si, "inside", si.n - 1, 1), "close 3338 > 3336");
 
@@ -140,8 +146,8 @@ const withBreak = [...quiet, breakUp];
 
 // ───────── backtest and sizing ─────────
 {
-  const after = Array.from({ length: 30 }, (_, k) => bar(H0 + (261 + k) * H4, 3330 + 2 * k, 3334 + 2 * k, 3329 + 2 * k, 3332 + 2 * k));
-  const fall = Array.from({ length: 12 }, (_, k) => bar(H0 + (291 + k) * H4, 3390 - 6 * k, 3391 - 6 * k, 3383 - 6 * k, 3384 - 6 * k));
+  const after = Array.from({ length: 30 }, (_, k) => bar(H0 + (461 + k) * H4, 3330 + 2 * k, 3334 + 2 * k, 3329 + 2 * k, 3332 + 2 * k));
+  const fall = Array.from({ length: 16 }, (_, k) => bar(H0 + (491 + k) * H4, 3390 - 6 * k, 3391 - 6 * k, 3383 - 6 * k, 3384 - 6 * k));
   const series = [...withBreak, ...after, ...fall];
   const trades = runTrendBacktest({ pair: "XAU_USD", candles: series, daily: up });
   const first = trades.find((t) => t.entryId === "don20");

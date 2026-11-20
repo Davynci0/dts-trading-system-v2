@@ -127,7 +127,9 @@ export async function sendTrendSignal(opts: {
   stopLoss: number;
   /** trailing distance in price */
   trailDistance: number;
-  adx: number;
+  fastDays: number;
+  slowDays: number;
+  emaBars: number;
   /** trend positions open, this one included */
   openCount: number;
   positionUnits: number;
@@ -146,7 +148,7 @@ export async function sendTrendSignal(opts: {
       `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (${opts.label})`,
       `Entry \`${px(opts.entry)}\` at market · Stop \`${px(opts.stopLoss)}\``,
       `*Trailing stop: ${px(opts.trailDistance)}* — set your broker's trailing stop to this distance. No take-profit.`,
-      `Why: ${opts.rule}; the 50-day and 100-day trends both point ${opts.direction === "long" ? "up" : "down"}; ADX ${opts.adx.toFixed(0)}`,
+      `Why: ${opts.rule}; the ${opts.fastDays}-day and ${opts.slowDays}-day trends both point ${opts.direction === "long" ? "up" : "down"}; price is ${opts.direction === "long" ? "above" : "below"} its ${opts.emaBars}-candle average`,
       `Trend positions open now: ${opts.openCount}`,
       sizeLine,
       `_Signal only — review and execute manually._`,

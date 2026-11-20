@@ -24,6 +24,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 import { fetchQuoteUsdRates, quoteUsdRateFor } from "@/lib/fx";
 import { scanTrend } from "@/lib/engine/trendScanner";
+import { TREND_CANDLES } from "@/lib/analysis/trend";
 import { renderSetupPng } from "@/lib/vision/chartRender";
 import { validateSetupVision, type VisionVerdict } from "@/lib/vision/openrouter";
 
@@ -129,7 +130,9 @@ export async function runScan(opts: {
     for (const tf of timeframes.filter((t) => t === EXECUTION_TIMEFRAME)) {
       units++;
       try {
-        const candles = await fetchCandles({ instrument: pair, granularity: EXECUTION_TIMEFRAME, count: EXECUTION_CANDLES });
+        // the trend system's long average needs more candles than the pattern analysis reads
+        const trendCandles = await fetchCandles({ instrument: pair, granularity: EXECUTION_TIMEFRAME, count: TREND_CANDLES });
+        const candles = trendCandles.slice(-EXECUTION_CANDLES);
         const htfCandles = await fetchCandles({
           instrument: pair,
           granularity: EXECUTION_HTF,
@@ -143,7 +146,7 @@ export async function runScan(opts: {
         const staleNote = `signal candle closed ${Math.round(barAgeMin)} min ago — too late to enter (limit ${MAX_ENTRY_AGE_MIN} min)`;
 
         // The trend system — the strategies that send signals (lib/analysis/trend.ts).
-        for (const ev of await scanTrend({ pair, candles, daily: htfCandles, supabase, accountBalance, sendTelegrams, maxEntryAgeMin: MAX_ENTRY_AGE_MIN })) {
+        for (const ev of await scanTrend({ pair, candles: trendCandles, daily: htfCandles, supabase, accountBalance, sendTelegrams, maxEntryAgeMin: MAX_ENTRY_AGE_MIN })) {
           events.push({ pair, timeframe: tf, strategy: "trend", kind: ev.kind, detail: ev.detail });
         }
         const ta = analyzeExecution(candles, pair);

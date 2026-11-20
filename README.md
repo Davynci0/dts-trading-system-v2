@@ -6,9 +6,9 @@ take-profit. The scanner looks at the chart every 15 minutes; when an entry fire
 close it is sent to Telegram. The user reviews each signal and executes manually — the system
 never places trades.
 
-Expect about four signals a day, each held for a few hours, with **several positions open at
-the same time and all pointing the same way**. **Read [the backtest results](#backtesting)
-before trusting it: on 30-minute candles this system only made money in the last three years.**
+Expect about three signals a day, with **several positions open at the same time and all
+pointing the same way**, and about 3 winners in 10 trades. Read
+[the backtest results](#backtesting) before trusting it.
 
 **Stack:** Next.js (App Router, single deployable on Vercel) · OANDA v20 (data) ·
 Supabase (auth + persistence) · Telegram Bot API (alerts).
@@ -44,8 +44,8 @@ All of it is in `lib/analysis/trend.ts`, shared by the scanner, the backtest and
 
 | Filter | Rule |
 | --- | --- |
-| Daily trend | the last closed daily close is on the same side of its 50-day **and** its 100-day average — above both: buys only, below both: sells only, otherwise nothing |
-| Not stretched | the chart's ADX is below 27 — the system does not join a move that has already run |
+| Daily trend | the last closed daily close is on the same side of its 20-day **and** its 50-day average — above both: buys only, below both: sells only, otherwise nothing |
+| Chart trend | price is on that same side of its own 400-candle average (EMA) — no buying under it, no selling above it |
 
 **Eleven entries, each on the close of a candle, in the trend's direction:**
 
@@ -63,7 +63,7 @@ All of it is in `lib/analysis/trend.ts`, shared by the scanner, the backtest and
 | | Rule |
 | --- | --- |
 | Stop | 3 ATR from the entry |
-| Exit | a trailing stop 3 ATR (the ATR at entry, a fixed distance) behind the best price — the broker's own trailing stop can run it |
+| Exit | a trailing stop 6 ATR (the ATR at entry, a fixed distance) behind the best price — the broker's own trailing stop can run it |
 | Target | none |
 | Time limit | closed at market after 360 candles of trading time (7.5 trading days) |
 | Positions | one per entry type; different entry types may be open side by side (up to eleven) |
@@ -72,20 +72,30 @@ All of it is in `lib/analysis/trend.ts`, shared by the scanner, the backtest and
 
 ### Why these rules
 
-They come from a test on fifteen years of gold **on 4-hour candles**, in which everything was
-chosen on the first ten years (2011–2021) and then checked on the last five:
+The approach comes from a test on fifteen years of gold on 4-hour candles, chosen on the
+first ten years (2011–2021) and checked on the last five:
 
 - **Fixed targets earned nothing** in the ten design years, for every entry tried. With a
-  trailing stop the same entries were all positive: losses are cut at about −0.6R on average
-  and the occasional trend pays several R.
+  trailing stop the same entries were all positive: losses are cut short and the occasional
+  trend pays several R.
 - **Mean reversion lost**: buying RSI dips, fading Bollinger bands and holding through the
   Asian session were all negative after costs.
-- **Trades against the 100-day trend** made nothing in the design years and lost afterwards —
-  hence the requirement that both trends agree.
-- **Trades that joined a stretched move** (ADX above 27) lost in the design years and were
-  the weakest group afterwards — hence the ADX cap, which roughly doubled the quality.
 - Of 52 big swings in the design years, 49 were traded. The three missed all ran against the
   daily trend. Entries are late by design: typically after about half the move.
+
+The numbers for the 30-minute chart come from a search over 1,536 parameter sets (daily-trend
+lengths, ADX cap, stop, trailing distance, the 400-candle filter, time limit, and which
+entries to keep), again chosen on 2011–2021 only:
+
+- **The trailing stop was the setting that mattered.** At 3 ATR it was far too tight for this
+  chart — flat over the ten design years — and each step wider did better (2 → −203R,
+  3 → 0R, 4 → +111R, 6 → +290R, 9 → +333R, 12 → +421R, other settings unchanged). Wider also
+  means fewer trades; 6 ATR is the widest that keeps about three a day.
+- **The 400-candle average helped; the ADX cap did not.** The cap that improved the 4-hour
+  version made no difference here and is off.
+- Systems were only accepted if they were still positive with costs doubled and in at least 7
+  of the 10 design years. 1,534 of 4,006 passed; **only one of them trades three times a day**
+  — this one. The most consistent ones trade about twice a day with a 9–12 ATR trailing stop.
 
 ### The pattern strategies
 
@@ -129,39 +139,41 @@ XAU/USD on M30, 15 years to 2026-11-20:
 
 | Period | Trades | Result |
 | --- | --- | --- |
-| 2011-11 → 2021-11 | 9,730 | +16R |
-| 2021-11 → 2023-11 | 2,271 | −127R |
-| 2023-11 → 2026-11 | 3,442 | +730R |
-| **All 15 years** | **15,443 (3.9 a day)** | **+619R** |
+| 2011-11 → 2021-11 (the years the settings were chosen on) | 8,095 | +430R |
+| 2021-11 → 2023-11 | 1,770 | +46R |
+| 2023-11 → 2026-11 | 2,467 | +1,031R |
+| **All 15 years** | **12,332 (3.2 a day)** | **+1,509R** |
 
-38% of trades win and a trade typically lasts about 8 hours.
+31% of trades win. 11 of the 15 years were positive (the losing ones: −88R, −67R, −87R,
+−29R), and every one of the eleven entries is positive on its own. With costs doubled the
+total is +896R.
 
 **Read this before trusting it.**
 
-- **All the profit is in the last three years.** Over the twelve years before November 2023
-  this version lost 111R on about 12,000 trades; 8 of the 15 years were positive. It made
-  money while gold rallied and nothing before.
-- **It does not survive higher costs.** With spread and slippage doubled the 15-year total is
-  −67R. Thirty-minute stops are small, so the spread is a real share of every trade.
-- **Very large drawdowns.** The worst was 272R (and 794R with costs doubled). At 0.1% risk per
-  trade that is about 27% of the account; at 1% the account would not have survived.
+- **The evidence is modest.** In the ten design years the weekly results are positive but not
+  far from what chance could produce (weekly t ≈ 0.9), and the settings were picked from
+  thousands of candidates. Most of the profit is still in 2023–2026, when gold rallied.
+  Expect live results to be weaker.
+- **Very large drawdowns.** The worst was 296R (526R with costs doubled), and single years
+  had drawdowns of 100–200R. At 0.1% risk per trade that is about 30% of the account; at 1%
+  the account would not have survived.
+- **Long losing runs.** Seven trades in ten lose. The profit comes from a minority of large
+  winners, so weeks of small losses are normal.
 - **Positions overlap and point the same way.** Up to eleven are open at once and are stopped
   together when the trend turns.
-- **It is a backtest, found by searching.** Around a hundred variants were tried on the way
-  here; expect live results to be weaker.
 
-The same rules on other charts, same fifteen years:
+The same rules **with the earlier settings** (50/100-day trend, ADX below 27, 3-ATR trailing
+stop) on other charts, same fifteen years:
 
 | Chart | Trades a day | 2011–2021 | 2021–2023 | 2023–2026 | Costs doubled, 15 years | Worst drawdown |
 | --- | --- | --- | --- | --- | --- | --- |
 | 4-hour | 0.6 | +274R | +7R | +271R | +516R | 60R |
 | 1-hour | 2.1 | +265R | +55R | +536R | +590R | 180R |
-| **30-minute (live)** | 4.0 | +16R | −127R | +730R | −67R | 272R |
+| 30-minute | 4.0 | +16R | −127R | +730R | −67R | 272R |
 | 15-minute | 6.4 | −785R | −298R | +706R | −1,751R | 1,178R |
 
-The slower the chart, the more reliable the result. The 4-hour version is the one the rules
-were chosen on and the only one that barely moves when costs double; the 30-minute chart was
-chosen for the number of trades, not for its record.
+The slower the chart, the more reliable the result; the 30-minute chart was chosen for the
+number of trades, and the search above is what made it hold up at all.
 
 `scripts/research-strategies.ts` is an M15 lab for intraday ideas from an earlier version.
 

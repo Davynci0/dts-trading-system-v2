@@ -4,8 +4,7 @@ import {
   buildTrendSeries,
   trendEntryDef,
   trendSetupsAt,
-  trendStateAt,
-  TREND_ADX_MAX,
+  TREND_EMA_BARS,
   TREND_FAST_DAYS,
   TREND_SLOW_DAYS,
   type TrendSetup,
@@ -60,7 +59,6 @@ export async function scanTrend(opts: {
 
   const series = buildTrendSeries(candles, daily);
   const i = series.n - 1;
-  const state = trendStateAt(series, i);
   const setups = trendSetupsAt(series, i, pair);
   if (setups.length === 0) return events;
 
@@ -112,7 +110,7 @@ export async function scanTrend(opts: {
       [trendEntryDef(setup.id)?.rule ?? setup.label]: true,
       [`${TREND_FAST_DAYS}-day trend agrees`]: true,
       [`${TREND_SLOW_DAYS}-day trend agrees`]: true,
-      [`Move not stretched (ADX below ${TREND_ADX_MAX})`]: true,
+      [`Price on the trend's side of its ${TREND_EMA_BARS}-candle average`]: true,
     };
     const { error: insertError } = await supabase.from("signals").insert({
       pair,
@@ -146,7 +144,9 @@ export async function scanTrend(opts: {
         entry: levels.entry,
         stopLoss: levels.stopLoss,
         trailDistance: setup.trailDistance,
-        adx: state.adx,
+        fastDays: TREND_FAST_DAYS,
+        slowDays: TREND_SLOW_DAYS,
+        emaBars: TREND_EMA_BARS,
         openCount,
         positionUnits: levels.positionUnits,
         riskAmount: levels.riskAmount,

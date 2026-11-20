@@ -55,6 +55,9 @@ export interface OverlayData {
   trend?: {
     ema20: { time: number; value: number }[];
     ema50: { time: number; value: number }[];
+    /** the long trend average: no buying under it, no selling above it */
+    emaTrend?: { time: number; value: number }[];
+    emaBars?: number;
     levels: { label: string; price: number }[];
     side: "long" | "short" | null;
   } | null;
@@ -148,6 +151,7 @@ export const CHART_COLORS = {
   trend: "250,204,21", // yellow — the trend system's entry levels
   ema20: "244,114,182", // pink
   ema50: "129,140,248", // indigo
+  emaTrend: "250,204,21", // yellow — the trend filter's long average
   muted: "100,116,139",
   ink: "229,231,235",
   win: "38,166,154",
@@ -459,6 +463,7 @@ class OverlayPaneView implements IPrimitivePaneView {
               ctx.stroke();
               if (lastY != null) tag(name, W - 4, lastY - 3, rgb, "right", 6, { small: true, dim: true });
             };
+            if (t.emaTrend?.length) curve(t.emaTrend, C.emaTrend, `EMA ${t.emaBars ?? ""} (trend filter)`);
             curve(t.ema50, C.ema50, "EMA 50");
             curve(t.ema20, C.ema20, "EMA 20");
             for (const lv of t.levels) {

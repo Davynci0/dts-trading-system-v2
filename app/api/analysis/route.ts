@@ -8,7 +8,7 @@ import { PULLBACK_TREND_DAYS } from "@/lib/analysis/pullback";
 import { detectKeyLevels, nearestLevels } from "@/lib/analysis/levels";
 import { breakoutLevels, closeTimeOf, dailyTrend, CHANNEL_BARS } from "@/lib/analysis/breakout";
 import { signalStrategies } from "@/lib/engine/scanner";
-import { buildTrendSeries, trendStateAt, trendWatchAt, TREND_ADX_MAX, TREND_STOP_ATR } from "@/lib/analysis/trend";
+import { buildTrendSeries, trendStateAt, trendWatchAt, TREND_ADX_MAX, TREND_CANDLES, TREND_EMA_BARS, TREND_FAST_DAYS, TREND_SLOW_DAYS, TREND_STOP_ATR, TREND_TRAIL_ATR } from "@/lib/analysis/trend";
 
 export const maxDuration = 60;
 
@@ -35,14 +35,16 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const [candles, weekly, daily, h1, h4] = await Promise.all([
-      fetchCandles({ instrument, granularity: EXECUTION_TIMEFRAME, count, to }),
+    const [trendCandles, weekly, daily, h1, h4] = await Promise.all([
+      // the trend system's long average needs more candles than the chart shows
+      fetchCandles({ instrument, granularity: EXECUTION_TIMEFRAME, count: Math.max(count, TREND_CANDLES), to }),
       fetchCandles({ instrument, granularity: "W", count: 52, to }),
       // closed days: the key levels read all of them, the 100-day trend the last 100, top-down the last 90
       fetchCandles({ instrument, granularity: EXECUTION_HTF, count: HTF_CANDLES, to }),
       fetchCandles({ instrument, granularity: "H1", count: 120, to }),
       fetchCandles({ instrument, granularity: "H4", count: 120, to }),
     ]);
+    const candles = trendCandles.slice(-count);
     const analysis = analyzeExecution(candles, instrument);
     if (!analysis) {
       return NextResponse.json({ candles, zones: [], fib: null, aoi: null, topDown: null, structure: [], breakout: null, gate: null });
@@ -128,17 +130,25 @@ export async function GET(req: NextRequest) {
 
     // The trend system (lib/analysis/trend.ts): what its filters allow, what
     // each entry is waiting for, and the two EMAs it reads.
-    const series = buildTrendSeries(candles, daily);
+    const series = buildTrendSeries(trendCandles, daily);
     const ti = series.n - 1;
     const finite = (v: number) => (Number.isFinite(v) ? v : null);
+    const shown = candles[0].time;
+    const curve = (values: number[]) => series.t.map((time, k) => ({ time, value: values[k] })).filter((p) => p.time >= shown && Number.isFinite(p.value));
+    const st = trendStateAt(series, ti);
     const trend = {
-      state: { ...trendStateAt(series, ti), adx: finite(series.adx[ti]) },
-      adxMax: TREND_ADX_MAX,
+      state: { ...st, adx: finite(st.adx), ema: finite(st.ema) },
+      adxMax: Number.isFinite(TREND_ADX_MAX) ? TREND_ADX_MAX : null,
+      fastDays: TREND_FAST_DAYS,
+      slowDays: TREND_SLOW_DAYS,
+      emaBars: TREND_EMA_BARS,
       atr: finite(series.atr[ti]),
       stopAtr: TREND_STOP_ATR,
+      trailAtr: TREND_TRAIL_ATR,
       watch: trendWatchAt(series, ti),
-      ema20: series.t.map((time, k) => ({ time, value: series.ema20[k] })).filter((p) => Number.isFinite(p.value)),
-      ema50: series.t.map((time, k) => ({ time, value: series.ema50[k] })).filter((p) => Number.isFinite(p.value)),
+      ema20: curve(series.ema20),
+      ema50: curve(series.ema50),
+      emaTrend: curve(series.emaTrend),
     };
 
     // The pullback strategies' rules (lib/analysis/pullback.ts) — only shown

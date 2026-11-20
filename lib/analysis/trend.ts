@@ -5,11 +5,11 @@ import { tradeCost } from "./instruments";
  * The trend system: eleven ways of joining a gold trend on the chart timeframe,
  * all managed the same way.
  *
- *  - A trade is only taken WITH the daily trend, and only when the 50-day and
- *    the 100-day trend agree (the last closed daily close is on the same side
+ *  - A trade is only taken WITH the daily trend, and only when the 20-day and
+ *    the 50-day trend agree (the last closed daily close is on the same side
  *    of both averages).
- *  - It is not taken when the move is already stretched: the chart's ADX must be
- *    below TREND_ADX_MAX.
+ *  - Price on the chart must be on the trend's side of its own
+ *    TREND_EMA_BARS-candle average: no buying under it, no selling above it.
  *  - There is no target. The stop starts TREND_STOP_ATR × ATR from the entry
  *    and then trails TREND_TRAIL_ATR × that same ATR behind the best price —
  *    a fixed distance, so the broker's own trailing stop can run it.
@@ -18,19 +18,26 @@ import { tradeCost } from "./instruments";
  *
  * Why these rules: on fifteen years of gold, fixed targets earned nothing in
  * the ten years the rules were chosen on, while every trend entry became
- * positive once the exit was a trailing stop. Trades against the 100-day trend
- * and trades that joined a stretched move were the two consistent losers, in
- * the design years and afterwards — hence the two filters.
+ * positive once the exit was a trailing stop. The numbers below are the result
+ * of a search over 1,536 parameter sets on 30-minute candles, chosen on
+ * 2011–2021 only: a trailing stop of 3 ATR was far too tight for this chart
+ * (flat over ten years), and each step wider did better; the ADX cap that
+ * helped on 4-hour candles did not help here.
  *
  * Everything here is pure and shared by the scanner, the backtest and the
  * chart. `candles` are closed bars of the chart timeframe, `daily` closed daily bars.
  */
 
 export const TREND_STOP_ATR = 3;
-export const TREND_TRAIL_ATR = 3;
-export const TREND_ADX_MAX = 27;
-export const TREND_FAST_DAYS = 50;
-export const TREND_SLOW_DAYS = 100;
+export const TREND_TRAIL_ATR = 6;
+/** Entries are blocked while the chart's ADX is at or above this. Infinity = no cap (the 30-minute setting). */
+export const TREND_ADX_MAX: number = Infinity;
+export const TREND_FAST_DAYS = 20;
+export const TREND_SLOW_DAYS = 50;
+/** Length of the chart's own trend average; 0 switches the filter off. */
+export const TREND_EMA_BARS: number = 400;
+/** Candles the scanner and the chart read for the trend system — enough for the long average to settle. */
+export const TREND_CANDLES = 1500;
 /** A position still open after this many candles is closed at market. */
 export const TREND_MAX_HOLD_BARS = 360;
 /** A trade is refused when spread + slippage exceed this share of its risk. */
@@ -171,6 +178,8 @@ export interface TrendSeries {
   adx: number[];
   ema20: number[];
   ema50: number[];
+  /** the chart's own trend average (TREND_EMA_BARS) */
+  emaTrend: number[];
   hi: Record<number, number[]>;
   lo: Record<number, number[]>;
   /** +1 / −1 when the last closed daily close is above / below the average, 0 when unknown */
@@ -233,6 +242,7 @@ export function buildTrendSeries(candles: Candle[], daily: Candle[]): TrendSerie
     adx: adxOf(h, l, c),
     ema20: ema(c, 20),
     ema50: ema(c, 50),
+    emaTrend: TREND_EMA_BARS > 0 ? ema(c, TREND_EMA_BARS) : [],
     hi,
     lo,
     fast: day.map((d) => (d < 0 ? 0 : sign(d, s50, TREND_FAST_DAYS))),
@@ -250,6 +260,9 @@ export interface TrendState {
   fast: number;
   slow: number;
   adx: number;
+  /** the chart's trend average, and whether price is on the daily trend's side of it */
+  ema: number;
+  emaAgrees: boolean;
   /** the side that may be traded on this candle, or null */
   side: SignalDirection | null;
   /** why nothing may be traded, when side is null */
@@ -261,11 +274,14 @@ export function trendStateAt(s: TrendSeries, i: number): TrendState {
   const fast = s.fast[i];
   const slow = s.slow[i];
   const adx = s.adx[i];
+  const e = TREND_EMA_BARS > 0 ? s.emaTrend[i] : NaN;
+  const emaAgrees = TREND_EMA_BARS === 0 || (fast === 1 ? s.c[i] > e : fast === -1 ? s.c[i] < e : false);
   let blocked: string | null = null;
   if (fast === 0 || slow === 0) blocked = "not enough daily history for the trend";
   else if (fast !== slow) blocked = `the ${TREND_FAST_DAYS}-day and ${TREND_SLOW_DAYS}-day trends disagree`;
-  else if (!(adx < TREND_ADX_MAX)) blocked = `the move is stretched (ADX ${Number.isFinite(adx) ? adx.toFixed(0) : "?"}, limit ${TREND_ADX_MAX})`;
-  return { fast, slow, adx, side: blocked ? null : fast === 1 ? "long" : "short", blocked };
+  else if (Number.isFinite(TREND_ADX_MAX) && !(adx < TREND_ADX_MAX)) blocked = `the move is stretched (ADX ${Number.isFinite(adx) ? adx.toFixed(0) : "?"}, limit ${TREND_ADX_MAX})`;
+  else if (!emaAgrees) blocked = Number.isFinite(e) ? `price is ${fast === 1 ? "below" : "above"} its ${TREND_EMA_BARS}-candle average, against the daily trend` : `not enough candles for the ${TREND_EMA_BARS}-candle average`;
+  return { fast, slow, adx, ema: e, emaAgrees, side: blocked ? null : fast === 1 ? "long" : "short", blocked };
 }
 
 /** Does entry `id` trigger on bar `i` in direction `dir` (+1 / −1)? The filters are NOT applied here. */
