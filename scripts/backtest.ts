@@ -16,15 +16,15 @@ import { WebSocket } from "ws";
  * Usage: npx tsx --env-file=.env.local scripts/backtest.ts [--years=3] [--save] [PAIR ...]
  *   --years=N  history length (default 3)
  *   --save     store the run in Supabase so it appears on the Backtests page
- *   PAIR ...   instruments (default: every pair in PAIRS)
- * Gate settings come from the environment, exactly as in production, e.g.
- *   TRADING_HOURS_UTC=6-21 ZONES_MIN_CONFIDENCE=5 npx tsx ...
+ *   PAIR ...   instruments (default: PAIRS, i.e. XAU_USD)
+ * Settings come from the environment, exactly as in production, e.g.
+ *   SIGNAL_STRATEGIES=breakout,setforget BREAKOUT_TARGET_R=0.5 npx tsx ...
  */
 import { computeMetrics, runBacktest, type BacktestTrade, type ScopedMetrics } from "@/lib/backtest/engine";
-import { trendModeFor } from "@/lib/analysis";
+import { BREAKOUT_TARGET_R, trendModeFor } from "@/lib/analysis";
 import { tradingHoursUtc } from "@/lib/analysis/session";
 import { MAX_COST_SHARE, MIN_RR } from "@/lib/analysis/risk";
-import { minConfidenceFor, signalPairs } from "@/lib/engine/scanner";
+import { minConfidenceFor, signalPairs, signalStrategies } from "@/lib/engine/scanner";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { PAIRS, STRATEGIES } from "@/lib/types";
@@ -43,7 +43,11 @@ const YEAR_S = 365 * 86400;
 
 type Trade = BacktestTrade & { pair: string; entryTime: number };
 
+/** The strategies that send live signals (SIGNAL_STRATEGIES) — the backtest runs the same ones. */
+const strategies = [...signalStrategies()];
+
 const gateFor = (pair: string) => ({
+  breakout: minConfidenceFor(pair, "breakout"),
   zones: minConfidenceFor(pair, "zones"),
   setforget: minConfidenceFor(pair, "setforget"),
   fibonacci: minConfidenceFor(pair, "fibonacci"),
@@ -58,6 +62,7 @@ function simulate(pair: string, data: PairData, costMultiplier: number): Trade[]
     topDownCandles: { weekly: data.weekly, daily: data.daily, h4: data.h4, h1: data.h1 },
     minConfidence: gateFor(pair),
     oneTradePerPair: true,
+    strategies,
     costMultiplier,
   });
   return report.trades.map((t) => ({ ...t, pair, entryTime: data.m15[t.entryIndex].time }));
@@ -95,7 +100,7 @@ async function save(trades: Trade[]): Promise<void> {
   for (let k = 0; k < YEARS; k++) {
     scopes[`year:${k + 1} · ${month(START + k * YEAR_S)} → ${month(START + (k + 1) * YEAR_S)}`] = scoped(trades.filter(inYear(k)));
   }
-  for (const s of STRATEGIES) scopes[`strategy:${s.id}`] = scoped(trades.filter((t) => t.strategy === s.id));
+  for (const s of STRATEGIES) if (strategies.includes(s.id)) scopes[`strategy:${s.id}`] = scoped(trades.filter((t) => t.strategy === s.id));
   for (const p of pairs) scopes[`pair:${p}`] = scoped(trades.filter((t) => t.pair === p));
 
   const live = signalPairs();
@@ -106,7 +111,7 @@ async function save(trades: Trade[]): Promise<void> {
       range_end: new Date(END * 1000).toISOString(),
       pairs,
       timeframes: ["M15"],
-      notes: `${YEARS} year${YEARS > 1 ? "s" : ""} · live rules · ${pairs.length} pair${pairs.length > 1 ? "s" : ""}`,
+      notes: `${YEARS} year${YEARS > 1 ? "s" : ""} · ${strategies.join(" + ")} · ${pairs.map((p) => p.replace("_", "/")).join(", ")}`,
       config: {
         engine: ENGINE_VERSION,
         years: YEARS,
@@ -116,6 +121,8 @@ async function save(trades: Trade[]): Promise<void> {
         costs: "full spread + slippage per trade",
         oneTradePerPair: true,
         signalPairs: [...live],
+        strategies,
+        breakoutTargetR: BREAKOUT_TARGET_R,
         perPair: Object.fromEntries(pairs.map((p) => [p, { minConfirmations: gateFor(p), trend: trendModeFor(p) }])),
       },
     })
@@ -141,8 +148,8 @@ async function main() {
 
   console.log(`\nLive rules, ${YEARS} year${YEARS > 1 ? "s" : ""} to ${new Date(END * 1000).toISOString().slice(0, 10)} (Y1 oldest), R multiples after full spread + slippage`);
   row("PORTFOLIO", base);
-  for (const s of STRATEGIES) row(` ${s.id}`, base.filter((t) => t.strategy === s.id));
-  for (const p of pairs) row(` ${p}`, base.filter((t) => t.pair === p));
+  for (const s of STRATEGIES) if (strategies.includes(s.id)) row(` ${s.id}`, base.filter((t) => t.strategy === s.id));
+  if (pairs.length > 1) for (const p of pairs) row(` ${p}`, base.filter((t) => t.pair === p));
   const cost = base.reduce((s, t) => s + t.costR, 0) / Math.max(1, base.length);
   console.log(`\n${(base.length / (YEARS * 260)).toFixed(1)} trades per trading day; costs average ${(cost * 100).toFixed(1)}% of the risk per trade.`);
   row("COSTS ×2", stressed);

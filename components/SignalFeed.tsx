@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { Signal } from "@/lib/types";
+import { CHECKS, type Signal } from "@/lib/types";
 import { pipSize } from "@/lib/analysis/confirmations";
 
 const fmtPips = (price: number, pair: string) => (price / pipSize(pair)).toFixed(1);
@@ -119,8 +119,8 @@ export default function SignalFeed() {
                 </span>
               </span>
               <span className="text-neutral-500">
-                {fmtTime(s.created_at)} · {s.strategy} · {s.confidence}/6
-                {s.confidence >= 5 ? " ★" : ""}
+                {fmtTime(s.created_at)} · {s.strategy} · {s.confidence}/{CHECKS[s.strategy] ?? 6}
+                {s.confidence >= Math.min(5, CHECKS[s.strategy] ?? 6) ? " ★" : ""}
                 {s.status === "skipped" ? " · SKIPPED" : ""}
               </span>
             </div>

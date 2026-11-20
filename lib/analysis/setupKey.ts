@@ -14,6 +14,11 @@ export function buildSetupKey(version: string, scored: ScoreResult): string {
     const f = scored.trigger.fib;
     return `${version}:${scored.strategy}:${bucketTime(f.swingLow.time)}-${bucketTime(f.swingHigh.time)}`;
   }
+  if (scored.strategy === "breakout" && scored.trigger?.breakout) {
+    // one Asian break per trading day; a channel break is identified by its candle
+    const b = scored.trigger.breakout;
+    return `${version}:${scored.strategy}:${b.kind}:${b.kind === "asian" ? b.day : b.time}`;
+  }
   if (scored.strategy === "zones" && scored.trigger?.zone) {
     return `${version}:${scored.strategy}:${scored.trigger.zone.id}`;
   }

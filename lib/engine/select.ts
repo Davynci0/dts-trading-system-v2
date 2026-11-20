@@ -17,6 +17,7 @@ export interface SignalCandidate {
 
 /** Tie-break between agreeing setups: which one defines the trade's levels. */
 export const STRATEGY_QUALITY_BONUS: Record<StrategyId, number> = {
+  breakout: 12,
   setforget: 8,
   zones: 4,
   fibonacci: 0,
@@ -35,7 +36,7 @@ export function passesSendGate(c: SignalCandidate, minConfidence: number): boole
 /** Why a candidate may not be sent, or null when it may. */
 export function sendGateBlock(c: SignalCandidate, minConfidence: number): string | null {
   if (!c.risk.ok) return c.risk.reason;
-  if (c.scored.count < minConfidence) return `only ${c.scored.count}/6 confirmations (needs ${minConfidence})`;
+  if (c.scored.count < minConfidence) return `only ${c.scored.count} confirmations (needs ${minConfidence})`;
   if (!c.scored.inSession) return "outside the trading session (London/New York hours only)";
   if (!c.scored.topDownAligned) return `counter-trend: the weekly structure opposes the ${c.direction}`;
   if (!c.scored.m15Aligned) return `counter-trend: the M15 trend disagrees with the ${c.direction}`;

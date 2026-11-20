@@ -1,10 +1,10 @@
-# DTS — Forex Trading System
+# DTS — Gold Trading System
 
-Signal-only forex system. Three deterministic M15 strategies — supply/demand zones,
-Alex G "set & forget" AOIs and the Fibonacci golden zone — each score a 6-point
-confirmation checklist. A setup becomes a signal only when it also passes the send gate
-below. Telegram is the single alert channel. The user reviews each signal and executes
-manually — the system never places trades.
+Signal-only gold (XAU/USD) trading system on M15 candles. One strategy sends signals — the
+**trend breakout** — and three pullback strategies (supply/demand zones, Alex G "set & forget"
+AOIs, the Fibonacci golden zone) are scanned and charted as context. Telegram is the single
+alert channel. The user reviews each signal and executes manually — the system never places
+trades.
 
 **Stack:** Next.js (App Router, single deployable on Vercel) · OANDA v20 (data) ·
 Supabase (auth + persistence) · Telegram Bot API (alerts) · OpenRouter vision model (final
@@ -18,33 +18,47 @@ npm install
 npm run dev                        # http://localhost:3000
 ```
 
-Run `supabase/schema.sql` in the Supabase SQL editor once to create the tables.
+Run `supabase/schema.sql` in the Supabase SQL editor once to create the tables (an existing
+database needs the files in `supabase/migrations/` that it has not had yet).
 
-## Signal rules
+## The trend breakout
 
-A setup is sent when **all** of these hold (`lib/engine/select.ts`, shared by the scanner and the backtest):
+Gold tends to keep going when it breaks a level in the direction of its daily trend. The
+strategy (`lib/analysis/breakout.ts`) enters on the M15 candle that first **closes** beyond a level:
 
-| Gate | Rule | Override |
+| | Asian-range break | One-week channel break |
 | --- | --- | --- |
-| Confirmations | zones ≥ 4/6, set & forget ≥ 4/6, fibonacci 6/6 | `ZONES_MIN_CONFIDENCE`, `SETFORGET_MIN_CONFIDENCE`, `FIB_MIN_CONFIDENCE`; per pair `<STRATEGY>_MIN_CONFIDENCE_<PAIR>` |
-| Session | entry falls in 12:00–21:00 UTC (New York incl. London overlap) | `TRADING_HOURS_UTC=6-21` |
-| Higher timeframe | the weekly swing structure does not oppose the trade | `REQUIRE_HTF_TREND=false`, `TREND_MODE_<PAIR>` |
-| M15 trend | M15 swing structure (HH/HL or LH/LL) agrees | `REQUIRE_M15_TREND=false`, `TREND_MODE_<PAIR>` |
-| Stop | beyond the setup's own invalidation (zone far edge / 78.6% retracement), ≥ 0.5 ATR, ≤ 3 ATR | — |
-| Costs | full spread + slippage ≤ 10% of the risk (a tighter stop is widened) | `MAX_COST_SHARE` |
-| Reward | a structural target at ≥ 2R | `MIN_R_MULTIPLE` |
-| Pair | the pair is allowed to send (default XAU/USD and GBP/AUD); others are tracked only | `SIGNAL_PAIRS` |
+| Level | high/low of 22:00–07:00 UTC | highest high / lowest low of the previous 480 M15 bars |
+| Entry window | 07:00–11:00 UTC, first break of the day only | 07:00–20:00 UTC |
+| Stop | middle of the Asian range | 3 ATR from the close |
+| Target | 0.75 × the risk (`BREAKOUT_TARGET_R`) | 0.75 × the risk |
 
-One trade per pair at a time; agreeing strategies collapse into one signal.
+Both require the **daily trend** to agree: the last closed daily close above the average of the
+last 50 means buys only, below means sells only. A trade is refused when spread + slippage
+would exceed 10% of its risk (`MAX_COST_SHARE`). One trade at a time.
+
+The modest target against a wide stop is deliberate — it is where the high win rate comes
+from. `BREAKOUT_TARGET_R=0.5` wins more often for a little less profit; `1` does the opposite.
+
+## The pullback strategies
+
+Zones, set & forget and Fibonacci each score a 6-point checklist and pass a send gate
+(`lib/engine/select.ts`: confirmation minimum, 12:00–21:00 UTC session, no opposing weekly
+structure, agreeing M15 structure, stop beyond the setup's invalidation, target at ≥ 2R). Over
+three years they are breakeven on gold, so by default they are **tracked but not sent**. To let
+one send, add it to `SIGNAL_STRATEGIES` (e.g. `breakout,setforget`); their settings are
+`ZONES_MIN_CONFIDENCE`, `SETFORGET_MIN_CONFIDENCE`, `FIB_MIN_CONFIDENCE`, `TRADING_HOURS_UTC`,
+`REQUIRE_HTF_TREND`, `REQUIRE_M15_TREND`, `TREND_MODE_<PAIR>` and `MIN_R_MULTIPLE`.
 
 ## Scanning
 
-Signals are only sent 12:00–21:00 UTC, so the scan has to run every 15 minutes inside those hours:
+A breakout exists only on the candle that closes beyond the level, so the scan has to run
+after every M15 close inside the entry windows:
 
-- `.github/workflows/scan.yml` calls `/api/scan` at :01/:16/:31/:46 from 12:00 to 20:59 UTC,
-  Monday–Friday, using the `SCAN_URL` and `CRON_SECRET` repository secrets. GitHub may start
-  scheduled runs several minutes late.
-- `vercel.json` keeps one daily cron at 12:00 UTC as a fallback (Vercel's Hobby plan allows
+- `.github/workflows/scan.yml` calls `/api/scan` at :01/:16/:31/:46 from 07:00 to 20:59 UTC,
+  Monday–Friday, using the `SCAN_URL` and `CRON_SECRET` repository secrets. GitHub can start
+  scheduled runs late; a run more than ~14 minutes late misses that candle's signal.
+- `vercel.json` keeps one daily cron at 08:00 UTC as a fallback (Vercel's Hobby plan allows
   one run per day).
 - The dashboard's **Scan now** button runs it on demand.
 
@@ -52,24 +66,29 @@ Signals are only sent 12:00–21:00 UTC, so the scan has to run every 15 minutes
 
 ## Backtesting
 
-The backtest replays the live rules: the same send gate and checklist, one trade per pair,
-higher timeframes from closed bars only, full spread + slippage on every trade, and a loss
-whenever one candle touches both stop and target. The AI vision check is not replayed.
+The backtest replays whatever is allowed to send (`SIGNAL_STRATEGIES`): the same detection and
+send rules, one trade at a time, higher timeframes from closed bars only, full spread +
+slippage on every trade, and a loss whenever one candle touches both stop and target.
 
 ```bash
-npx tsx --env-file=.env.local scripts/backtest.ts                # 3 years, all pairs, printed year by year
+npx tsx --env-file=.env.local scripts/backtest.ts                # XAU/USD, 3 years, printed year by year
 npx tsx --env-file=.env.local scripts/backtest.ts --save         # …and stored for the Backtests page
-npx tsx --env-file=.env.local scripts/backtest.ts --years=1 XAU_USD GBP_AUD
+npx tsx --env-file=.env.local scripts/backtest.ts --years=1      # a shorter window
 ```
 
-Gate settings come from the environment, so prefix any override to test it
-(`ZONES_MIN_CONFIDENCE=5 npx tsx …`). Candles are cached in `.cache/`; the first run downloads them.
-The `/backtests` page shows stored runs — whole run, per year, per strategy, per pair — and its
-**Quick run** button backtests the signal pairs over the last ~7 weeks on the server.
+Settings come from the environment, so prefix any override to test it
+(`BREAKOUT_TARGET_R=0.5 npx tsx …`). Candles are cached in `.cache/`; the first run downloads them.
+The `/backtests` page shows stored runs — whole run, per year, per strategy — and its
+**Quick run** button backtests the last ~7 weeks on the server.
 
 Read the **t** column before the profit factor: inside ±2 an average is not distinguishable
-from zero. Current result at the production settings (3 years to 2026-11-20, 8 pairs):
-1,427 trades, profit factor 1.01, +0.005R per trade, t = 0.1 — breakeven.
+from zero.
+
+Trend breakout on XAU/USD, 3 years to 2026-11-20: 458 trades (0.6 a trading day), 67% wins,
+profit factor 1.40, +0.133R per trade, t = 3.5; each year positive (+0.10R, +0.12R, +0.19R per
+trade); profit factor 1.31 with costs doubled. That is a past result on one instrument, found
+by searching — treat it as a hypothesis to confirm on a practice account, not a promise.
+Variants that trade 2–3 times a day (shorter channels, no trend filter) were tested and lose.
 
 `scripts/research-strategies.ts` is a faster lab for new ideas: it tests entry rules on three
 years of M15 data (first two years to design, last year held out) before anything is built
@@ -84,7 +103,7 @@ npx tsx scripts/verify-risk.ts     # stops, targets, sizing, cost cap
 
 ## Routes
 
-- `/` — dashboard: M15 chart with the engine's overlays (zones, fib, AOI, trendlines, S/R, structure, trade plan), send-gate status, live confirmation tracker, signal feed, Ask AI, Scan now
+- `/` — dashboard: M15 chart with the engine's overlays (breakout levels, zones, fib, AOI, trendlines, S/R, structure, trade plan), daily trend and entry-window status, live confirmation tracker, signal feed, Ask AI, Scan now
 - `/backtests` — stored backtest runs and the quick run
 - `/login` — Supabase auth
 - `/api/candles` — OANDA candle proxy (key stays server-side)

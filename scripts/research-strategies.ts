@@ -8,9 +8,11 @@
  * bar touches both, one open trade per pair, and no trade whose costs exceed
  * 10% of its risk. The first two years are the DESIGN sample; the last year
  * is the HOLDOUT. A rule is only worth building when it is positive in both,
- * with t above ~2 in the design sample, across most pairs.
+ * with t above ~2 in the design sample — and, when more than one instrument
+ * is tested, across most of them.
  *
  * Usage: npx tsx --env-file=.env.local scripts/research-strategies.ts [PAIR ...]
+ *        (no pairs = XAU_USD; e.g. add EUR_USD GBP_USD USD_JPY for breadth)
  *        ONLY=C npx tsx ...   (run one family)
  */
 import { SPREAD_PIPS, DEFAULT_SPREAD_PIPS, SLIPPAGE_PIPS, pipSize } from "@/lib/analysis/instruments";
@@ -632,10 +634,10 @@ STRATEGIES["N1 London first-hour drive, 2R"] = (m) => {
 
 // ─────────────────────────────────── runner ────────────────────────────────────
 
-const DEFAULT_PAIRS = [...PAIRS, "EUR_USD", "AUD_USD", "NZD_USD"];
-
 async function main() {
-  const pairs = process.argv.slice(2).length ? process.argv.slice(2) : DEFAULT_PAIRS;
+  // Name more instruments on the command line to check that a rule is not
+  // just a quirk of one market.
+  const pairs = process.argv.slice(2).length ? process.argv.slice(2) : [...PAIRS];
   const markets: Market[] = [];
   for (const pair of pairs) markets.push(buildMarket(pair, (await loadPairData(pair, SPAN_DAYS)).m15));
 

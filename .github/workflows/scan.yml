@@ -10,14 +10,17 @@ name: Scan
 #   SCAN_URL     the deployed site's origin, e.g. https://your-app.vercel.app
 #   CRON_SECRET  the same value as the CRON_SECRET env var on Vercel
 #
-# Keep this window in step with TRADING_HOURS_UTC (lib/analysis/session.ts).
+# Keep this window in step with the entry hours in lib/analysis/breakout.ts
+# (and TRADING_HOURS_UTC if a pullback strategy is allowed to send).
 
 on:
   schedule:
-    # 12:01–20:46 UTC, Monday–Friday. One minute past each quarter hour so the
-    # M15 candle that just closed is already marked complete by OANDA; the last
-    # run reads the 20:45 close, the final entry inside the 12:00–21:00 window.
-    - cron: "1,16,31,46 12-20 * * 1-5"
+    # 07:01–20:46 UTC, Monday–Friday: the trend breakout's entry windows
+    # (Asian-range break 07:00–11:00, one-week channel break 07:00–20:00). One
+    # minute past each quarter hour so the M15 candle that just closed is
+    # already marked complete by OANDA. A breakout only exists on the candle
+    # that closes beyond the level, so a skipped run is a missed signal.
+    - cron: "1,16,31,46 7-20 * * 1-5"
   workflow_dispatch:
 
 # GitHub can start scheduled runs late; never let two scans overlap.

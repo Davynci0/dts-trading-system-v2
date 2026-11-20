@@ -5,6 +5,7 @@ import { STRATEGIES, type StrategyId } from "@/lib/types";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 
 const CONFIRMATIONS: Record<StrategyId, string[]> = {
+  breakout: ["Closed beyond the level", "Daily trend agrees", "Inside the entry window"],
   zones: [
     "Price entered zone",
     "Rejection candle in zone",
@@ -44,7 +45,7 @@ interface SetupRow {
 }
 
 /**
- * Live per-strategy 5-point confirmation tracker (Section 3). Reads setup
+ * Live per-strategy confirmation tracker. Reads setup
  * state written by the scanner (/api/setups); polls every 30s.
  * Shows only the selected pair/timeframe's most recent setup per strategy —
  * each pair has its own independent confirmation state.
@@ -93,7 +94,9 @@ export default function ConfirmationTracker({ pair, timeframe }: { pair: string;
             <div key={s.id}>
               <div className="mb-1 flex items-baseline justify-between">
                 <span className="text-xs font-medium text-neutral-300">{s.label}</span>
-                <span className="font-mono text-xs text-neutral-500">{count}/6</span>
+                <span className="font-mono text-xs text-neutral-500">
+                  {count}/{CONFIRMATIONS[s.id].length}
+                </span>
               </div>
               {!latest && (
                 <div className="mb-1 text-[10px] text-neutral-600">
@@ -108,7 +111,10 @@ export default function ConfirmationTracker({ pair, timeframe }: { pair: string;
               )}
               <ul className="space-y-0.5">
                 {CONFIRMATIONS[s.id].map((label) => {
-                  const met = conf[label] === true;
+                  // the breakout names the level it broke ("…the Asian range")
+                  const met =
+                    conf[label] === true ||
+                    (s.id === "breakout" && label.startsWith("Closed beyond") && Object.keys(conf).some((k) => k.startsWith("Closed beyond") && conf[k]));
                   return (
                     <li
                       key={label}

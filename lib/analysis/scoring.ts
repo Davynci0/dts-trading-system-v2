@@ -17,6 +17,7 @@ import { inGoldenZone } from "./fibonacci";
 import { detectZoneEntry } from "./zones";
 import { setForgetEntry, type SetForgetSetup } from "./setForget";
 import type { HeadShouldersPattern } from "./headshoulders";
+import { detectBreakout, type BreakoutSetup } from "./breakout";
 
 const REQUIRE_HTF_TREND = (process.env.REQUIRE_HTF_TREND ?? "true") !== "false";
 const REQUIRE_M15_TREND = (process.env.REQUIRE_M15_TREND ?? "true") !== "false";
@@ -55,6 +56,8 @@ export interface ScoringContext {
   trendMode?: { htf: boolean; m15: boolean };
   /** Active H&S / inverse-H&S reversal patterns (neckline break just fired). */
   headShoulders?: HeadShouldersPattern[];
+  /** Closed daily candles — the trend breakout's daily-trend filter. */
+  daily?: Candle[];
 }
 
 export interface ScoreResult {
@@ -79,6 +82,7 @@ export interface ScoreResult {
     fib?: FibSetup;
     zone?: Zone;
     setForget?: SetForgetSetup;
+    breakout?: BreakoutSetup;
   } | null;
 }
 
@@ -139,6 +143,32 @@ export function scoreSetup(
   let direction: SignalDirection | null = null;
   const confirmations: Record<string, boolean> = {};
   let trigger: ScoreResult["trigger"] = null;
+
+  if (strategy === "breakout") {
+    // The breakout is all-or-nothing: detectBreakout only returns a setup when
+    // the close, the daily trend and the entry window all line up, so every
+    // check is met whenever there is a trigger. Its session and trend rules are
+    // its own — the pullback strategies' gates do not apply.
+    const setup = detectBreakout(candles, ctx.daily ?? [], ctx.atrValue);
+    if (!setup) return noTrigger(strategy);
+    const confirmations = {
+      [setup.kind === "asian" ? "Closed beyond the Asian range" : "Closed beyond the 1-week channel"]: true,
+      "Daily trend agrees": true,
+      "Inside the entry window": true,
+    };
+    return {
+      strategy,
+      direction: setup.direction,
+      confirmations,
+      count: 3,
+      fired: true,
+      topDownAligned: true,
+      m15Aligned: true,
+      inSession: true,
+      hasTrigger: true,
+      trigger: { breakout: setup },
+    };
+  }
 
   if (strategy === "zones") {
     const entry = detectZoneEntry(candles, ctx.zones);

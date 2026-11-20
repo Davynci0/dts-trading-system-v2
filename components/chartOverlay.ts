@@ -96,6 +96,14 @@ export interface OverlayData {
     price: number;
     time: number;
   }[];
+  /** trend breakout: the Asian range, the one-week channel and the daily trend */
+  breakout?: {
+    trend: 1 | -1 | 0;
+    asian: { high: number; low: number; startTime: number; endTime: number } | null;
+    channel: { high: number; low: number } | null;
+    asianWindowOpen: boolean;
+    channelWindowOpen: boolean;
+  } | null;
   /** market structure: the engine's swing points, labelled HH / HL / LH / LL */
   structure?: {
     time: number;
@@ -394,6 +402,53 @@ class OverlayPaneView implements IPrimitivePaneView {
               ctx.stroke();
               ctx.setLineDash([]);
               label(`${p.direction === "short" ? "H&S" : "Inverse H&S"} target ${fmt(p.target)}`, W - 6, ty - 6, "rgba(217,119,6,1)", "bold 9px monospace", "right", 2);
+            }
+          }
+
+          // trend breakout: the Asian range box and the one-week channel. Only
+          // the level on the trend's side is a trigger; it is drawn solid and
+          // labelled, the opposite side stays faint.
+          if (data.breakout) {
+            const b = data.breakout;
+            const AMBER = "rgba(245,158,11,";
+            const SLATE = "rgba(148,163,184,";
+            const side = b.trend === 1 ? "BUY" : b.trend === -1 ? "SELL" : null;
+            const triggerLine = (price: number, fromX: number, text: string, live: boolean) => {
+              const y = source.priceToY(price);
+              if (y == null) return;
+              ctx.strokeStyle = `${AMBER}${live ? "0.95)" : "0.55)"}`;
+              ctx.lineWidth = live ? 2 : 1.5;
+              ctx.setLineDash(live ? [] : [6, 4]);
+              ctx.beginPath();
+              ctx.moveTo(Math.max(0, fromX), y);
+              ctx.lineTo(W, y);
+              ctx.stroke();
+              ctx.setLineDash([]);
+              ctx.lineWidth = 1;
+              label(text, W - 6, y - 4, `${AMBER}1)`, "bold 10px monospace", "right", 1);
+            };
+            if (b.asian) {
+              const x0 = source.timeToX(b.asian.startTime);
+              const x1 = source.timeToX(b.asian.endTime);
+              const yTop = source.priceToY(b.asian.high);
+              const yBottom = source.priceToY(b.asian.low);
+              if (x0 != null && yTop != null && yBottom != null) {
+                const xEnd = x1 != null ? x1 : W;
+                ctx.fillStyle = `${SLATE}0.10)`;
+                ctx.fillRect(x0, yTop, Math.max(xEnd - x0, 2), yBottom - yTop);
+                ctx.strokeStyle = `${SLATE}0.55)`;
+                ctx.lineWidth = 1;
+                ctx.strokeRect(x0, yTop, Math.max(xEnd - x0, 2), yBottom - yTop);
+                label("Asian range", x0 + 4, yTop + 12, `${SLATE}1)`, "10px monospace", "left", 4);
+                if (side) {
+                  const level = b.trend === 1 ? b.asian.high : b.asian.low;
+                  triggerLine(level, xEnd, `${side} on a close ${b.trend === 1 ? "above" : "below"} ${fmt(level)} · Asian range${b.asianWindowOpen ? "" : " (window closed)"}`, b.asianWindowOpen);
+                }
+              }
+            }
+            if (b.channel && side) {
+              const level = b.trend === 1 ? b.channel.high : b.channel.low;
+              triggerLine(level, 0, `${side} on a close ${b.trend === 1 ? "above" : "below"} ${fmt(level)} · 1-week ${b.trend === 1 ? "high" : "low"}${b.channelWindowOpen ? "" : " (window closed)"}`, b.channelWindowOpen);
             }
           }
 

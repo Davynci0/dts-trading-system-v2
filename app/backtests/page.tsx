@@ -35,7 +35,9 @@ function verdict(m: MetricsCore): string {
 }
 
 function MetricTable({ rows, segment }: { rows: ResultRow[]; segment: Segment }) {
-  const cols = ["", "Trades", "Win rate", "Profit factor", "Avg R", "Total R", "t", "Max DD", "4/6", "5–6/6"];
+  // the confirmation-count columns only mean something for the 6-point pullback strategies
+  const counts = rows.some((r) => (r.metrics[segment]?.confidence4 ?? 0) + (r.metrics[segment]?.confidence5 ?? 0) > 0);
+  const cols = ["", "Trades", "Win rate", "Profit factor", "Avg R", "Total R", "t", "Max DD", ...(counts ? ["4/6", "5–6/6"] : [])];
   return (
     <div className="overflow-x-auto">
       <table className="w-full text-left text-xs">
@@ -60,8 +62,8 @@ function MetricTable({ rows, segment }: { rows: ResultRow[]; segment: Segment })
                 <td className={`px-4 py-2 ${verdict(m)}`}>{m.trades ? fmt.r(m.totalR ?? m.avgR * m.trades, 1) : "—"}</td>
                 <td className="px-4 py-2">{m.trades ? (m.tStat ?? 0).toFixed(1) : "—"}</td>
                 <td className="px-4 py-2">{m.trades ? `${m.maxDrawdownR.toFixed(1)}R` : "—"}</td>
-                <td className="px-4 py-2">{m.confidence4}</td>
-                <td className="px-4 py-2">{m.confidence5}</td>
+                {counts && <td className="px-4 py-2">{m.confidence4}</td>}
+                {counts && <td className="px-4 py-2">{m.confidence5}</td>}
               </tr>
             );
           })}
@@ -72,9 +74,9 @@ function MetricTable({ rows, segment }: { rows: ResultRow[]; segment: Segment })
 }
 
 /**
- * Backtest results: stored runs of the live rules — the send gate, one trade
- * per pair, closed higher-timeframe bars, full spread + slippage — with the
- * whole run next to its first 70% and last 30%.
+ * Backtest results: stored runs of the strategies that send live signals —
+ * one trade at a time, closed higher-timeframe bars, full spread + slippage —
+ * with the whole run next to its first 70% and last 30%.
  */
 export default function BacktestsPage() {
   const [run, setRun] = useState<RunRow | null>(null);
@@ -133,10 +135,10 @@ export default function BacktestsPage() {
         <div>
           <h1 className="text-lg font-semibold text-neutral-100">Backtest Results</h1>
           <p className="mt-1 max-w-3xl text-xs text-neutral-500">
-            The live rules replayed on history: the same send gate and 6-point checklist as the scanner, one trade
-            per pair, higher timeframes from closed bars only, full spread + slippage on every trade, and a loss
-            whenever one candle touches both stop and target. The AI vision check is not replayed. An average is
-            coloured only when its t value is beyond ±2 — inside that, it is not distinguishable from zero.
+            The strategies that send live signals, replayed on history with the scanner&apos;s own detection and send
+            rules: one trade at a time, higher timeframes from closed bars only, full spread + slippage on every
+            trade, and a loss whenever one candle touches both stop and target. An average is coloured only when
+            its t value is beyond ±2 — inside that, it is not distinguishable from zero.
           </p>
         </div>
         <button
@@ -205,8 +207,8 @@ export default function BacktestsPage() {
             )
           )}
           <p className="text-xs text-neutral-600">
-            Strategies: {STRATEGIES.map((s) => s.label).join(" · ")}. The 4/6 and 5–6/6 columns count trades by
-            confirmations met at entry.
+            Strategies: {STRATEGIES.map((s) => s.label).join(" · ")}. Where shown, the 4/6 and 5–6/6 columns
+            count trades by confirmations met at entry.
           </p>
         </>
       )}

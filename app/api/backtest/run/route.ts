@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
 import { runBacktest, computeMetrics, LOT_SIZES, type BacktestTrade } from "@/lib/backtest/engine";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { minConfidenceFor, signalPairs } from "@/lib/engine/scanner";
+import { minConfidenceFor, signalPairs, signalStrategies } from "@/lib/engine/scanner";
 import type { StrategyId } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -26,7 +26,7 @@ const TIMEFRAME_HOURS: Record<string, number> = {
  *   lotSize?: "0.01" | "0.1" | "1",
  *   riskPercent?: number,
  *   minConfidence?: number,   // omit to use the live per-strategy gate
- *   strategies?: ("zones"|"setforget"|"fibonacci")[]
+ *   strategies?: ("breakout"|"zones"|"setforget"|"fibonacci")[]  // omit for the live ones
  * }
  * Runs in live-parity mode: the scanner's send gate, one trade per pair, and
  * (unless minConfidence is given) the same per-strategy confirmation minimums.
@@ -50,8 +50,9 @@ export async function POST(req: NextRequest) {
   const riskPercent = body.riskPercent ?? 0.01;
   const minConfidence = body.minConfidence; // undefined → live per-strategy gate
   const fixedUnits = lotSize ? LOT_SIZES[lotSize] ?? undefined : undefined;
-  const validStrategies: StrategyId[] = ["zones", "setforget", "fibonacci"];
-  const strategies = body.strategies?.filter((s): s is StrategyId => validStrategies.includes(s as StrategyId)) ?? validStrategies;
+  const validStrategies: StrategyId[] = ["breakout", "zones", "setforget", "fibonacci"];
+  // default: exactly the strategies that send live signals
+  const strategies = body.strategies?.filter((s): s is StrategyId => validStrategies.includes(s as StrategyId)) ?? [...signalStrategies()];
   const horizonHours = count * (TIMEFRAME_HOURS[timeframe] ?? 1 / 4);
   const topDownCounts = {
     weekly: Math.min(5000, Math.max(52, Math.ceil(horizonHours / (24 * 7)) + 10)),
@@ -110,6 +111,7 @@ export async function POST(req: NextRequest) {
         fixedUnits,
         riskPercent,
         minConfidence: minConfidence ?? {
+          breakout: minConfidenceFor(pair, "breakout"),
           zones: minConfidenceFor(pair, "zones"),
           setforget: minConfidenceFor(pair, "setforget"),
           fibonacci: minConfidenceFor(pair, "fibonacci"),
@@ -136,7 +138,7 @@ export async function POST(req: NextRequest) {
   const scopes: Record<string, unknown> = {
     combined: scope(allTrades),
   };
-  for (const strategy of ["zones", "setforget", "fibonacci"] as const) {
+  for (const strategy of validStrategies) {
     scopes[`strategy:${strategy}`] = scope(allTrades.filter((r) => r.trade.strategy === strategy));
   }
   for (const pair of pairs) {

@@ -2,6 +2,7 @@ import type { Candle, SignalDirection } from "@/lib/types";
 import { atr } from "./indicators";
 import { tradeCost, pipSize } from "./instruments";
 import { significantPivots, type Pivot } from "./pivots";
+import { BREAKOUT_TARGET_R, CHANNEL_STOP_ATR } from "./breakout";
 
 export const STOP_BUFFER_ATR_FRACTION = 0.25; // room beyond the swing so the stop isn't on the wick
 export const MIN_STOP_ATR = 0.5; // a stop inside half an ATR sits within normal candle noise
@@ -30,7 +31,7 @@ export interface RiskLevels {
    *  (converted from the quote currency via quoteUsdRate) */
   positionUnits: number;
   riskAmount: number;
-  tpSource: "swing" | "zone" | "measured_move";
+  tpSource: "swing" | "zone" | "measured_move" | "fixed_r";
   /** the market structure each level is anchored to, e.g. "below swing low 4149.634" */
   stopBasis: string;
   targetBasis: string;
@@ -55,6 +56,8 @@ export interface SetupTrigger {
   zone?: { kind: "demand" | "supply"; top: number; bottom: number };
   fib?: { direction: "long" | "short"; swingLow: { price: number }; swingHigh: { price: number }; goldenTop: number; goldenBottom: number };
   setForget?: { direction: "long" | "short"; legLow: { price: number }; legHigh: { price: number }; aoiTop: number; aoiBottom: number };
+  /** a trend breakout carries its own stop; the target is a fixed multiple of the risk */
+  breakout?: { kind: "asian" | "channel"; direction: "long" | "short"; stop: number; high: number; low: number };
 }
 
 interface Candidate {
@@ -134,6 +137,49 @@ export function computeRiskLevels(opts: {
   const atrValue = atr(candles, 14);
   if (atrValue == null || atrValue <= 0) {
     return { ok: false, reason: "ATR unavailable (not enough candles)", levels: null };
+  }
+
+  // --- trend breakout: the setup defines both levels ---
+  const breakout = opts.trigger?.breakout;
+  if (breakout) {
+    const stopLoss = breakout.stop;
+    const stopDistance = (entry - stopLoss) * (long ? 1 : -1);
+    if (!(stopDistance > 0)) {
+      return { ok: false, reason: "price has already closed through the breakout's stop", levels: null };
+    }
+    if (!(quoteUsdRate > 0)) {
+      return { ok: false, reason: "USD conversion rate for the quote currency is unavailable — cannot size the position", levels: null };
+    }
+    const takeProfit = entry + (long ? 1 : -1) * BREAKOUT_TARGET_R * stopDistance;
+    const riskAmount = accountBalance * RISK_PCT_PER_TRADE;
+    const levels: RiskLevels = {
+      direction,
+      entry,
+      stopLoss,
+      takeProfit,
+      stopDistance,
+      rMultiple: BREAKOUT_TARGET_R,
+      atr: atrValue,
+      positionUnits: Math.floor(riskAmount / (stopDistance * quoteUsdRate)),
+      riskAmount,
+      tpSource: "fixed_r",
+      stopBasis:
+        breakout.kind === "asian"
+          ? `middle of the Asian range ${fmt(breakout.low)}–${fmt(breakout.high)}`
+          : `${CHANNEL_STOP_ATR} ATR ${long ? "below" : "above"} the breakout close`,
+      targetBasis: `${BREAKOUT_TARGET_R}× the risk`,
+      riskPips: pips(stopDistance),
+      rewardPips: pips(Math.abs(takeProfit - entry)),
+    };
+    const costShare = tradeCost(instrument) / stopDistance;
+    if (MAX_COST_SHARE > 0 && costShare > MAX_COST_SHARE) {
+      return {
+        ok: false,
+        reason: `spread + slippage would be ${(costShare * 100).toFixed(0)}% of the risk (max ${MAX_COST_SHARE * 100}%)`,
+        levels,
+      };
+    }
+    return { ok: true, levels };
   }
 
   const swings = significantPivots(pivots, atrValue, STRUCTURE_SWING_ATR);

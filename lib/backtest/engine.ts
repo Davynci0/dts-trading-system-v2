@@ -27,7 +27,7 @@ export const LOT_SIZES: Record<string, number> = {
   "0.1": 10000,
   "1": 100000,
 };
-const ALL_STRATEGIES: StrategyId[] = ["zones", "setforget", "fibonacci"];
+const ALL_STRATEGIES: StrategyId[] = ["breakout", "zones", "setforget", "fibonacci"];
 
 export interface BacktestTrade {
   strategy: StrategyId;
@@ -309,9 +309,11 @@ export function runBacktest(opts: {
     const htfEnd = htfClosed(closeTime);
     const htfSlice = htfCandles.slice(Math.max(0, htfEnd - 300), htfEnd);
     let topDown: TopDownAnalysis | undefined;
+    let daily: Candle[] = [];
     if (topDownCandles && tdClosed) {
       const w = tdClosed.weekly(closeTime);
       const d = tdClosed.daily(closeTime);
+      daily = topDownCandles.daily.slice(Math.max(0, d - 90), d);
       const h4 = tdClosed.h4(closeTime);
       const h1 = tdClosed.h1(closeTime);
       const key = `${w}:${d}:${h4}:${h1}`;
@@ -340,6 +342,7 @@ export function runBacktest(opts: {
       topDown,
       trendMode,
       headShoulders: m15.headShoulders,
+      daily,
     };
 
     // Every strategy that reaches its gate on this candle, with the same

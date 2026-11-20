@@ -1,4 +1,4 @@
-export type StrategyId = "fibonacci" | "zones" | "setforget";
+export type StrategyId = "breakout" | "fibonacci" | "zones" | "setforget";
 export type SignalDirection = "long" | "short";
 
 export interface Candle {
@@ -21,7 +21,7 @@ export interface Signal {
   stop_loss: number;
   take_profit: number;
   r_multiple: number | null;
-  /** confirmations met out of 6; 5+ = high confidence */
+  /** confirmations met (out of CHECKS[strategy]) */
   confidence: number;
   confirmations: Record<string, boolean>;
   vision_note: string | null;
@@ -45,20 +45,11 @@ export interface Signal {
   superseded_at: string | null;
 }
 
-/** XAU + hand-picked majors/crosses with wide ranges and sharp risk-shift moves:
- *  JPY quote pairs (GBP_JPY, USD_JPY, EUR_JPY, AUD_JPY), the classic
- *  GBP volatile set (GBP_USD, GBP_AUD, GBP_NZD) and gold. NZD_JPY removed
- *  because of persistent feed/liquidity noise. All use the same M15 pipeline. */
-export const PAIRS = [
-  "XAU_USD",
-  "GBP_JPY",
-  "GBP_USD",
-  "AUD_JPY",
-  "USD_JPY",
-  "EUR_JPY",
-  "GBP_AUD",
-  "GBP_NZD",
-] as const;
+/** The instruments the system scans, charts and backtests. Gold only: every
+ *  scan, the dashboard and the default backtest work on this list, so adding
+ *  an instrument here (plus its spread in lib/analysis/instruments.ts) is all
+ *  it takes to bring one back. */
+export const PAIRS = ["XAU_USD"] as const;
 
 export type Pair = (typeof PAIRS)[number];
 
@@ -69,7 +60,16 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 export const TRADE_TIMEFRAMES = ["M15"] as const satisfies readonly Timeframe[];
 
 export const STRATEGIES: { id: StrategyId; label: string }[] = [
+  { id: "breakout", label: "Trend Breakout" },
   { id: "zones", label: "Supply/Demand Zone" },
   { id: "setforget", label: "Alex G Set & Forget" },
   { id: "fibonacci", label: "Fibonacci Retracement" },
 ];
+
+/** How many checks each strategy's confirmation list has. */
+export const CHECKS: Record<StrategyId, number> = {
+  breakout: 3,
+  zones: 6,
+  setforget: 6,
+  fibonacci: 6,
+};

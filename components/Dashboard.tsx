@@ -10,6 +10,7 @@ import { pipSize } from "@/lib/analysis/confirmations";
 import { EMPTY_OVERLAY, type OverlayData } from "@/components/chartOverlay";
 
 const LAYERS = [
+  { id: "breakout", label: "Breakout" },
   { id: "zones", label: "Zones" },
   { id: "fib", label: "Fib" },
   { id: "aoi", label: "AOI" },
@@ -35,6 +36,8 @@ interface TopDownSummary {
 
 /** What the send gate currently allows on this pair (from /api/analysis). */
 interface GateSummary {
+  /** true when a pullback strategy (zones / set & forget / fib) may send */
+  pullback: boolean;
   inSession: boolean;
   sessionHours: string;
   longAllowed: boolean;
@@ -55,6 +58,7 @@ export default function Dashboard() {
   const [scanStatus, setScanStatus] = useState<string | null>(null);
   const [pairSignals, setPairSignals] = useState<Signal[]>([]);
   const [layers, setLayers] = useState<Record<LayerId, boolean>>({
+    breakout: true,
     zones: true,
     fib: true,
     aoi: true,
@@ -141,6 +145,7 @@ export default function Dashboard() {
       levels: layers.levels ? overlay.levels : undefined,
       headshoulders: layers.headshoulders ? overlay.headshoulders : undefined,
       structure: layers.structure ? overlay.structure : undefined,
+      breakout: layers.breakout ? overlay.breakout : undefined,
       position: layers.position ? position : null,
       history: layers.history ? history : [],
       digits: (() => {
@@ -199,6 +204,7 @@ export default function Dashboard() {
             hs: json.headshoulders ?? [],
             lv: json.levels ?? [],
             st: json.structure ?? [],
+            b: json.breakout ?? null,
             g: json.gate ?? null,
             d: json.topDown ?? null,
           });
@@ -213,6 +219,7 @@ export default function Dashboard() {
             levels: json.levels ?? [],
             headshoulders: json.headshoulders ?? [],
             structure: json.structure ?? [],
+            breakout: json.breakout ?? null,
           });
           setTopDown(json.topDown ?? null);
           setGate(json.gate ?? null);
@@ -283,17 +290,23 @@ export default function Dashboard() {
       <div className="flex min-w-0 flex-1 flex-col gap-3">
         {/* toolbar */}
         <div className="flex flex-wrap items-center gap-2">
-          <select
-            value={pair}
-            onChange={(e) => changePair(e.target.value as Pair)}
-            className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm text-neutral-100"
-          >
-            {PAIRS.map((p) => (
-              <option key={p} value={p}>
-                {p.replace("_", "/")}
-              </option>
-            ))}
-          </select>
+          {PAIRS.length > 1 ? (
+            <select
+              value={pair}
+              onChange={(e) => changePair(e.target.value as Pair)}
+              className="rounded border border-neutral-700 bg-neutral-900 px-2 py-1.5 text-sm text-neutral-100"
+            >
+              {PAIRS.map((p) => (
+                <option key={p} value={p}>
+                  {p.replace("_", "/")}
+                </option>
+              ))}
+            </select>
+          ) : (
+            <span className="rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1.5 text-sm font-medium text-neutral-100">
+              {pair.replace("_", "/")}
+            </span>
+          )}
           <span className="rounded border border-neutral-700 bg-neutral-700 px-2.5 py-1.5 text-sm text-white">
             M15
           </span>
@@ -346,7 +359,21 @@ export default function Dashboard() {
               Bias {topDown.bias}
             </span>
             {topDown.m15 ? <span>M15 {topDown.m15}</span> : null}
-            {gate && (
+            {overlay.breakout && (
+              <>
+                <span className="text-neutral-300">Breakout</span>
+                <span className={overlay.breakout.trend === 1 ? "text-emerald-400" : overlay.breakout.trend === -1 ? "text-rose-400" : "text-zinc-400"}>
+                  daily trend {overlay.breakout.trend === 1 ? "up — buys only" : overlay.breakout.trend === -1 ? "down — sells only" : "unknown"}
+                </span>
+                <span className={overlay.breakout.asianWindowOpen ? "text-emerald-400" : "text-neutral-500"}>
+                  Asian-range window {overlay.breakout.asianWindowOpen ? "open" : "closed"} (07–11 UTC)
+                </span>
+                <span className={overlay.breakout.channelWindowOpen ? "text-emerald-400" : "text-neutral-500"}>
+                  1-week window {overlay.breakout.channelWindowOpen ? "open" : "closed"} (07–20 UTC)
+                </span>
+              </>
+            )}
+            {gate?.pullback && (
               <>
                 <span className="text-neutral-300">Send gate</span>
                 <span className={gate.inSession ? "text-emerald-400" : "text-amber-400"}>

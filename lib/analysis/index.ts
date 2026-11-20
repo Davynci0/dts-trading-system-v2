@@ -22,6 +22,15 @@ export { detectHeadShoulders, type HeadShouldersPattern } from "./headshoulders"
 export { findSetForgetSetup, setForgetEntry, type SetForgetSetup } from "./setForget";
 export { analyzeTopDown, topDownAgrees, topDownOpposes, type TopDownAnalysis, type TopDownCandles } from "./topDown";
 export { legIsIntact } from "./swing";
+export {
+  detectBreakout,
+  dailyTrend,
+  asianRange,
+  channelBefore,
+  breakoutLevels,
+  BREAKOUT_TARGET_R,
+  type BreakoutSetup,
+} from "./breakout";
 export { inTradingSession, tradingHoursUtc } from "./session";
 export { pipSize, typicalSpread, tradeCost, roundNumberStep, SPREAD_PIPS, SLIPPAGE_PIPS } from "./instruments";
 export { scoreSetup, SIGNAL_THRESHOLD, m15Agrees, trendModeFor, type ScoringContext, type ScoreResult, type TrendMode } from "./scoring";

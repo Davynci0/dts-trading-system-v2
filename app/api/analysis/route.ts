@@ -4,6 +4,14 @@ import { analyzeM15, M15_TRENDLINE_LOOKBACK } from "@/lib/analysis/execution";
 import { findRecentSwing, inGoldenZone } from "@/lib/analysis/fibonacci";
 import { analyzeTopDown, topDownOpposes } from "@/lib/analysis/topDown";
 import { inTradingSession, tradingHoursUtc } from "@/lib/analysis/session";
+import {
+  breakoutLevels,
+  ASIAN_END_HOUR,
+  ASIAN_ENTRY_END_HOUR,
+  CHANNEL_ENTRY_START_HOUR,
+  CHANNEL_ENTRY_END_HOUR,
+} from "@/lib/analysis/breakout";
+import { signalStrategies } from "@/lib/engine/scanner";
 
 export const maxDuration = 60;
 
@@ -31,7 +39,7 @@ export async function GET(req: NextRequest) {
     ]);
     const analysis = analyzeM15(candles, instrument);
     if (!analysis) {
-      return NextResponse.json({ candles, zones: [], fib: null, aoi: null, topDown: null, structure: [], gate: null });
+      return NextResponse.json({ candles, zones: [], fib: null, aoi: null, topDown: null, structure: [], breakout: null, gate: null });
     }
 
     const topDown = analyzeTopDown({ weekly, daily, h4, h1 });
@@ -93,9 +101,26 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // The send gate's view of this market right now (lib/engine/select.ts).
+    // Trend breakout: the levels it is waiting on. Only the trend-side level
+    // of each pair is a trigger. The next candle to close is the one that can
+    // break out, so the windows are judged at its open (= this candle's close).
+    const waiting = breakoutLevels(candles, daily);
+    const nextHour = new Date((last.time + 900) * 1000).getUTCHours();
+    const breakout = {
+      trend: waiting.trend,
+      asian: waiting.asian,
+      channel: waiting.channel,
+      asianWindowOpen: nextHour >= ASIAN_END_HOUR && nextHour < ASIAN_ENTRY_END_HOUR,
+      channelWindowOpen: nextHour >= CHANNEL_ENTRY_START_HOUR && nextHour < CHANNEL_ENTRY_END_HOUR,
+    };
+
+    // The pullback strategies' send gate (lib/engine/select.ts) — only shown
+    // when one of them is allowed to send.
     const [sessionStart, sessionEnd] = tradingHoursUtc();
+    const sending = signalStrategies();
     const gate = {
+      strategies: [...sending],
+      pullback: [...sending].some((s) => s !== "breakout"),
       inSession: inTradingSession(last.time + 900),
       sessionHours: `${String(sessionStart).padStart(2, "0")}:00–${String(sessionEnd).padStart(2, "0")}:00 UTC`,
       longAllowed: !topDownOpposes(topDown, "long"),
@@ -150,6 +175,7 @@ export async function GET(req: NextRequest) {
       headshoulders,
       levels,
       structure: structure.slice(-18),
+      breakout,
       gate,
       topDown: {
         weekly: topDown.weekly,

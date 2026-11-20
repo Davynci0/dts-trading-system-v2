@@ -14,7 +14,10 @@ import { findFibSetup, inGoldenZone } from "../lib/analysis/fibonacci";
 import { findSetForgetSetup, setForgetEntry } from "../lib/analysis/setForget";
 import { scoreSetup, type ScoringContext } from "../lib/analysis/scoring";
 import { runBacktest } from "../lib/backtest/engine";
-import { setupDisposition, signalPairs } from "../lib/engine/scanner";
+import { setupDisposition, signalPairs, signalStrategies } from "../lib/engine/scanner";
+import { detectBreakout, dailyTrend, asianRange, BREAKOUT_TARGET_R, CHANNEL_BARS, CHANNEL_STOP_ATR } from "../lib/analysis/breakout";
+import { computeRiskLevels } from "../lib/analysis/risk";
+import { buildSetupKey } from "../lib/analysis/setupKey";
 import { analyzeTopDown, topDownAgrees, topDownOpposes } from "../lib/analysis/topDown";
 import { detectHeadShoulders } from "../lib/analysis/headshoulders";
 import { goldenZoneHasPoi } from "../lib/analysis/confirmations";
@@ -574,6 +577,69 @@ if (sf) {
   check("select: nothing to select from → null", selectSignal([]) === null, "null");
 }
 
+// ============ Trend breakout ============
+{
+  const bar = (time: number, o: number, h: number, l: number, c: number): Candle => ({ time, open: o, high: h, low: l, close: c, volume: 1 });
+  const days = (step: number): Candle[] => Array.from({ length: 60 }, (_, i) => bar(i * 86400, 4000 + step * i, 4005 + step * i, 3995 + step * i, 4000 + step * i));
+  const up = days(2);
+  const down = days(-2);
+  check("breakout: daily trend follows the 50-day average", dailyTrend(up) === 1 && dailyTrend(down) === -1 && dailyTrend(up.slice(0, 30)) === 0, `${dailyTrend(up)} ${dailyTrend(down)} ${dailyTrend(up.slice(0, 30))}`);
+
+  // Asian session 22:00–07:00 UTC ranging 4000–4010, then the London morning.
+  const start = Date.UTC(2026, 10, 17, 22, 0) / 1000;
+  const asia: Candle[] = [];
+  for (let i = 0; i < 36; i++) asia.push(bar(start + i * 900, 4005, i % 2 ? 4010 : 4007, i % 2 ? 4003 : 4000, 4005));
+  const t0700 = start + 36 * 900;
+  const inside = bar(t0700, 4005, 4009, 4004, 4008); // 07:00 — still inside the range
+  const breakUp = bar(t0700 + 900, 4008, 4013, 4007, 4012); // 07:15 — first close above 4010
+  const session = [...asia, inside, breakUp];
+  const range = asianRange(session);
+  check("breakout: Asian range spans 22:00–07:00 UTC only", range?.high === 4010 && range.low === 4000 && range.startTime === start && range.endTime === t0700 - 900, range ? `${range.low}–${range.high}` : "none");
+  check("breakout: nothing while price is inside the range", detectBreakout([...asia, inside], up, 2) === null, "inside");
+  const asian = detectBreakout(session, up, 2);
+  check("breakout: first close above the Asian range with the trend is a long", asian?.kind === "asian" && asian.direction === "long" && asian.level === 4010 && asian.stop === 4005, asian ? `${asian.kind} ${asian.direction} stop ${asian.stop}` : "none");
+  check("breakout: the same break against the daily trend is no trade", detectBreakout(session, down, 2) === null, "counter-trend");
+  const later = [...session, bar(t0700 + 1800, 4012, 4016, 4011, 4015)];
+  check("breakout: only the first break of the day counts", detectBreakout(later, up, 2) === null, "spent");
+  const lateDay = [...asia, ...Array.from({ length: 16 }, (_, i) => bar(t0700 + i * 900, 4005, 4009, 4004, 4006)), bar(t0700 + 16 * 900, 4006, 4014, 4005, 4013)];
+  check("breakout: the Asian range cannot be broken after 11:00 UTC", detectBreakout(lateDay, up, 2) === null, "11:00 bar");
+
+  // One-week channel: CHANNEL_BARS flat bars capped at 4002, then a close through it at 14:00 UTC.
+  const end = Date.UTC(2026, 10, 18, 14, 0) / 1000;
+  const flat: Candle[] = Array.from({ length: CHANNEL_BARS + 5 }, (_, i) => bar(end - (CHANNEL_BARS + 5 - i) * 900, 4000, 4002, 3998, 4000));
+  const week = [...flat, bar(end, 4000, 4006, 3999, 4005)];
+  const channel = detectBreakout(week, up, 2);
+  check("breakout: close above the 1-week high with the trend is a long", channel?.kind === "channel" && channel.direction === "long" && channel.level === 4002 && channel.stop === 4005 - CHANNEL_STOP_ATR * 2, channel ? `${channel.kind} stop ${channel.stop}` : "none");
+  check("breakout: a channel break against the trend is no trade", detectBreakout(week, down, 2) === null, "counter-trend");
+  const held = [...week, bar(end + 900, 4005, 4008, 4004, 4007)];
+  check("breakout: a second close beyond the channel is not a new break", detectBreakout(held, up, 2) === null, "already broken");
+
+  // Levels: the setup's own stop, a fixed-R target, and the cost cap.
+  const risk = (stop: number, entry = 4012) =>
+    computeRiskLevels({ instrument: "XAU_USD", direction: "long", entry, candles: session, pivots: [], trigger: { breakout: { kind: "asian", direction: "long", stop, high: 4010, low: 4000 } }, accountBalance: 10000 });
+  const rb = risk(4005);
+  check("breakout: stop at the range middle, target a fixed multiple of the risk", rb.ok && rb.levels.stopLoss === 4005 && Math.abs(rb.levels.takeProfit - (4012 + BREAKOUT_TARGET_R * 7)) < 1e-9 && rb.levels.tpSource === "fixed_r", rb.ok ? `SL ${rb.levels.stopLoss} TP ${rb.levels.takeProfit}` : rb.reason);
+  const tight = risk(4011);
+  check("breakout: a stop the spread would dominate is refused", !tight.ok && tight.reason.includes("of the risk"), !tight.ok ? tight.reason : "unexpectedly ok");
+
+  // Scoring, identity and who may send.
+  const ctxB: ScoringContext = { instrument: "XAU_USD", candles: session, htfCandles: session, pivots: [], atrValue: 2, zones: [], fib: null, daily: up };
+  const scoredB = scoreSetup("breakout", ctxB);
+  check("breakout: scores 3/3 and passes the send gate", scoredB.fired && scoredB.count === 3 && scoredB.inSession && scoredB.topDownAligned && scoredB.m15Aligned, `count=${scoredB.count}`);
+  check("breakout: no setup without daily candles", !scoreSetup("breakout", { ...ctxB, daily: [] }).hasTrigger, "no trend, no trade");
+  const nextDay = session.map((c) => ({ ...c, time: c.time + 86400 }));
+  check(
+    "breakout: one setup identity per Asian break per day",
+    buildSetupKey("v", scoredB) === buildSetupKey("v", scoreSetup("breakout", { ...ctxB })) && buildSetupKey("v", scoredB) !== buildSetupKey("v", scoreSetup("breakout", { ...ctxB, candles: nextDay })),
+    buildSetupKey("v", scoredB)
+  );
+  check(
+    "scanner: the breakout is the only strategy that sends by default",
+    signalStrategies(undefined).size === 1 && signalStrategies(undefined).has("breakout") && signalStrategies("breakout,setforget,nonsense").size === 2,
+    `[${[...signalStrategies(undefined)].join(",")}]`
+  );
+}
+
 // ============ Stage 9: backtest engine smoke ============
 // seeded sine-wave series with structure; assert no crash + consistent metrics
 let seed = 42;
@@ -626,10 +692,10 @@ check("backtest: limitation noted", report.limitation.includes("6-point checklis
   check("scanner: sent signal permanently dedupes the setup", afterSend.eligible === false && afterSend.signaled === true, "signaled wins");
   // firmirin confluence-grade minimum: 5 is NOT enough, 6 is
   check("scanner: fibonacci 6-point gate", setupDisposition(5, prior(null), 6).eligible === false && setupDisposition(6, prior({ lastSkip: "x" }), 6).eligible === true, "5<6 gates");
-  // only research-validated pairs may SEND signals; the rest stay watch-only
+  // gold is the only instrument that may SEND signals by default
   check(
-    "scanner: default signal pairs are the researched ones",
-    signalPairs(undefined).has("XAU_USD") && signalPairs(undefined).has("GBP_AUD") && !signalPairs(undefined).has("EUR_JPY"),
+    "scanner: the default signal pair is XAU/USD alone",
+    signalPairs(undefined).size === 1 && signalPairs(undefined).has("XAU_USD"),
     `[${[...signalPairs(undefined)].join(",")}]`
   );
   check(

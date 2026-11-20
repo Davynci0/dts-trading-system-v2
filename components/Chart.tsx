@@ -115,6 +115,12 @@ export default function Chart({
       chart.remove();
       chartRef.current = null;
       seriesRef.current = null;
+      // The next chart starts empty: forget what was attached to this one, or
+      // the overlay effect sees "nothing changed" and never draws on it (which
+      // is what happens when React re-runs effects on mount in development).
+      overlayRef.current = null;
+      overlaySigRef.current = "";
+      rangeAppliedForRef.current = null;
     };
   }, []);
 
@@ -209,6 +215,7 @@ export default function Chart({
       (overlay.trendlines?.length ?? 0) > 0 ||
       (overlay.levels?.length ?? 0) > 0 ||
       (overlay.headshoulders?.length ?? 0) > 0 ||
+      overlay.breakout != null ||
       (overlay.structure?.length ?? 0) > 0 ||
       (overlay.history?.length ?? 0) > 0;
     if (has) {

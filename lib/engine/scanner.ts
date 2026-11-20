@@ -1,5 +1,5 @@
-import type { Pair, StrategyId, Timeframe } from "@/lib/types";
-import { TRADE_TIMEFRAMES } from "@/lib/types";
+import type { Candle, Pair, StrategyId, Timeframe } from "@/lib/types";
+import { CHECKS, TRADE_TIMEFRAMES } from "@/lib/types";
 import { fetchCandles } from "@/lib/oanda";
 import {
   scoreSetup,
@@ -23,13 +23,14 @@ import { renderSetupPng } from "@/lib/vision/chartRender";
 import { validateSetupVision, type VisionVerdict } from "@/lib/vision/openrouter";
 
 const STRATEGY_LABELS: Record<StrategyId, string> = {
+  breakout: "Trend Breakout",
   zones: "Supply/Demand Zone",
   setforget: "Alex G Set & Forget",
   fibonacci: "Fibonacci Retracement",
 };
 
-/** Strategies enabled for live signals. */
-const ENABLED_STRATEGIES: StrategyId[] = ["zones", "setforget", "fibonacci"];
+/** Every strategy is scanned and tracked; SIGNAL_STRATEGIES decides which may send. */
+const ENABLED_STRATEGIES: StrategyId[] = ["breakout", "zones", "setforget", "fibonacci"];
 
 
 interface SetupState {
@@ -96,6 +97,8 @@ export async function runScan(opts: {
   async function scanOnePair(pair: Pair): Promise<void> {
     const quoteUsdRate = quoteUsdRateFor(pair, quoteRates);
     let topDown;
+    // closed daily candles: the trend breakout's daily-trend filter
+    let dailyCandles: Candle[] = [];
     try {
       const [weekly, daily, h4, h1] = await Promise.all([
         fetchCandles({ instrument: pair, granularity: "W", count: 52 }),
@@ -104,6 +107,7 @@ export async function runScan(opts: {
         fetchCandles({ instrument: pair, granularity: "H1", count: 120 }),
       ]);
       topDown = analyzeTopDown({ weekly, daily, h4, h1 });
+      dailyCandles = daily;
     } catch (e) {
       events.push({
         pair,
@@ -145,6 +149,7 @@ export async function runScan(opts: {
           topDown,
           trendMode: trendModeFor(pair),
           headShoulders: m15.headShoulders,
+          daily: dailyCandles,
         };
 
         // Each strategy is evaluated independently. We collect the setups that
@@ -167,7 +172,7 @@ export async function runScan(opts: {
           if (!prior) {
             events.push({ pair, timeframe: tf, strategy, kind: "watching", detail: triggerDescription(scored) });
           } else if (scored.count !== prior.count) {
-            events.push({ pair, timeframe: tf, strategy, kind: "update", detail: `${scored.count}/6` });
+            events.push({ pair, timeframe: tf, strategy, kind: "update", detail: `${scored.count}/${CHECKS[strategy]}` });
           }
 
           // Early zone-touch alert: notify as soon as price enters a buy/sell zone,
@@ -206,8 +211,10 @@ export async function runScan(opts: {
             ? `repeat-signal cooldown (${REPEAT_SIGNAL_COOLDOWN_MIN}min)`
             : "no new confirmations since last signal";
 
-          const watchOnly = !signalPairs().has(pair);
-          const watchNote = "watch-only pair — not in SIGNAL_PAIRS, so setups are tracked but not sent";
+          const watchOnly = !signalPairs().has(pair) || !signalStrategies().has(strategy);
+          const watchNote = signalPairs().has(pair)
+            ? "watch-only strategy — not in SIGNAL_STRATEGIES, so its setups are tracked but not sent"
+            : "watch-only pair — not in SIGNAL_PAIRS, so setups are tracked but not sent";
           if (disposition.eligible && (recentlySignaled || noNewConfirmations)) {
             if (prior?.lastSkip !== cooldownNote) {
               events.push({ pair, timeframe: tf, strategy, kind: "skipped", detail: cooldownNote });
@@ -335,6 +342,10 @@ export async function runScan(opts: {
 }
 
 function triggerDescription(scored: ScoreResult): string {
+  if (scored.strategy === "breakout" && scored.trigger?.breakout) {
+    const b = scored.trigger.breakout;
+    return `closed ${b.direction === "long" ? "above" : "below"} the ${b.kind === "asian" ? "Asian range" : "1-week channel"} at ${b.level.toFixed(2)} with the daily trend`;
+  }
   if (scored.strategy === "fibonacci" && scored.trigger?.fib) {
     const f = scored.trigger.fib;
     return `price in golden zone ${f.goldenBottom.toFixed(5)}–${f.goldenTop.toFixed(5)}`;
@@ -427,6 +438,8 @@ const ZONES_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.ZONES_MI
 const FIB_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.FIB_MIN_CONFIDENCE ?? 6)));
 const SETFORGET_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.SETFORGET_MIN_CONFIDENCE ?? 4)));
 export const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
+  // a breakout either meets all three of its conditions or does not exist
+  breakout: 3,
   zones: ZONES_MIN_CONFIDENCE,
   setforget: SETFORGET_MIN_CONFIDENCE,
   fibonacci: FIB_MIN_CONFIDENCE,
@@ -441,10 +454,10 @@ export function minConfidenceFor(pair: string, strategy: StrategyId): number {
   return STRATEGY_MIN_CONFIDENCE[strategy];
 }
 
-/** Pairs allowed to SEND live signals (Telegram + signals table). All pairs
- *  still scan fully — TA, confirmation trackers, feed events — but watch-only
- *  pairs cannot put capital at risk. Override with the SIGNAL_PAIRS env. */
-const DEFAULT_SIGNAL_PAIRS = ["XAU_USD", "GBP_AUD"];
+/** Pairs allowed to SEND live signals (Telegram + signals table). A scanned
+ *  pair that is not listed is watch-only: TA, confirmation trackers and feed
+ *  events, but no signal. Override with the SIGNAL_PAIRS env. */
+const DEFAULT_SIGNAL_PAIRS = ["XAU_USD"];
 
 /** Allow the same setup to fire more than once (no permanent signaled dedup).
  *  Useful for scalping/re-entry styles. Default false. */
@@ -456,6 +469,17 @@ const REPEAT_SIGNAL_COOLDOWN_MIN = Math.max(0, Number(process.env.REPEAT_SIGNAL_
 const AI_VISION_ENABLED = (process.env.AI_VISION_ENABLED ?? "true") !== "false";
 /** Minimum AI vision confidence (1–10) to approve a signal. Default 5. */
 const VISION_MIN_CONFIDENCE = Math.max(1, Math.min(10, Number(process.env.VISION_MIN_CONFIDENCE ?? 5)));
+
+/** Strategies allowed to SEND live signals. The rest are still scanned and
+ *  shown on the dashboard's tracker, but only as watch-only setups. Override
+ *  with SIGNAL_STRATEGIES=breakout,setforget (ids from StrategyId). */
+const DEFAULT_SIGNAL_STRATEGIES: StrategyId[] = ["breakout"];
+
+export function signalStrategies(override?: string | undefined): Set<StrategyId> {
+  const raw = override ?? process.env.SIGNAL_STRATEGIES;
+  const wanted = raw && raw.trim() ? raw.split(",").map((s) => s.trim()) : DEFAULT_SIGNAL_STRATEGIES;
+  return new Set(wanted.filter((s): s is StrategyId => ENABLED_STRATEGIES.includes(s as StrategyId)));
+}
 
 /** Pairs allowed to send live signals. Override with SIGNAL_PAIRS=XAU_USD,GBP_JPY. */
 export function signalPairs(override?: string | undefined): Set<string> {
@@ -598,7 +622,9 @@ async function reconcileAndSignal(args: {
     let visionNote: string | null = null;
     let visionRejected = false;
 
-    if (AI_VISION_ENABLED) {
+    // The breakout's record was measured without the vision check, and nothing
+    // shows a chart read improves it — so it is not allowed to veto one.
+    if (AI_VISION_ENABLED && primary.strategy !== "breakout") {
       try {
         const png = await renderSetupPng(candles, {
           trendlines: ctx.topDown
@@ -691,6 +717,7 @@ async function reconcileAndSignal(args: {
         stopBasis: L.stopBasis,
         targetBasis: L.targetBasis,
         confidence,
+        checks: CHECKS[primary.strategy],
         visionNote: visionNote ?? note,
         positionUnits: L.positionUnits,
         riskAmount: L.riskAmount,
@@ -701,7 +728,7 @@ async function reconcileAndSignal(args: {
       timeframe: tf,
       strategy: primary.strategy,
       kind: "signal",
-      detail: `${winnerSide} ${confidence}/6 R${L.rMultiple.toFixed(2)}${winners.length > 1 ? ` ×${winners.length} confluence` : ""}`,
+      detail: `${winnerSide} ${confidence}/${CHECKS[primary.strategy]} R${L.rMultiple.toFixed(2)}${winners.length > 1 ? ` ×${winners.length} confluence` : ""}`,
     });
   } else {
     // Skipped for risk: still record the position that WOULD have been taken
