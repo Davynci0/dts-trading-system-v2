@@ -21,11 +21,40 @@ interface LegendState {
   c: string;
 }
 
+const pad2 = (n: number) => String(n).padStart(2, "0");
+const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+/** The viewer's time-zone abbreviation, e.g. "EST" or "GMT+2". */
+const ZONE = (() => {
+  try {
+    return new Intl.DateTimeFormat(undefined, { timeZoneName: "short" }).formatToParts(new Date()).find((p) => p.type === "timeZoneName")?.value ?? "local";
+  } catch {
+    return "local";
+  }
+})();
+/** "20 Nov 2026 13:30" in the viewer's local time, from epoch seconds. */
+function localStamp(epochSeconds: number): string {
+  const d = new Date(epochSeconds * 1000);
+  return `${pad2(d.getDate())} ${MONTHS[d.getMonth()]} ${d.getFullYear()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+/** Time-axis labels in local time. Tick types: 0 year, 1 month, 2 day, 3 time, 4 time with seconds. */
+function localTick(epochSeconds: number, tickType: number): string {
+  const d = new Date(epochSeconds * 1000);
+  if (tickType === 0) return String(d.getFullYear());
+  if (tickType === 1) return MONTHS[d.getMonth()];
+  // the chart places its day marks at midnight UTC, which is another hour — and
+  // sometimes another date — locally, so a day mark carries its local time too
+  if (tickType === 2) {
+    const midnight = d.getHours() === 0 && d.getMinutes() === 0;
+    return midnight ? `${d.getDate()} ${MONTHS[d.getMonth()]}` : `${d.getDate()} ${MONTHS[d.getMonth()]} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+  }
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
 function toLegend(candle: Candle | undefined, digits: number): LegendState | null {
   if (!candle) return null;
   const f = (n: number) => n.toFixed(digits);
   return {
-    time: new Date(candle.time * 1000).toUTCString().slice(5, 22),
+    time: `${localStamp(candle.time)} ${ZONE}`,
     o: f(candle.open),
     h: f(candle.high),
     l: f(candle.low),
@@ -82,10 +111,14 @@ export default function Chart({
       },
       crosshair: { mode: CrosshairMode.Normal },
       rightPriceScale: { borderColor: "#2a2e39" },
+      // the candles carry UTC times; the axis, the crosshair label and the
+      // legend show them in the viewer's local time
+      localization: { timeFormatter: (time: unknown) => `${localStamp(time as number)} ${ZONE}` },
       timeScale: {
         borderColor: "#2a2e39",
         timeVisible: true,
         secondsVisible: false,
+        tickMarkFormatter: (time: unknown, tickType: number) => localTick(time as number, tickType),
       },
     });
 

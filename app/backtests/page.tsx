@@ -23,6 +23,8 @@ const fmt = {
   r: (n: number, digits = 2) => `${n >= 0 ? "+" : "−"}${Math.abs(n).toFixed(digits)}R`,
   pf: (n: number) => (n >= 999.99 ? "∞" : n.toFixed(2)),
   day: (iso: string | null) => (iso ? iso.slice(0, 10) : "?"),
+  /** local date and time a run was made, e.g. "20 Nov, 14:04" */
+  stamp: (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false }) : "?"),
 };
 
 const scopeLabel = (scope: string) => scope.replace(/^(strategy|pair|year|grade):/, "").replace("_", "/");
@@ -163,7 +165,7 @@ export default function BacktestsPage() {
           >
             {runs.map((r) => (
               <option key={r.id} value={r.id}>
-                {fmt.day(r.created_at)} · {r.notes ?? `${r.pairs.length} pairs`}
+                {fmt.stamp(r.created_at)} · {r.notes ?? `${r.pairs.length} pairs`}
               </option>
             ))}
           </select>

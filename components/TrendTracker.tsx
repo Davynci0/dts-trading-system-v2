@@ -95,7 +95,7 @@ export default function TrendTracker({ trend, signals, digits = 2 }: { trend: Tr
                   </div>
                   <div className="text-[10px] text-neutral-500">
                     {pos
-                      ? `entry ${px(pos.entry)} · stop now ${px(pos.trail_stop ?? pos.stop_loss)}${pos.take_profit > 0 ? ` · target ${px(pos.take_profit)}` : ""}`
+                      ? `opened ${new Date(pos.created_at).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false })} · entry ${px(pos.entry)} · stop now ${px(pos.trail_stop ?? pos.stop_loss)}${pos.take_profit > 0 ? ` · target ${px(pos.take_profit)}` : ""}`
                       : w.note}
                   </div>
                 </li>

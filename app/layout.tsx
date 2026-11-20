@@ -2,6 +2,8 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
+import Clock from "@/components/Clock";
+import { EXECUTION_BAR_SECONDS, EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
 
 const geistSans = Geist({
   variable: "--font-geist-sans",
@@ -25,7 +27,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased dark`}
     >
       <body className="flex min-h-full flex-col">
-        <header className="flex items-center gap-6 border-b border-neutral-800 bg-neutral-950 px-4 py-2.5">
+        <header className="flex flex-wrap items-center gap-x-6 gap-y-1 border-b border-neutral-800 bg-neutral-950 px-4 py-2.5">
           <span className="text-sm font-bold tracking-wide text-neutral-100">
             DTS <span className="font-normal text-neutral-500">· forex signals</span>
           </span>
@@ -34,6 +36,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             <Link href="/backtests" className="hover:text-neutral-100">Backtests</Link>
             <Link href="/login" className="hover:text-neutral-100">Login</Link>
           </nav>
+          <Clock barSeconds={EXECUTION_BAR_SECONDS} timeframe={EXECUTION_TIMEFRAME} />
         </header>
         <main className="flex min-h-0 flex-1 flex-col">{children}</main>
       </body>

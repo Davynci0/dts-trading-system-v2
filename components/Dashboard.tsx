@@ -57,6 +57,12 @@ interface GateSummary {
   weeklyBlocks: boolean;
 }
 
+/** Length of one chart candle in milliseconds (M30 → 30 minutes). */
+const CANDLE_MS = ({ M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D: 1440 } as Record<string, number>)[TRADE_TIMEFRAMES[0]] * 60_000;
+/** A local clock time, e.g. "13:30" or "13:30:05". */
+const clock = (ms: number, seconds = false) =>
+  new Date(ms).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit", ...(seconds ? { second: "2-digit" } : {}), hour12: false });
+
 /** The chart, the analysis and the scanner all run on this one timeframe. */
 const timeframe: Timeframe = TRADE_TIMEFRAMES[0];
 
@@ -68,6 +74,8 @@ export default function Dashboard() {
   const [topDown, setTopDown] = useState<TopDownSummary | null>(null);
   const [gate, setGate] = useState<GateSummary | null>(null);
   const [trend, setTrend] = useState<TrendSummary | null>(null);
+  /** when the analysis was last loaded, and the close time of the newest candle it holds */
+  const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [telegramStatus, setTelegramStatus] = useState<string | null>(null);
@@ -332,6 +340,7 @@ export default function Dashboard() {
           setTopDown(json.topDown ?? null);
           setGate(json.gate ?? null);
           setTrend(json.trend ?? null);
+          setUpdatedAt(Date.now());
           setAsOf(json.asOf ?? null);
           setError(null);
         })
@@ -480,6 +489,11 @@ export default function Dashboard() {
               {gate && !gate.sessionHours.startsWith("00:00–24:00") && (
                 <span className={gate.inSession ? "text-emerald-400" : "text-neutral-500"}>
                   Session {gate.inSession ? "open" : "closed"} ({gate.sessionHours})
+                </span>
+              )}
+              {updatedAt != null && candles.length > 0 && (
+                <span className="text-neutral-500" title="Times are in your local time zone">
+                  Last closed candle {clock(candles[candles.length - 1].time * 1000 + CANDLE_MS)} · chart updated {clock(updatedAt, true)}
                 </span>
               )}
               <span className="font-mono text-neutral-600">
