@@ -66,7 +66,7 @@ All of it is in `lib/analysis/trend.ts`, shared by the scanner, the backtest and
 | Exit | a trailing stop 6 ATR (the ATR at entry, a fixed distance) behind the best price — the broker's own trailing stop can run it |
 | Target | none |
 | Time limit | closed at market after 360 candles of trading time (7.5 trading days) |
-| Positions | one per entry type; different entry types may be open side by side (up to eleven) |
+| Positions | one per entry type; different entry types may be open side by side (up to eleven) — **always on one side**: no buy is sent while a sell is still open, and no sell while a buy is |
 | Costs | a trade is refused when spread + slippage exceed 10% of its risk |
 | Size | 0.1% of the account per trade (`TREND_RISK_PCT`) |
 
@@ -115,6 +115,9 @@ setups" — as context. They do not send: with fixed targets they made about not
   is no longer there.
 - An entry type that already has a position open does not send again until that position has
   been stopped out.
+- A signal against the positions that are open is never sent. When the daily trend turns, the
+  open positions have to be stopped out before the system trades the other way. (In fifteen
+  years this held back 15 trades out of 12,332.)
 - `vercel.json` keeps one daily cron as a fallback (Vercel's Hobby plan allows one run per
   day). `.github/workflows/scan.yml` is a second scheduler, currently disabled.
 - The dashboard's **Scan now** button runs a scan on demand.
@@ -139,14 +142,14 @@ XAU/USD on M30, 15 years to 2026-11-20:
 
 | Period | Trades | Result |
 | --- | --- | --- |
-| 2011-11 → 2021-11 (the years the settings were chosen on) | 8,095 | +430R |
+| 2011-11 → 2021-11 (the years the settings were chosen on) | 8,087 | +414R |
 | 2021-11 → 2023-11 | 1,770 | +46R |
 | 2023-11 → 2026-11 | 2,467 | +1,031R |
-| **All 15 years** | **12,332 (3.2 a day)** | **+1,509R** |
+| **All 15 years** | **12,324 (3.2 a day)** | **+1,491R** |
 
 31% of trades win. 11 of the 15 years were positive (the losing ones: −88R, −67R, −87R,
 −29R), and every one of the eleven entries is positive on its own. With costs doubled the
-total is +896R.
+total is +884R — all of it from 2023–2026; the ten design years come out at about zero (−26R).
 
 **Read this before trusting it.**
 
@@ -154,7 +157,7 @@ total is +896R.
   far from what chance could produce (weekly t ≈ 0.9), and the settings were picked from
   thousands of candidates. Most of the profit is still in 2023–2026, when gold rallied.
   Expect live results to be weaker.
-- **Very large drawdowns.** The worst was 296R (526R with costs doubled), and single years
+- **Very large drawdowns.** The worst was 312R (537R with costs doubled), and single years
   had drawdowns of 100–200R. At 0.1% risk per trade that is about 30% of the account; at 1%
   the account would not have survived.
 - **Long losing runs.** Seven trades in ten lose. The profit comes from a minority of large

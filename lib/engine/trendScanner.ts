@@ -31,13 +31,30 @@ export interface TrendScanEvent {
 interface OpenTrendRow {
   id: string;
   variant: string | null;
+  direction: "long" | "short";
   created_at: string;
+}
+
+/**
+ * Why a new entry may not be sent given the positions already open, or null
+ * when it may. Two rules: an entry type holds one position at a time, and the
+ * system is never on both sides — no buy while a sell is open, no sell while
+ * a buy is. The open positions have to be stopped out first.
+ */
+export function blockedByOpen(setup: { id: string; label: string; direction: "long" | "short" }, open: { variant: string | null; direction: "long" | "short" }[]): string | null {
+  if (open.some((p) => p.variant === setup.id)) return `${setup.label}: already has a position open`;
+  const against = open.filter((p) => p.direction !== setup.direction).length;
+  if (against > 0) {
+    return `${setup.label}: a ${setup.direction === "long" ? "buy" : "sell"} is not sent while ${against} ${setup.direction === "long" ? "sell" : "buy"} position${against > 1 ? "s are" : " is"} still open`;
+  }
+  return null;
 }
 
 /**
  * The trend system's part of a scan: every entry that fires on the candle that
  * just closed becomes a signal, unless that entry type already has a position
- * open or the candle closed too long ago to enter at its price.
+ * open, a position is open in the opposite direction, or the candle closed too
+ * long ago to enter at its price.
  */
 export async function scanTrend(opts: {
   pair: string;
@@ -76,7 +93,7 @@ export async function scanTrend(opts: {
 
   const { data: openRows, error } = await supabase
     .from("signals")
-    .select("id, variant, created_at")
+    .select("id, variant, direction, created_at")
     .eq("pair", pair)
     .eq("strategy", "trend")
     .eq("status", "active")
@@ -86,7 +103,6 @@ export async function scanTrend(opts: {
     return events;
   }
   const open = (openRows ?? []) as OpenTrendRow[];
-  const openVariants = new Set(open.map((r) => r.variant));
 
   // an entry of this candle that was already sent (and perhaps already stopped out) is not sent twice
   const { data: sentRows } = await supabase
@@ -99,8 +115,9 @@ export async function scanTrend(opts: {
 
   let openCount = open.length;
   for (const setup of setups) {
-    if (openVariants.has(setup.id)) {
-      events.push({ kind: "skipped", detail: `${setup.label}: already has a position open` });
+    const block = blockedByOpen(setup, open);
+    if (block) {
+      events.push({ kind: "skipped", detail: block });
       continue;
     }
     if (sentVariants.has(setup.id)) continue;
@@ -135,6 +152,7 @@ export async function scanTrend(opts: {
       continue;
     }
     openCount++;
+    open.push({ id: "", variant: setup.id, direction: setup.direction, created_at: new Date(now).toISOString() });
     if (sendTelegrams) {
       await sendTrendSignal({
         pair,

@@ -20,7 +20,7 @@ import {
 } from "../lib/analysis/trend";
 import { runTrendBacktest } from "../lib/backtest/trend";
 import { settleTrailing } from "../lib/engine/outcomes";
-import { trendLevels, TREND_RISK_PCT } from "../lib/engine/trendScanner";
+import { blockedByOpen, trendLevels, TREND_RISK_PCT } from "../lib/engine/trendScanner";
 import { tradeCost } from "../lib/analysis/instruments";
 
 let failures = 0;
@@ -155,6 +155,14 @@ const withBreak = [...quiet, breakUp];
   check("backtest: the rise is ridden and the trailing stop takes the profit", !!first && first.outcome === "trail" && first.rAchieved > 1, first ? `${first.outcome} ${first.rAchieved.toFixed(2)}R` : "no trade");
   const overlap = trades.some((a) => trades.some((b) => a !== b && a.entryId === b.entryId && a.entryTime < b.exitTime && b.entryTime < a.exitTime));
   check("backtest: an entry type never holds two positions at once", !overlap && trades.length > 3, `${trades.length} trades`);
+
+  const buy = { id: "don20", label: "20-candle breakout", direction: "long" as const };
+  check("positions: a new entry is sent when nothing conflicts", blockedByOpen(buy, [{ variant: "ema20pb", direction: "long" }]) === null, "allowed");
+  check("positions: an entry type with a position open does not send again", !!blockedByOpen(buy, [{ variant: "don20", direction: "long" }])?.includes("already has a position"), "blocked");
+  check("positions: no buy is sent while a sell is still open", !!blockedByOpen(buy, [{ variant: "ema20pb", direction: "short" }])?.includes("not sent while 1 sell position is still open"), `${blockedByOpen(buy, [{ variant: "ema20pb", direction: "short" }])}`);
+  check("positions: no sell is sent while buys are still open", !!blockedByOpen({ ...buy, direction: "short" }, [{ variant: "a", direction: "long" }, { variant: "b", direction: "long" }])?.includes("2 buy positions are"), "blocked");
+  const bothSides = trades.some((a) => trades.some((b) => a.direction !== b.direction && a.entryTime < b.exitTime && b.entryTime < a.exitTime));
+  check("backtest: never a buy and a sell open at the same time", !bothSides, "one side only");
 
   const setup = trendSetupsAt(buildTrendSeries(withBreak, up), withBreak.length - 1)[0];
   const lv = trendLevels(setup, 400_000);

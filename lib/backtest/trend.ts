@@ -12,7 +12,7 @@ import {
  * Backtest of the trend system (lib/analysis/trend.ts), with the scanner's own
  * detection: signal on a CLOSED H4 candle, fill at the next candle's open plus
  * the full spread + slippage, at most one position per entry type, several
- * types side by side.
+ * types side by side — but never a buy while a sell is open, or the reverse.
  *
  * The trailing stop is followed on `fine` candles (M15) when they are given —
  * the closest thing to the broker's tick-by-tick trailing stop — and on the H4
@@ -52,8 +52,10 @@ export function runTrendBacktest(opts: {
   /** only trades entered at or after this time are kept (epoch seconds) */
   from?: number;
   costMultiplier?: number;
+  /** research only: allow a buy while sells are open (and the reverse). The live system never does. */
+  allowOpposite?: boolean;
 }): TrendTrade[] {
-  const { pair, candles, daily, fine, from = 0, costMultiplier = 1 } = opts;
+  const { pair, candles, daily, fine, from = 0, costMultiplier = 1, allowOpposite = false } = opts;
   const s = buildTrendSeries(candles, daily);
   const cost = tradeCost(pair) * Math.max(0, costMultiplier);
   const trades: TrendTrade[] = [];
@@ -71,6 +73,9 @@ export function runTrendBacktest(opts: {
     }
     for (const setup of setups) {
       if ((busy.get(setup.id) ?? 0) > entryTime) continue;
+      // no buy while a sell is still open, and no sell while a buy is: the
+      // open positions have to be stopped out before the system changes sides
+      if (!allowOpposite && trades.some((t) => t.direction !== setup.direction && t.exitTime > entryTime)) continue;
       const trade = follow(setup, i);
       if (!trade) continue;
       busy.set(setup.id, trade.exitTime);
