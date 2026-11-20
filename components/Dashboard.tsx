@@ -172,6 +172,7 @@ export default function Dashboard() {
         direction: s.direction,
         entry: s.entry,
         stop: s.trail_stop ?? s.stop_loss,
+        target: s.take_profit > 0 ? s.take_profit : null,
         startTime: barAt(Math.floor(new Date(s.created_at).getTime() / 1000)).time,
       }));
     return {

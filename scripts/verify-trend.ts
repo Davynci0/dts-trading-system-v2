@@ -16,6 +16,7 @@ import {
   TREND_SLOW_DAYS,
   TREND_ENTRIES,
   TREND_STOP_ATR,
+  TREND_TARGET_R,
   TREND_TRAIL_ATR,
 } from "../lib/analysis/trend";
 import { runTrendBacktest } from "../lib/backtest/trend";
@@ -140,6 +141,12 @@ const withBreak = [...quiet, breakUp];
   check("settle: only candles after the last check are followed; a stop trailed into profit is a win", win.settlement?.outcome === "win" && Math.abs(win.settlement.r - 0.1) < 1e-9 && win.settlement.hitPrice === 101, `${win.settlement?.outcome} ${win.settlement?.r.toFixed(2)}R`);
   const loss = settleTrailing(base, [m(0, 100, 101, 89, 90)], fired + 3600_000);
   check("settle: the entry candle counts, and the initial stop is a full loss", loss.settlement?.outcome === "loss" && loss.settlement.r === -1, `${loss.settlement?.outcome} ${loss.settlement?.r}R`);
+  const tp = settleTrailing({ ...base, take_profit: 130 }, [m(0, 100, 106, 99, 105), m(15, 105, 131, 104, 130)], fired + 3600_000);
+  check("settle: reaching the take-profit closes the trade there as a win", tp.settlement?.outcome === "win" && tp.settlement.hitPrice === 130 && Math.abs(tp.settlement.r - 3) < 1e-9, `${tp.settlement?.outcome} at ${tp.settlement?.hitPrice}, ${tp.settlement?.r.toFixed(2)}R`);
+  const both = settleTrailing({ ...base, take_profit: 130 }, [m(0, 100, 131, 89, 110)], fired + 3600_000);
+  check("settle: a candle that touches both the stop and the take-profit counts as the stop", both.settlement?.outcome === "loss" && both.settlement.r === -1, `${both.settlement?.outcome}`);
+  const noTp = settleTrailing({ ...base, take_profit: 0 }, [m(0, 100, 140, 99, 139)], fired + 3600_000);
+  check("settle: a trade without a take-profit just keeps trailing", noTp.settlement === null && noTp.trailStop === 130, `stop ${noTp.trailStop}`);
   const old = settleTrailing(base, [m(0, 100, 104, 99, 103)], fired + 100 * 86400_000);
   check("settle: a trade still open after 12 weeks is closed at market", old.settlement?.outcome === "expired" && Math.abs(old.settlement.r - 0.3) < 1e-9, `${old.settlement?.outcome} ${old.settlement?.r.toFixed(2)}R`);
 }
@@ -153,6 +160,10 @@ const withBreak = [...quiet, breakUp];
   const first = trades.find((t) => t.entryId === "don20");
   check("backtest: a signal fills at the next candle's open plus the full cost", !!first && Math.abs(first.entry - (after[0].open + tradeCost("XAU_USD"))) < 1e-9, first ? `entry ${first.entry}` : "no trade");
   check("backtest: the rise is ridden and the trailing stop takes the profit", !!first && first.outcome === "trail" && first.rAchieved > 1, first ? `${first.outcome} ${first.rAchieved.toFixed(2)}R` : "no trade");
+  check("backtest: every trade carries a take-profit at the set multiple of its risk", trades.every((t) => Math.abs(Math.abs(t.takeProfit - t.entry) / Math.abs(t.entry - t.stopLoss) - TREND_TARGET_R) < 1e-9), `${TREND_TARGET_R}R`);
+  const moon = [...withBreak, ...Array.from({ length: 80 }, (_, k) => bar(H0 + (461 + k) * H4, 3330 + 4 * k, 3336 + 4 * k, 3329 + 4 * k, 3334 + 4 * k))];
+  const ran = runTrendBacktest({ pair: "XAU_USD", candles: moon, daily: up }).find((t) => t.entryId === "don20");
+  check("backtest: a run that reaches the take-profit is closed there", !!ran && ran.outcome === "target" && Math.abs(ran.rAchieved - TREND_TARGET_R) < 1e-9, ran ? `${ran.outcome} ${ran.rAchieved.toFixed(2)}R` : "no trade");
   const overlap = trades.some((a) => trades.some((b) => a !== b && a.entryId === b.entryId && a.entryTime < b.exitTime && b.entryTime < a.exitTime));
   check("backtest: an entry type never holds two positions at once", !overlap && trades.length > 3, `${trades.length} trades`);
 
@@ -166,7 +177,7 @@ const withBreak = [...quiet, breakUp];
 
   const setup = trendSetupsAt(buildTrendSeries(withBreak, up), withBreak.length - 1)[0];
   const lv = trendLevels(setup, 400_000);
-  check("sizing: a tenth of a percent of the account, in whole units", TREND_RISK_PCT === 0.001 && lv.riskAmount === 400 && lv.positionUnits === Math.floor(400 / setup.stopDistance) && lv.stopLoss === setup.price - setup.stopDistance, `${lv.positionUnits} units, stop ${lv.stopLoss.toFixed(2)}`);
+  check("sizing: a tenth of a percent of the account, in whole units", TREND_RISK_PCT === 0.001 && lv.riskAmount === 400 && lv.positionUnits === Math.floor(400 / setup.stopDistance) && lv.stopLoss === setup.price - setup.stopDistance && Math.abs(lv.takeProfit - (setup.price + TREND_TARGET_R * setup.stopDistance)) < 1e-9, `${lv.positionUnits} units, stop ${lv.stopLoss.toFixed(2)}`);
   check("sizing: a stop wider than the risk budget gives zero units (the signal says so)", trendLevels(setup, 1000).positionUnits === 0, "0 units");
 }
 

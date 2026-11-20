@@ -10,9 +10,12 @@ import { tradeCost } from "./instruments";
  *    of both averages).
  *  - Price on the chart must be on the trend's side of its own
  *    TREND_EMA_BARS-candle average: no buying under it, no selling above it.
- *  - There is no target. The stop starts TREND_STOP_ATR × ATR from the entry
- *    and then trails TREND_TRAIL_ATR × that same ATR behind the best price —
- *    a fixed distance, so the broker's own trailing stop can run it.
+ *  - Every trade has a stop, a trailing stop and a take-profit. The stop
+ *    starts TREND_STOP_ATR × ATR from the entry (that distance is 1R) and then
+ *    trails TREND_TRAIL_ATR × that same ATR behind the best price — a fixed
+ *    distance, so the broker's own trailing stop can run it. The take-profit
+ *    sits TREND_TARGET_R × the risk away: far enough that the trailing stop
+ *    closes most trades first, close enough to bank an exceptional run.
  *  - Each entry type holds at most one position; different types may be open
  *    side by side.
  *
@@ -30,6 +33,13 @@ import { tradeCost } from "./instruments";
 
 export const TREND_STOP_ATR = 3;
 export const TREND_TRAIL_ATR = 6;
+/**
+ * Take-profit as a multiple of the risk. Tested from 1R to 20R on the design
+ * years: a target under 4R loses money (it cuts the winners that pay for
+ * everything), 8R did slightly better than none, and beyond 12R it is never
+ * reached. 0 = no take-profit.
+ */
+export const TREND_TARGET_R: number = 8;
 /** Entries are blocked while the chart's ADX is at or above this. Infinity = no cap (the 30-minute setting). */
 export const TREND_ADX_MAX: number = Infinity;
 export const TREND_FAST_DAYS = 20;
@@ -339,6 +349,8 @@ export interface TrendSetup {
   /** initial stop distance and the trailing distance, in price */
   stopDistance: number;
   trailDistance: number;
+  /** take-profit distance from the entry, in price (0 = none) */
+  targetDistance: number;
 }
 
 /** Every entry that fires when candle `i` closes, after the filters and the cost cap. */
@@ -359,6 +371,7 @@ export function trendSetupsAt(s: TrendSeries, i: number, instrument = "XAU_USD")
     atr: a,
     stopDistance,
     trailDistance: TREND_TRAIL_ATR * a,
+    targetDistance: TREND_TARGET_R * stopDistance,
   }));
 }
 

@@ -1,8 +1,7 @@
 # DTS — Gold Trading System
 
 Signal-only gold (XAU/USD) trading system on **30-minute candles**. It follows gold's trend
-with eleven entry types and manages every trade with a **trailing stop** — there is no
-take-profit. The scanner looks at the chart every 15 minutes; when an entry fires on a candle
+with eleven entry types; every trade has a **stop loss, a take-profit and a trailing stop**. The scanner looks at the chart every 15 minutes; when an entry fires on a candle
 close it is sent to Telegram. The user reviews each signal and executes manually — the system
 never places trades.
 
@@ -62,9 +61,9 @@ All of it is in `lib/analysis/trend.ts`, shared by the scanner, the backtest and
 
 | | Rule |
 | --- | --- |
-| Stop | 3 ATR from the entry |
-| Exit | a trailing stop 6 ATR (the ATR at entry, a fixed distance) behind the best price — the broker's own trailing stop can run it |
-| Target | none |
+| Stop loss | 3 ATR from the entry — this distance is 1R |
+| Trailing stop | 6 ATR (the ATR at entry, a fixed distance) behind the best price — the broker's own trailing stop can run it |
+| Take profit | 8 × the risk (8R, `TREND_TARGET_R`) — the trailing stop usually closes the trade first |
 | Time limit | closed at market after 360 candles of trading time (7.5 trading days) |
 | Positions | one per entry type; different entry types may be open side by side (up to eleven) — **always on one side**: no buy is sent while a sell is still open, and no sell while a buy is |
 | Costs | a trade is refused when spread + slippage exceed 10% of its risk |
@@ -93,6 +92,13 @@ entries to keep), again chosen on 2011–2021 only:
   means fewer trades; 6 ATR is the widest that keeps about three a day.
 - **The 400-candle average helped; the ADX cap did not.** The cap that improved the 4-hour
   version made no difference here and is off.
+- **The take-profit has to be far away.** With the trailing stop still running, a full
+  take-profit was tested from 1R to 20R on the design years: 1R −384R, 2R −204R, 3R +40R,
+  4R +130R, 6R +314R, **8R +457R**, 12R +423R, none +398R. A near target cuts off the winners
+  that pay for everything; 8R banks an exceptional run and is otherwise out of the way.
+  Taking half off at a first target was worse at every level tried.
+- **The stop stays at 3 ATR.** Stops placed just beyond the swing of the last 5, 10, 20 or 40
+  candles were all worse in the design years (−70R, +197R, +278R, +303R against +398R).
 - Systems were only accepted if they were still positive with costs doubled and in at least 7
   of the 10 design years. 1,534 of 4,006 passed; **only one of them trades three times a day**
   — this one. The most consistent ones trade about twice a day with a 9–12 ATR trailing stop.
@@ -134,7 +140,7 @@ npx tsx --env-file=.env.local scripts/backtest.ts --years=3  # a shorter window
 
 The backtest uses the scanner's own detection: a signal on a closed candle fills at the next
 candle's open plus the full spread + slippage, each entry type holds one position, and within
-a candle the stop is tested before that candle's own extreme may move it. Candles are cached
+a candle the stop is tested first, then the take-profit, then the stop trails. Candles are cached
 in `.cache/` (the first run of a day downloads fifteen years of M15 history). The `/backtests`
 page shows stored runs and its **Quick run** button backtests the last ~5 months on the server.
 
@@ -142,14 +148,14 @@ XAU/USD on M30, 15 years to 2026-11-20:
 
 | Period | Trades | Result |
 | --- | --- | --- |
-| 2011-11 → 2021-11 (the years the settings were chosen on) | 8,087 | +414R |
-| 2021-11 → 2023-11 | 1,770 | +46R |
-| 2023-11 → 2026-11 | 2,467 | +1,031R |
-| **All 15 years** | **12,324 (3.2 a day)** | **+1,491R** |
+| 2011-11 → 2021-11 (the years the settings were chosen on) | 8,126 | +456R |
+| 2021-11 → 2023-11 | 1,767 | +23R |
+| 2023-11 → 2026-11 | 2,488 | +1,083R |
+| **All 15 years** | **12,381 (3.2 a day)** | **+1,562R** |
 
-31% of trades win. 11 of the 15 years were positive (the losing ones: −88R, −67R, −87R,
-−29R), and every one of the eleven entries is positive on its own. With costs doubled the
-total is +884R — all of it from 2023–2026; the ten design years come out at about zero (−26R).
+32% of trades win. 11 of the 15 years were positive (the losing ones: −70R, −64R, −90R,
+−51R), and every one of the eleven entries is positive on its own. With costs doubled the
+total is +928R — nearly all of it from 2023–2026; the ten design years come out at about zero.
 
 **Read this before trusting it.**
 
@@ -157,7 +163,7 @@ total is +884R — all of it from 2023–2026; the ten design years come out at 
   far from what chance could produce (weekly t ≈ 0.9), and the settings were picked from
   thousands of candidates. Most of the profit is still in 2023–2026, when gold rallied.
   Expect live results to be weaker.
-- **Very large drawdowns.** The worst was 312R (537R with costs doubled), and single years
+- **Very large drawdowns.** The worst was 296R (492R with costs doubled), and single years
   had drawdowns of 100–200R. At 0.1% risk per trade that is about 30% of the account; at 1%
   the account would not have survived.
 - **Long losing runs.** Seven trades in ten lose. The profit comes from a minority of large

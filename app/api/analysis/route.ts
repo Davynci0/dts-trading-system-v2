@@ -8,7 +8,7 @@ import { PULLBACK_TREND_DAYS } from "@/lib/analysis/pullback";
 import { detectKeyLevels, nearestLevels } from "@/lib/analysis/levels";
 import { breakoutLevels, closeTimeOf, dailyTrend, CHANNEL_BARS } from "@/lib/analysis/breakout";
 import { signalStrategies } from "@/lib/engine/scanner";
-import { buildTrendSeries, trendStateAt, trendWatchAt, TREND_ADX_MAX, TREND_CANDLES, TREND_EMA_BARS, TREND_FAST_DAYS, TREND_SLOW_DAYS, TREND_STOP_ATR, TREND_TRAIL_ATR } from "@/lib/analysis/trend";
+import { buildTrendSeries, trendStateAt, trendWatchAt, TREND_ADX_MAX, TREND_CANDLES, TREND_EMA_BARS, TREND_FAST_DAYS, TREND_SLOW_DAYS, TREND_STOP_ATR, TREND_TARGET_R, TREND_TRAIL_ATR } from "@/lib/analysis/trend";
 
 export const maxDuration = 60;
 
@@ -145,6 +145,7 @@ export async function GET(req: NextRequest) {
       atr: finite(series.atr[ti]),
       stopAtr: TREND_STOP_ATR,
       trailAtr: TREND_TRAIL_ATR,
+      targetR: TREND_TARGET_R,
       watch: trendWatchAt(series, ti),
       ema20: curve(series.ema20),
       ema50: curve(series.ema50),

@@ -114,8 +114,8 @@ export async function sendFinalSignal(opts: {
 }
 
 /**
- * A trend-system signal: no target — the trade is managed by a trailing stop
- * at a fixed distance, which the broker can run.
+ * A trend-system signal: entry, stop loss, take profit and the trailing-stop
+ * distance, one per line, so the order can be placed straight from it.
  */
 export async function sendTrendSignal(opts: {
   pair: string;
@@ -125,6 +125,9 @@ export async function sendTrendSignal(opts: {
   rule: string;
   entry: number;
   stopLoss: number;
+  /** take-profit price; 0 when the system has none */
+  takeProfit: number;
+  targetR: number;
   /** trailing distance in price */
   trailDistance: number;
   fastDays: number;
@@ -146,8 +149,10 @@ export async function sendTrendSignal(opts: {
   await sendTelegramMessage(
     [
       `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (${opts.label})`,
-      `Entry \`${px(opts.entry)}\` at market · Stop \`${px(opts.stopLoss)}\``,
-      `*Trailing stop: ${px(opts.trailDistance)}* — set your broker's trailing stop to this distance. No take-profit.`,
+      `*Entry:* \`${px(opts.entry)}\` (at market)`,
+      `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(unitRisk)} away (1R)`,
+      opts.takeProfit > 0 ? `*Take profit:* \`${px(opts.takeProfit)}\` — ${px(Math.abs(opts.takeProfit - opts.entry))} away (${opts.targetR}R)` : `*Take profit:* none`,
+      `*Trailing stop:* ${px(opts.trailDistance)} behind price — set it on your broker; it usually closes the trade before the take profit`,
       `Why: ${opts.rule}; the ${opts.fastDays}-day and ${opts.slowDays}-day trends both point ${opts.direction === "long" ? "up" : "down"}; price is ${opts.direction === "long" ? "above" : "below"} its ${opts.emaBars}-candle average`,
       `Trend positions open now: ${opts.openCount}`,
       sizeLine,

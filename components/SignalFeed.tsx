@@ -152,11 +152,12 @@ export default function SignalFeed() {
             )}
             {s.trail_distance != null && (
               <div className="mt-1 font-mono text-neutral-400">
-                E {s.entry} · SL {s.stop_loss.toFixed(2)} · trailing {s.trail_distance.toFixed(2)}
+                E {s.entry} · SL {s.stop_loss.toFixed(2)}
+                {s.take_profit > 0 ? ` · TP ${s.take_profit.toFixed(2)}` : ""} · trailing {s.trail_distance.toFixed(2)}
                 {!s.outcome && s.trail_stop != null && ` · stop now ${s.trail_stop.toFixed(2)}`}
               </div>
             )}
-            {s.stop_loss > 0 && s.take_profit > 0 && (
+            {s.trail_distance == null && s.stop_loss > 0 && s.take_profit > 0 && (
               <div className="mt-1 font-mono text-neutral-400">
                 E {s.entry} · SL {s.stop_loss} · TP {s.take_profit}
                 {s.r_multiple != null && ` · ${s.r_multiple.toFixed(2)}R`}

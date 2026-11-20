@@ -14,7 +14,8 @@ import {
  * the full spread + slippage, at most one position per entry type, several
  * types side by side — but never a buy while a sell is open, or the reverse.
  *
- * The trailing stop is followed on `fine` candles (M15) when they are given —
+ * Each trade ends at its trailing stop or at its take-profit, whichever comes
+ * first. The trailing stop is followed on `fine` candles (M15) when they are given —
  * the closest thing to the broker's tick-by-tick trailing stop — and on the H4
  * candles themselves otherwise. Within a candle the stop is always tested
  * before the candle's own extreme may move it.
@@ -22,6 +23,8 @@ import {
 export interface TrendTrade {
   /** entry type id (TREND_ENTRIES) */
   entryId: string;
+  /** take-profit price (NaN when the system has none) */
+  takeProfit: number;
   strategy: "trend";
   direction: "long" | "short";
   /** when the position was opened / closed (epoch seconds) */
@@ -31,7 +34,7 @@ export interface TrendTrade {
   stopLoss: number;
   exitPrice: number;
   rAchieved: number;
-  outcome: "stop" | "trail" | "time" | "open";
+  outcome: "stop" | "trail" | "target" | "time" | "open";
   /** best and worst point reached, in R */
   mfe: number;
   mae: number;
@@ -90,6 +93,7 @@ export function runTrendBacktest(opts: {
     const entry = s.o[e] + dir * cost;
     const risk = setup.stopDistance;
     const initialStop = entry - dir * risk;
+    const target = setup.targetDistance > 0 ? entry + dir * setup.targetDistance : NaN;
     const deadline = s.t[e] + TREND_MAX_HOLD_BARS * s.bar;
     const bars = fine ?? candles;
     const barLen = fine ? 900 : s.bar;
@@ -121,6 +125,13 @@ export function runTrendBacktest(opts: {
         break;
       }
       mfe = Math.max(mfe, (dir === 1 ? b.high - entry : entry - b.low) / risk);
+      // the stop is tested first; a candle that reaches the take-profit closes the trade there
+      if (dir === 1 ? b.high >= target : b.low <= target) {
+        exitPrice = target;
+        exitTime = b.time + barLen;
+        outcome = "target";
+        break;
+      }
       stop = step.stop;
       if (b.time + barLen >= deadline) {
         exitPrice = b.close;
@@ -142,6 +153,7 @@ export function runTrendBacktest(opts: {
       exitTime,
       entry,
       stopLoss: initialStop,
+      takeProfit: target,
       exitPrice,
       rAchieved: (dir * (exitPrice - entry)) / risk,
       outcome,

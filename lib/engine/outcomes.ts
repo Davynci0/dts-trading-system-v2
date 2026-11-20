@@ -60,6 +60,8 @@ export interface TrailInput {
   /** the initial stop — one R is the distance from the entry to it */
   stop_loss: number;
   trail_distance: number;
+  /** take-profit price; 0 or less when the trade has none */
+  take_profit?: number;
   /** the stop as it stood when the candles were last followed */
   trail_stop: number;
   /** epoch ms: candles that opened before this have already been followed */
@@ -74,7 +76,8 @@ const TRAIL_EXPIRY_MS = Math.round(TREND_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS *
 /**
  * Follow a trailing-stop trade through the M15 candles since it was last
  * checked. Returns the settlement when the stop was hit (a win if it had
- * trailed into profit, a loss otherwise) or the trade expired, and in every
+ * trailed into profit, a loss otherwise), the take-profit was reached, or the
+ * trade expired, and in every
  * case where the stop now stands and how far the candles have been followed.
  */
 export function settleTrailing(
@@ -86,13 +89,24 @@ export function settleTrailing(
   const fresh = candles.filter((c) => c.time * 1000 + CANDLE_MS > s.checkedAt);
   const risk = Math.abs(s.entry - s.stop_loss);
   const dir = s.direction === "long" ? 1 : -1;
-  const step = trailThrough(s.direction, s.trail_stop, s.trail_distance, fresh);
+  const target = s.take_profit != null && s.take_profit > 0 ? s.take_profit : NaN;
   const last = fresh[fresh.length - 1];
   const checkedAt = last ? last.time * 1000 + CANDLE_MS : s.checkedAt;
-  if (step.exit) {
-    const r = risk > 0 ? (dir * (step.exit.price - s.entry)) / risk : 0;
-    return { settlement: { outcome: r > 0 ? "win" : "loss", r, hitTime: step.exit.time, hitPrice: step.exit.price }, trailStop: step.stop, checkedAt };
+  // candle by candle: the stop is tested first, then the take-profit, then the stop trails
+  let stop = s.trail_stop;
+  for (const c of fresh) {
+    const one = trailThrough(s.direction, stop, s.trail_distance, [c]);
+    if (one.exit) {
+      const r = risk > 0 ? (dir * (one.exit.price - s.entry)) / risk : 0;
+      return { settlement: { outcome: r > 0 ? "win" : "loss", r, hitTime: one.exit.time, hitPrice: one.exit.price }, trailStop: stop, checkedAt };
+    }
+    if (dir === 1 ? c.high >= target : c.low <= target) {
+      const r = risk > 0 ? (dir * (target - s.entry)) / risk : 0;
+      return { settlement: { outcome: "win", r, hitTime: c.time, hitPrice: target }, trailStop: one.stop, checkedAt };
+    }
+    stop = one.stop;
   }
+  const step = { stop };
   if (now - s.firedAt > TRAIL_EXPIRY_MS && last) {
     const r = risk > 0 ? (dir * (last.close - s.entry)) / risk : 0;
     return { settlement: { outcome: "expired", r, hitTime: last.time, hitPrice: last.close }, trailStop: step.stop, checkedAt };
@@ -158,6 +172,7 @@ export async function scoreOpenSignals(
             entry: r.entry,
             stop_loss: r.stop_loss,
             trail_distance: r.trail_distance,
+            take_profit: r.take_profit,
             trail_stop: r.trail_stop ?? r.stop_loss,
             checkedAt: startOf(r),
             firedAt,

@@ -62,7 +62,7 @@ export interface OverlayData {
     side: "long" | "short" | null;
   } | null;
   /** open trend positions: the entry and where the trailing stop stands now */
-  trails?: { label: string; direction: "long" | "short"; entry: number; stop: number; startTime: number }[];
+  trails?: { label: string; direction: "long" | "short"; entry: number; stop: number; target?: number | null; startTime: number }[];
   /** pending signal's trade plan (entry/SL/TP), drawn as a position tool */
   position?: {
     direction: "long" | "short";
@@ -484,6 +484,11 @@ class OverlayPaneView implements IPrimitivePaneView {
             if (yS != null) {
               line(x0, W, yS, C.loss, 0.95, 1.5, []);
               tag(`TRAILING STOP ${fmt(p.stop)}`, W - 4, yS - 3, C.loss, "right", 0);
+            }
+            const yT = p.target ? Y(p.target) : null;
+            if (yT != null) {
+              line(x0, W, yT, C.win, 0.9, 1.5, []);
+              tag(`TAKE PROFIT ${fmt(p.target!)}`, W - 4, yT - 3, C.win, "right", 0);
             }
           }
 

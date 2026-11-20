@@ -7,6 +7,9 @@ import {
   TREND_EMA_BARS,
   TREND_FAST_DAYS,
   TREND_SLOW_DAYS,
+  TREND_STOP_ATR,
+  TREND_TARGET_R,
+  TREND_TRAIL_ATR,
   type TrendSetup,
 } from "@/lib/analysis/trend";
 import { closeTimeOf } from "@/lib/analysis/breakout";
@@ -136,10 +139,10 @@ export async function scanTrend(opts: {
       variant: setup.id,
       entry: levels.entry,
       stop_loss: levels.stopLoss,
-      take_profit: 0,
-      r_multiple: null,
-      sl_basis: "3 ATR from the entry",
-      tp_basis: "no target — trailing stop",
+      take_profit: levels.takeProfit,
+      r_multiple: levels.takeProfit > 0 ? TREND_TARGET_R : null,
+      sl_basis: `${TREND_STOP_ATR} ATR from the entry`,
+      tp_basis: levels.takeProfit > 0 ? `${TREND_TARGET_R}× the risk; the ${TREND_TRAIL_ATR}-ATR trailing stop usually closes the trade first` : "no target — trailing stop",
       trail_distance: setup.trailDistance,
       trail_stop: levels.stopLoss,
       trail_checked_at: new Date(now).toISOString(),
@@ -161,6 +164,8 @@ export async function scanTrend(opts: {
         rule: trendEntryDef(setup.id)?.rule ?? "",
         entry: levels.entry,
         stopLoss: levels.stopLoss,
+        takeProfit: levels.takeProfit,
+        targetR: TREND_TARGET_R,
         trailDistance: setup.trailDistance,
         fastDays: TREND_FAST_DAYS,
         slowDays: TREND_SLOW_DAYS,
@@ -171,16 +176,17 @@ export async function scanTrend(opts: {
         riskPct: TREND_RISK_PCT,
       }).catch(() => undefined);
     }
-    events.push({ kind: "signal", detail: `${setup.label}: ${setup.direction} at ${levels.entry.toFixed(2)}, stop ${levels.stopLoss.toFixed(2)}, trailing ${setup.trailDistance.toFixed(2)}` });
+    events.push({ kind: "signal", detail: `${setup.label}: ${setup.direction} at ${levels.entry.toFixed(2)}, stop ${levels.stopLoss.toFixed(2)}, target ${levels.takeProfit.toFixed(2)}, trailing ${setup.trailDistance.toFixed(2)}` });
   }
   return events;
 }
 
-/** Entry, stop and size of a trend setup at the signal candle's close. */
+/** Entry, stop, take-profit and size of a trend setup at the signal candle's close. */
 export function trendLevels(setup: TrendSetup, accountBalance: number) {
   const dir = setup.direction === "long" ? 1 : -1;
   const entry = setup.price;
   const stopLoss = entry - dir * setup.stopDistance;
+  const takeProfit = setup.targetDistance > 0 ? entry + dir * setup.targetDistance : 0;
   const riskAmount = accountBalance * TREND_RISK_PCT;
-  return { entry, stopLoss, riskAmount, positionUnits: Math.floor(riskAmount / setup.stopDistance) };
+  return { entry, stopLoss, takeProfit, riskAmount, positionUnits: Math.floor(riskAmount / setup.stopDistance) };
 }

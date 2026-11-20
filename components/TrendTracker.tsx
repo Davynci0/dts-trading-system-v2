@@ -13,6 +13,7 @@ export interface TrendSummary {
   atr: number | null;
   stopAtr: number;
   trailAtr: number;
+  targetR: number;
   watch: { id: string; label: string; level: number | null; note: string }[];
   ema20: { time: number; value: number }[];
   ema50: { time: number; value: number }[];
@@ -69,8 +70,9 @@ export default function TrendTracker({ trend, signals, digits = 2 }: { trend: Tr
           </ul>
           {trend.atr != null && (
             <p className="mb-2 text-[10px] text-neutral-500">
-              New trade: stop {px(trend.stopAtr * trend.atr)} from entry ({trend.stopAtr} × ATR), then a trailing stop {px(trend.trailAtr * trend.atr)}{" "}
-              behind the best price ({trend.trailAtr} × ATR). No take-profit.
+              New trade: stop loss {px(trend.stopAtr * trend.atr)} from entry ({trend.stopAtr} × ATR = 1R) · take profit{" "}
+              {trend.targetR > 0 ? `${px(trend.targetR * trend.stopAtr * trend.atr)} away (${trend.targetR}R)` : "none"} · trailing stop{" "}
+              {px(trend.trailAtr * trend.atr)} behind the best price ({trend.trailAtr} × ATR).
             </p>
           )}
           <ul className="space-y-1.5">
@@ -90,7 +92,7 @@ export default function TrendTracker({ trend, signals, digits = 2 }: { trend: Tr
                   </div>
                   <div className="text-[10px] text-neutral-500">
                     {pos
-                      ? `entry ${px(pos.entry)} · trailing stop now ${px(pos.trail_stop ?? pos.stop_loss)}`
+                      ? `entry ${px(pos.entry)} · stop now ${px(pos.trail_stop ?? pos.stop_loss)}${pos.take_profit > 0 ? ` · target ${px(pos.take_profit)}` : ""}`
                       : w.note}
                   </div>
                 </li>
