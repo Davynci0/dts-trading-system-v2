@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "@/components/Chart";
 import SignalFeed from "@/components/SignalFeed";
 import ConfirmationTracker from "@/components/ConfirmationTracker";
+import TrendTracker, { type TrendSummary } from "@/components/TrendTracker";
 import AskAIButton from "@/components/AskAIButton";
 import { PAIRS, TRADE_TIMEFRAMES, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
 import { pipSize } from "@/lib/analysis/confirmations";
@@ -15,10 +16,11 @@ import { CHART_COLORS, EMPTY_OVERLAY, type OverlayData } from "@/components/char
  * off so the chart starts clean), and the system's own trades.
  */
 const LAYERS = [
-  { id: "breakout", label: "Breakout", group: "Strategies", color: CHART_COLORS.breakout, on: true },
-  { id: "aoi", label: "Set & forget", group: "Strategies", color: CHART_COLORS.aoi, on: true },
-  { id: "zones", label: "Zones", group: "Strategies", color: CHART_COLORS.demand, on: true },
-  { id: "fib", label: "Fibonacci", group: "Strategies", color: CHART_COLORS.fib, on: true },
+  { id: "trend", label: "Trend system", group: "Strategies", color: CHART_COLORS.trend, on: true },
+  { id: "breakout", label: "1-week range", group: "Patterns", color: CHART_COLORS.breakout, on: false },
+  { id: "aoi", label: "Set & forget", group: "Patterns", color: CHART_COLORS.aoi, on: false },
+  { id: "zones", label: "Zones", group: "Patterns", color: CHART_COLORS.demand, on: false },
+  { id: "fib", label: "Fibonacci", group: "Patterns", color: CHART_COLORS.fib, on: false },
   { id: "levels", label: "Key levels", group: "Context", color: null, on: true },
   { id: "structure", label: "Structure", group: "Context", color: null, on: false },
   { id: "trendlines", label: "Trendlines", group: "Context", color: null, on: false },
@@ -27,7 +29,7 @@ const LAYERS = [
   { id: "history", label: "Results", group: "Trades", color: null, on: true },
 ] as const;
 type LayerId = (typeof LAYERS)[number]["id"];
-const LAYER_GROUPS = ["Strategies", "Context", "Trades"] as const;
+const LAYER_GROUPS = ["Strategies", "Patterns", "Context", "Trades"] as const;
 
 interface TopDownSummary {
   weekly: string;
@@ -65,6 +67,7 @@ export default function Dashboard() {
   const [overlay, setOverlay] = useState<OverlayData>(EMPTY_OVERLAY);
   const [topDown, setTopDown] = useState<TopDownSummary | null>(null);
   const [gate, setGate] = useState<GateSummary | null>(null);
+  const [trend, setTrend] = useState<TrendSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [telegramStatus, setTelegramStatus] = useState<string | null>(null);
@@ -100,8 +103,8 @@ export default function Dashboard() {
   const shownOverlay = useMemo<OverlayData>(() => {
     const barAt = (epochSec: number) => [...candles].reverse().find((c) => c.time <= epochSec) ?? candles[0];
     const pending =
-      pairSignals.find((s) => !s.outcome && !s.superseded_by && s.status === "active") ??
-      pairSignals.find((s) => !s.outcome && !s.superseded_by) ??
+      pairSignals.find((s) => s.strategy !== "trend" && !s.outcome && !s.superseded_by && s.status === "active") ??
+      pairSignals.find((s) => s.strategy !== "trend" && !s.outcome && !s.superseded_by) ??
       null;
     let position: OverlayData["position"] = null;
     if (pending && candles.length > 0) {
@@ -143,7 +146,37 @@ export default function Dashboard() {
         });
       }
     }
+    // Trend system: the levels its breakout entries wait on, on the trend's
+    // side only; levels within 0.05% of each other share one line.
+    const digitsOf = (() => {
+      const pip = pipSize(pair);
+      return pip >= 0.1 ? 2 : pip >= 0.01 ? 3 : 5;
+    })();
+    void digitsOf;
+    const short: Record<string, string> = { don20: "20", don30: "30", don60: "60", don120: "120", don240: "240" };
+    const trendLevels: { label: string; price: number }[] = [];
+    if (trend) {
+      const up = trend.state.fast === 1;
+      for (const w of trend.watch) {
+        if (w.level == null || !(w.id in short || w.id === "prevday")) continue;
+        const name = w.id === "prevday" ? `yesterday's ${up ? "high" : "low"}` : `${short[w.id]}-candle ${up ? "high" : "low"}`;
+        const same = trendLevels.find((l) => Math.abs(l.price - w.level!) / w.level! < 0.0005);
+        if (same) same.label = same.label.includes("yesterday") || w.id === "prevday" ? `${same.label} + ${name}` : `${same.label.replace(/-candle.*/, "")}/${name}`;
+        else trendLevels.push({ label: name, price: w.level });
+      }
+    }
+    const trails = pairSignals
+      .filter((s) => s.strategy === "trend" && !s.outcome && s.status === "active" && candles.length > 0)
+      .map((s) => ({
+        label: trend?.watch.find((w) => w.id === s.variant)?.label ?? "trend",
+        direction: s.direction,
+        entry: s.entry,
+        stop: s.trail_stop ?? s.stop_loss,
+        startTime: barAt(Math.floor(new Date(s.created_at).getTime() / 1000)).time,
+      }));
     return {
+      trend: layers.trend && trend ? { ema20: trend.ema20, ema50: trend.ema50, levels: trendLevels, side: trend.state.side } : null,
+      trails: layers.position ? trails : [],
       zones: layers.zones ? overlay.zones : [],
       fib: layers.fib ? overlay.fib : null,
       aoi: layers.aoi ? overlay.aoi : null,
@@ -159,23 +192,18 @@ export default function Dashboard() {
         return pip >= 0.1 ? 2 : pip >= 0.01 ? 3 : 5;
       })(),
     };
-  }, [overlay, layers, pairSignals, candles, pair]);
+  }, [overlay, layers, pairSignals, candles, pair, trend]);
 
-  /** One line on the daily trend: both strategies' trend filters and what they allow. */
+  /** One line on what the trend system allows right now. */
   const trendLine = useMemo(() => {
-    const b = overlay.breakout;
-    if (!b || !gate) return null;
+    if (!trend) return null;
+    const st = trend.state;
     const arrow = (t: number) => (t === 1 ? "▲ up" : t === -1 ? "▼ down" : "unknown");
-    const allows = gate.weeklyBlocks
-      ? "pullbacks blocked by the weekly structure"
-      : gate.longAllowed
-        ? "buys only"
-        : gate.shortAllowed
-          ? "sells only"
-          : "no pullback trades";
-    const tone = gate.longAllowed ? "text-emerald-400" : gate.shortAllowed ? "text-rose-400" : "text-amber-400";
-    return { text: `Daily trend: 50-day ${arrow(b.trend)} · ${gate.trendDays}-day ${arrow(gate.trend)} — ${allows}`, tone };
-  }, [overlay.breakout, gate]);
+    const adx = st.adx != null ? st.adx.toFixed(0) : "?";
+    const allows = st.side ? `${st.side === "long" ? "buys" : "sells"} only` : `no new entries: ${st.blocked}`;
+    const tone = st.side === "long" ? "text-emerald-400" : st.side === "short" ? "text-rose-400" : "text-amber-400";
+    return { text: `Trend system: 50-day ${arrow(st.fast)} · 100-day ${arrow(st.slow)} · ADX ${adx} — ${allows}`, tone };
+  }, [trend]);
 
   /** Colour key for the five strategies, with what each is waiting on right now. */
   const legend = useMemo(() => {
@@ -285,6 +313,7 @@ export default function Dashboard() {
             st: json.structure ?? [],
             b: json.breakout ?? null,
             g: json.gate ?? null,
+            tr: json.trend ? { s: json.trend.state, w: json.trend.watch, a: json.trend.atr } : null,
             d: json.topDown ?? null,
           });
           if (!initial && sig === analysisSigRef.current) return; // analysis unchanged
@@ -302,6 +331,7 @@ export default function Dashboard() {
           });
           setTopDown(json.topDown ?? null);
           setGate(json.gate ?? null);
+          setTrend(json.trend ?? null);
           setAsOf(json.asOf ?? null);
           setError(null);
         })
@@ -456,8 +486,8 @@ export default function Dashboard() {
                 W {topDown.weekly} · D {topDown.daily} · {timeframe} {topDown.chart ?? topDown.h4}
               </span>
             </div>
-            {/* the five strategies: colour key and what each is waiting on */}
-            <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2 xl:grid-cols-4">
+            {/* the pattern setups (context, not sent): only while one of their layers is shown */}
+            <div className={`grid gap-x-4 gap-y-1 sm:grid-cols-2 xl:grid-cols-4 ${layers.breakout || layers.aoi || layers.zones || layers.fib ? "" : "hidden"}`}>
               {legend.map((item) => (
                 <div key={item.name} className="flex min-w-0 items-baseline gap-1.5">
                   <span className="inline-block h-2 w-2 shrink-0 translate-y-[-1px] rounded-sm" style={{ backgroundColor: `rgb(${item.color})` }} />
@@ -506,6 +536,7 @@ export default function Dashboard() {
 
       {/* side panels */}
       <aside className="flex w-full shrink-0 flex-col gap-4 overflow-y-auto lg:w-80">
+        <TrendTracker trend={trend} signals={pairSignals} />
         <ConfirmationTracker pair={pair} timeframe={timeframe} />
         <SignalFeed />
       </aside>

@@ -1,170 +1,84 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
-import { runBacktest, computeMetrics, LOT_SIZES, type BacktestTrade } from "@/lib/backtest/engine";
+import { computeMetrics, type BacktestTrade } from "@/lib/backtest/engine";
+import { maxOpenPositions, runTrendBacktest, type TrendTrade } from "@/lib/backtest/trend";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { minConfidenceFor, signalPairs, signalStrategies } from "@/lib/engine/scanner";
-import type { StrategyId } from "@/lib/types";
-import { EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
+import { isAuthorizedMutation } from "@/lib/apiGuard";
+import { EXECUTION_HTF, EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
+import { TREND_ENTRIES } from "@/lib/analysis/trend";
 
 export const maxDuration = 300;
 
-const HTF_OF: Record<string, string> = { M5: "M15", M15: "H1", H1: "H4", H4: "D", D: "W" };
-const TIMEFRAME_HOURS: Record<string, number> = {
-  M5: 1 / 12,
-  M15: 1 / 4,
-  H1: 1,
-  H4: 4,
-  D: 24,
-};
-
 /**
- * POST /api/backtest/run
- * Body: {
- *   pairs?: string[],        // omit for the pairs that send live signals
- *   timeframe?: "H4",
- *   count?: number,          // H4 candles, 500–5000 (OANDA's per-request cap, ~3 years)
- *   accountBalance?: number,
- *   lotSize?: "0.01" | "0.1" | "1",
- *   riskPercent?: number,
- *   minConfidence?: number,   // omit to use the live per-strategy gate
- *   strategies?: ("breakout"|"zones"|"setforget"|"fibonacci")[]  // omit for the live ones
- * }
- * Runs in live-parity mode: the scanner's send gate, one trade per pair, and
- * (unless minConfidence is given) the same per-strategy confirmation minimums.
+ * POST /api/backtest/run   Body: { count?: number }   (H4 candles, 1000–5000; default 5000 ≈ 3 years)
+ *
+ * Quick backtest of the trend system on the most recent H4 candles, with the
+ * scanner's own detection and the trailing stop followed on the H4 candles.
+ * The first 400 candles only warm up the indicators. Stored for the Backtests
+ * page. The multi-year run lives in scripts/backtest.ts.
  */
 export async function POST(req: NextRequest) {
-  const body = (await req.json().catch(() => ({}))) as {
-    pairs?: string[];
-    timeframe?: string;
-    count?: number;
-    accountBalance?: number;
-    lotSize?: "0.01" | "0.1" | "1";
-    riskPercent?: number;
-    minConfidence?: number;
-    strategies?: string[];
-  };
-  const pairs = body.pairs?.length ? body.pairs : [...signalPairs()];
-  const timeframe = body.timeframe ?? EXECUTION_TIMEFRAME;
-  const count = Math.min(Math.max(body.count ?? 5000, 500), 5000);
-  const accountBalance = body.accountBalance ?? 25000;
-  const lotSize = body.lotSize;
-  const riskPercent = body.riskPercent ?? 0.01;
-  const minConfidence = body.minConfidence; // undefined → live per-strategy gate
-  const fixedUnits = lotSize ? LOT_SIZES[lotSize] ?? undefined : undefined;
-  const validStrategies: StrategyId[] = ["breakout", "zones", "setforget", "fibonacci", "sr"];
-  // default: exactly the strategies that send live signals
-  const strategies = body.strategies?.filter((s): s is StrategyId => validStrategies.includes(s as StrategyId)) ?? [...signalStrategies()];
-  const horizonHours = count * (TIMEFRAME_HOURS[timeframe] ?? 4);
-  const topDownCounts = {
-    weekly: Math.min(5000, Math.max(52, Math.ceil(horizonHours / (24 * 7)) + 10)),
-    // + the 300 closed days the key levels and the 100-day trend read before the first bar
-    daily: Math.min(5000, Math.max(90, Math.ceil(horizonHours / 24) + 320)),
-    h4: Math.min(5000, Math.max(120, Math.ceil(horizonHours / 4) + 10)),
-    h1: Math.min(5000, Math.max(120, Math.ceil(horizonHours) + 10)),
-  };
+  if (!isAuthorizedMutation(req)) {
+    return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  }
+  const body = (await req.json().catch(() => ({}))) as { count?: number };
+  const count = Math.min(Math.max(body.count ?? 5000, 1000), 5000);
+  const pair = "XAU_USD";
+  const WARMUP = 400;
+
+  let trades: TrendTrade[];
+  let from: number;
+  let to: number;
+  try {
+    const [candles, daily] = await Promise.all([
+      fetchCandles({ instrument: pair, granularity: EXECUTION_TIMEFRAME, count }),
+      // the 100-day trend needs history before the first traded candle
+      fetchCandles({ instrument: pair, granularity: EXECUTION_HTF, count: Math.min(5000, Math.ceil(count / 6) + 200) }),
+    ]);
+    if (candles.length <= WARMUP + 10) throw new Error("not enough candles returned");
+    from = candles[WARMUP].time;
+    to = candles[candles.length - 1].time + 4 * 3600;
+    trades = runTrendBacktest({ pair, candles, daily, from });
+  } catch (e) {
+    return NextResponse.json({ error: (e as Error).message }, { status: 502 });
+  }
+
+  const metrics = (g: TrendTrade[]) => computeMetrics(g as unknown as BacktestTrade[]);
+  const cut = from + 0.7 * (to - from);
+  const scope = (g: TrendTrade[]) => ({
+    inSample: metrics(g.filter((t) => t.entryTime < cut)),
+    outOfSample: metrics(g.filter((t) => t.entryTime >= cut)),
+    all: metrics(g),
+  });
+  const scopes: Record<string, unknown> = { combined: scope(trades) };
+  for (const e of TREND_ENTRIES) scopes[`strategy:${e.label}`] = scope(trades.filter((t) => t.entryId === e.id));
+  scopes["pair:buys"] = scope(trades.filter((t) => t.direction === "long"));
+  scopes["pair:sells"] = scope(trades.filter((t) => t.direction === "short"));
 
   const supabase = createAdminClient();
-
   let runId: string | null = null;
   if (supabase) {
+    const days = Math.round((to - from) / 86400);
     const { data } = await supabase
       .from("backtest_runs")
       .insert({
-        pairs,
-        timeframes: [timeframe],
-        config: {
-          count,
-          accountBalance,
-          lotSize,
-          riskPercent,
-          minConfidence: minConfidence ?? "live gate",
-          strategies,
-          fixedUnits,
-          engine:
-            "live send gate (session, daily trend, weekly veto), closed-bar HTF, one trade per pair, 6-point checklist (no vision), spread+slippage, conservative same-candle SL",
-        },
-        notes: `Quick run · last ${count} ${timeframe} candles (~${Math.round(horizonHours / 24)} trading days) · live rules`,
+        range_start: new Date(from * 1000).toISOString(),
+        range_end: new Date(to * 1000).toISOString(),
+        pairs: [pair],
+        timeframes: [EXECUTION_TIMEFRAME],
+        config: { system: "trend", count, trailFollowedOn: EXECUTION_TIMEFRAME, mostOpenAtOnce: maxOpenPositions(trades) },
+        notes: `Quick run · last ${days} days · ${EXECUTION_TIMEFRAME} · trend system`,
       })
       .select("id")
       .single();
     runId = data?.id ?? null;
-  }
-
-  const summaries: { pair: string; combined: unknown; error?: string }[] = [];
-  const allTrades: { pair: string; trade: BacktestTrade }[] = [];
-
-  for (const pair of pairs) {
-    try {
-      const [candles, htfCandles, weekly, daily, h4, h1] = await Promise.all([
-        fetchCandles({ instrument: pair, granularity: timeframe, count }),
-        fetchCandles({ instrument: pair, granularity: HTF_OF[timeframe] ?? "D", count: HTF_OF[timeframe] === "D" ? topDownCounts.daily : 500 }),
-        fetchCandles({ instrument: pair, granularity: "W", count: topDownCounts.weekly }),
-        fetchCandles({ instrument: pair, granularity: "D", count: topDownCounts.daily }),
-        fetchCandles({ instrument: pair, granularity: "H4", count: topDownCounts.h4 }),
-        fetchCandles({ instrument: pair, granularity: "H1", count: topDownCounts.h1 }),
-      ]);
-      const report = runBacktest({
-        pair,
-        timeframe,
-        candles,
-        htfCandles,
-        topDownCandles: { weekly, daily, h4, h1 },
-        accountBalance,
-        fixedUnits,
-        riskPercent,
-        minConfidence: minConfidence ?? {
-          breakout: minConfidenceFor(pair, "breakout"),
-          sr: minConfidenceFor(pair, "sr"),
-          zones: minConfidenceFor(pair, "zones"),
-          setforget: minConfidenceFor(pair, "setforget"),
-          fibonacci: minConfidenceFor(pair, "fibonacci"),
-        },
-        oneTradePerPair: true,
-        strategies,
-      });
-      for (const t of report.trades) allTrades.push({ pair, trade: t });
-      summaries.push({ pair, combined: report.scopes.combined });
-    } catch (e) {
-      summaries.push({ pair, combined: null, error: (e as Error).message });
+    if (runId) {
+      const { error } = await supabase
+        .from("backtest_results")
+        .upsert(Object.entries(scopes).map(([s, m]) => ({ run_id: runId, scope: s, metrics: m })), { onConflict: "run_id,scope" });
+      if (error) console.error("persist backtest_results:", error.message);
     }
   }
 
-  // aggregate scopes across all pairs: combined, per-strategy, per-pair
-  const seg = (rows: { pair: string; trade: BacktestTrade }[], inSample: boolean) =>
-    computeMetrics(rows.filter((r) => r.trade.inSample === inSample).map((r) => r.trade));
-  const scope = (rows: { pair: string; trade: BacktestTrade }[]) => ({
-    inSample: seg(rows, true),
-    outOfSample: seg(rows, false),
-    all: computeMetrics(rows.map((r) => r.trade)),
-  });
-
-  const scopes: Record<string, unknown> = {
-    combined: scope(allTrades),
-  };
-  for (const strategy of validStrategies) {
-    scopes[`strategy:${strategy}`] = scope(allTrades.filter((r) => r.trade.strategy === strategy));
-  }
-  for (const pair of pairs) {
-    scopes[`pair:${pair}`] = scope(allTrades.filter((r) => r.pair === pair));
-  }
-
-  if (supabase && runId) {
-    const { error } = await supabase.from("backtest_results").upsert(
-      Object.entries(scopes).map(([s, metrics]) => ({ run_id: runId, scope: s, metrics })),
-      { onConflict: "run_id,scope" }
-    );
-    if (error) console.error("persist backtest_results:", error.message);
-  }
-
-  return NextResponse.json({
-    runId,
-    timeframe,
-    count,
-    accountBalance,
-    lotSize,
-    riskPercent,
-    minConfidence: minConfidence ?? "live gate",
-    strategies,
-    summaries,
-  });
+  return NextResponse.json({ runId, count, trades: trades.length, combined: scopes.combined });
 }

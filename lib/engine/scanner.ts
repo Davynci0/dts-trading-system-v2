@@ -22,6 +22,7 @@ import { sendFinalSignal, sendZoneAlert } from "@/lib/telegram";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 import { fetchQuoteUsdRates, quoteUsdRateFor } from "@/lib/fx";
+import { scanTrend } from "@/lib/engine/trendScanner";
 import { renderSetupPng } from "@/lib/vision/chartRender";
 import { validateSetupVision, type VisionVerdict } from "@/lib/vision/openrouter";
 
@@ -56,7 +57,7 @@ interface SetupState {
 export interface ScanEvent {
   pair: string;
   timeframe: string;
-  strategy: StrategyId;
+  strategy: StrategyId | "trend";
   kind: "watching" | "update" | "signal" | "skipped" | "error";
   detail: string;
 }
@@ -139,6 +140,11 @@ export async function runScan(opts: {
         const barAgeMin = (Date.now() / 1000 - closeTimeOf(candles)) / 60;
         const staleBar = barAgeMin > MAX_ENTRY_AGE_MIN;
         const staleNote = `signal candle closed ${Math.round(barAgeMin)} min ago — too late to enter (limit ${MAX_ENTRY_AGE_MIN} min)`;
+
+        // The trend system — the strategies that send signals (lib/analysis/trend.ts).
+        for (const ev of await scanTrend({ pair, candles, daily: htfCandles, supabase, accountBalance, sendTelegrams, maxEntryAgeMin: MAX_ENTRY_AGE_MIN })) {
+          events.push({ pair, timeframe: tf, strategy: "trend", kind: ev.kind, detail: ev.detail });
+        }
         const ta = analyzeExecution(candles, pair);
         if (!ta) continue;
 
@@ -496,7 +502,7 @@ const DEFAULT_SIGNAL_PAIRS = ["XAU_USD"];
 /** Strategies allowed to SEND live signals. The rest are still scanned and
  *  shown on the dashboard's tracker, but only as watch-only setups. Override
  *  with SIGNAL_STRATEGIES=breakout,setforget (ids from StrategyId). */
-const DEFAULT_SIGNAL_STRATEGIES: StrategyId[] = ["breakout", "setforget", "zones", "sr", "fibonacci"];
+const DEFAULT_SIGNAL_STRATEGIES: StrategyId[] = [];
 
 export function signalStrategies(override?: string | undefined): Set<StrategyId> {
   const raw = override ?? process.env.SIGNAL_STRATEGIES;

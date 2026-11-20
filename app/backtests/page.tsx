@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import { STRATEGIES } from "@/lib/types";
 import type { MetricsCore, ScopedMetrics } from "@/lib/backtest/engine";
 
 interface RunRow {
@@ -74,9 +73,8 @@ function MetricTable({ rows, segment }: { rows: ResultRow[]; segment: Segment })
 }
 
 /**
- * Backtest results: stored runs of the strategies that send live signals —
- * one trade at a time, closed higher-timeframe bars, full spread + slippage —
- * with the whole run next to its first 70% and last 30%.
+ * Backtest results: stored runs of the system that sends live signals (the
+ * trend system), with the whole run next to its first 70% and last 30%.
  */
 export default function BacktestsPage() {
   const [run, setRun] = useState<RunRow | null>(null);
@@ -124,9 +122,9 @@ export default function BacktestsPage() {
   const sections: [string, ResultRow[], boolean][] = [
     ["Combined", results.filter((r) => r.scope === "combined"), true],
     ["Per year", rowsOf("year:"), false],
-    ["Per strategy", rowsOf("strategy:"), true],
+    ["Per entry type", rowsOf("strategy:"), true],
     ["By key level", rowsOf("grade:"), true],
-    ["Per pair", rowsOf("pair:"), true],
+    ["Buys and sells", rowsOf("pair:"), true],
   ];
   const hasAll = results.some((r) => r.metrics.all);
 
@@ -136,10 +134,11 @@ export default function BacktestsPage() {
         <div>
           <h1 className="text-lg font-semibold text-neutral-100">Backtest Results</h1>
           <p className="mt-1 max-w-3xl text-xs text-neutral-500">
-            The strategies that send live signals, replayed on history with the scanner&apos;s own detection and send
-            rules: one trade at a time, higher timeframes from closed bars only, full spread + slippage on every
-            trade, and a loss whenever one candle touches both stop and target. An average is coloured only when
-            its t value is beyond ±2 — inside that, it is not distinguishable from zero.
+            The trend system replayed on history with the scanner&apos;s own detection: a signal on a closed 4-hour
+            candle fills at the next candle&apos;s open plus the full spread + slippage, each entry type holds one
+            position, and every trade is closed by its trailing stop (there is no target). Positions overlap and
+            point the same way, so read the total and the drawdown rather than any single row. Older runs in the
+            list belong to earlier versions of the system.
           </p>
         </div>
         <button
@@ -208,8 +207,8 @@ export default function BacktestsPage() {
             )
           )}
           <p className="text-xs text-neutral-600">
-            Strategies: {STRATEGIES.map((s) => s.label).join(" · ")}. Where shown, the 4/6 and 5–6/6 columns
-            count trades by confirmations met at entry.
+            R is the risk of one trade: the distance from its entry to its first stop. Where shown, the 4/6 and
+            5–6/6 columns belong to runs of the earlier pattern strategies.
           </p>
         </>
       )}

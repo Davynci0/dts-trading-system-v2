@@ -112,3 +112,44 @@ export async function sendFinalSignal(opts: {
       .join("\n")
   );
 }
+
+/**
+ * A trend-system signal: no target — the trade is managed by a trailing stop
+ * at a fixed distance, which the broker can run.
+ */
+export async function sendTrendSignal(opts: {
+  pair: string;
+  direction: "long" | "short";
+  /** the entry type, e.g. "1-week breakout" */
+  label: string;
+  rule: string;
+  entry: number;
+  stopLoss: number;
+  /** trailing distance in price */
+  trailDistance: number;
+  adx: number;
+  /** trend positions open, this one included */
+  openCount: number;
+  positionUnits: number;
+  riskAmount: number;
+  riskPct: number;
+}): Promise<void> {
+  const px = (n: number) => n.toFixed(2);
+  const unitRisk = Math.abs(opts.entry - opts.stopLoss);
+  const pct = String(Number((opts.riskPct * 100).toFixed(2)));
+  const sizeLine =
+    opts.positionUnits >= 1
+      ? `Size: ${opts.positionUnits.toLocaleString()} units (risk $${opts.riskAmount.toFixed(0)}, ${pct}%)`
+      : `Size: the stop is too wide for ${pct}% risk — the smallest size (1 unit, 0.01 lot) risks $${unitRisk.toFixed(0)}, ${pct}% of the account is $${opts.riskAmount.toFixed(0)}`;
+  await sendTelegramMessage(
+    [
+      `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (${opts.label})`,
+      `Entry \`${px(opts.entry)}\` at market · Stop \`${px(opts.stopLoss)}\``,
+      `*Trailing stop: ${px(opts.trailDistance)}* — set your broker's trailing stop to this distance. No take-profit.`,
+      `Why: ${opts.rule}; the 50-day and 100-day trends both point ${opts.direction === "long" ? "up" : "down"}; ADX ${opts.adx.toFixed(0)}`,
+      `Trend positions open now: ${opts.openCount}`,
+      sizeLine,
+      `_Signal only — review and execute manually._`,
+    ].join("\n")
+  );
+}

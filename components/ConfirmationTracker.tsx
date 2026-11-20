@@ -80,7 +80,7 @@ export default function ConfirmationTracker({ pair, timeframe }: { pair: string;
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
       <div className="mb-3 flex items-baseline justify-between">
-        <h2 className="text-sm font-semibold text-neutral-100">Confirmation Tracker</h2>
+        <h2 className="text-sm font-semibold text-neutral-100">Pattern setups <span className="font-normal text-neutral-500">· context, not sent</span></h2>
         <span className="text-xs text-neutral-500">
           {pair.replace("_", "/")} · {timeframe}
         </span>

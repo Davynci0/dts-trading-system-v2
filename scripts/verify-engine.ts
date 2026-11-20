@@ -639,8 +639,8 @@ if (sf) {
     buildSetupKey("v", scoredB)
   );
   check(
-    "scanner: all five strategies send by default; the override drops unknown names",
-    signalStrategies(undefined).size === 5 && signalStrategies("breakout,setforget,nonsense").size === 2 && !signalStrategies("breakout").has("zones"),
+    "scanner: the pattern strategies are context by default (the trend system sends); the override can switch them on",
+    signalStrategies(undefined).size === 0 && signalStrategies("breakout,setforget,nonsense").size === 2 && !signalStrategies("breakout").has("zones"),
     `[${[...signalStrategies(undefined)].join(",")}]`
   );
 }

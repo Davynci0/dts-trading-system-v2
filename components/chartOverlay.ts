@@ -51,6 +51,15 @@ export interface OverlayData {
     inZone?: boolean;
     tradeable?: boolean;
   } | null;
+  /** trend system: the two EMAs, the levels its entries wait on, and whether it may trade now */
+  trend?: {
+    ema20: { time: number; value: number }[];
+    ema50: { time: number; value: number }[];
+    levels: { label: string; price: number }[];
+    side: "long" | "short" | null;
+  } | null;
+  /** open trend positions: the entry and where the trailing stop stands now */
+  trails?: { label: string; direction: "long" | "short"; entry: number; stop: number; startTime: number }[];
   /** pending signal's trade plan (entry/SL/TP), drawn as a position tool */
   position?: {
     direction: "long" | "short";
@@ -136,6 +145,9 @@ export const CHART_COLORS = {
   fib: "167,139,250", // violet
   aoi: "56,189,248", // sky
   level: "203,213,225", // slate — support / resistance
+  trend: "250,204,21", // yellow — the trend system's entry levels
+  ema20: "244,114,182", // pink
+  ema50: "129,140,248", // indigo
   muted: "100,116,139",
   ink: "229,231,235",
   win: "38,166,154",
@@ -421,6 +433,53 @@ class OverlayPaneView implements IPrimitivePaneView {
             dot(xB, yB, rgb, 4);
             const result = h.outcome === "win" ? `+${h.r.toFixed(1)}R` : "−1R";
             tag(`${h.skipped ? "skipped " : ""}${h.direction === "long" ? "BUY" : "SELL"} ${result}`, xB + 7, yB - 3, rgb, "left", 4, { small: true });
+          }
+
+          // ── the trend system ─────────────────────────────────────────────
+          // The two EMAs its pullback entries read, and the levels its
+          // breakout entries wait on (only on the side the trend allows).
+          if (data.trend) {
+            const t = data.trend;
+            const curve = (pts: { time: number; value: number }[], rgb: string, name: string) => {
+              ctx.beginPath();
+              let started = false;
+              let lastY: number | null = null;
+              for (const p of pts) {
+                const x = X(p.time);
+                const y = Y(p.value);
+                if (x == null || y == null) continue;
+                if (started) ctx.lineTo(x, y);
+                else ctx.moveTo(x, y);
+                started = true;
+                lastY = y;
+              }
+              ctx.strokeStyle = rgba(rgb, 0.85);
+              ctx.lineWidth = 1.25;
+              ctx.setLineDash([]);
+              ctx.stroke();
+              if (lastY != null) tag(name, W - 4, lastY - 3, rgb, "right", 6, { small: true, dim: true });
+            };
+            curve(t.ema50, C.ema50, "EMA 50");
+            curve(t.ema20, C.ema20, "EMA 20");
+            for (const lv of t.levels) {
+              const y = Y(lv.price);
+              if (y == null) continue;
+              line(W * 0.5, W, y, C.trend, t.side ? 0.8 : 0.4, 1, [6, 4]);
+              tag(`${t.side === "long" ? "BUY above" : t.side === "short" ? "SELL below" : "level"} ${fmt(lv.price)} · ${lv.label}`, W - 4, y - 3, C.trend, "right", 2, { small: true, dim: !t.side });
+            }
+          }
+          // open trend positions: entry, and the trailing stop where it stands now
+          for (const p of data.trails ?? []) {
+            const x0 = Math.max(X(p.startTime) ?? 0, 0);
+            const [yE, yS] = [Y(p.entry), Y(p.stop)];
+            if (yE != null) {
+              line(x0, W, yE, C.ink, 0.7, 1, [2, 3]);
+              tag(`${side(p.direction)} ${fmt(p.entry)} · ${p.label}`, x0 + 6, yE - 3, C.ink, "left", 3, { small: true });
+            }
+            if (yS != null) {
+              line(x0, W, yS, C.loss, 0.95, 1.5, []);
+              tag(`TRAILING STOP ${fmt(p.stop)}`, W - 4, yS - 3, C.loss, "right", 0);
+            }
           }
 
           // ── the open trade plan ──────────────────────────────────────────

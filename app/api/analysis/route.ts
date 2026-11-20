@@ -8,6 +8,7 @@ import { PULLBACK_TREND_DAYS } from "@/lib/analysis/pullback";
 import { detectKeyLevels, nearestLevels } from "@/lib/analysis/levels";
 import { breakoutLevels, closeTimeOf, dailyTrend, CHANNEL_BARS } from "@/lib/analysis/breakout";
 import { signalStrategies } from "@/lib/engine/scanner";
+import { buildTrendSeries, trendStateAt, trendWatchAt, TREND_ADX_MAX, TREND_STOP_ATR } from "@/lib/analysis/trend";
 
 export const maxDuration = 60;
 
@@ -125,6 +126,21 @@ export async function GET(req: NextRequest) {
       channel: waiting.channel ? { ...waiting.channel, startTime: candles[Math.max(0, candles.length - CHANNEL_BARS)].time } : null,
     };
 
+    // The trend system (lib/analysis/trend.ts): what its filters allow, what
+    // each entry is waiting for, and the two EMAs it reads.
+    const series = buildTrendSeries(candles, daily);
+    const ti = series.n - 1;
+    const finite = (v: number) => (Number.isFinite(v) ? v : null);
+    const trend = {
+      state: { ...trendStateAt(series, ti), adx: finite(series.adx[ti]) },
+      adxMax: TREND_ADX_MAX,
+      atr: finite(series.atr[ti]),
+      stopAtr: TREND_STOP_ATR,
+      watch: trendWatchAt(series, ti),
+      ema20: series.t.map((time, k) => ({ time, value: series.ema20[k] })).filter((p) => Number.isFinite(p.value)),
+      ema50: series.t.map((time, k) => ({ time, value: series.ema50[k] })).filter((p) => Number.isFinite(p.value)),
+    };
+
     // The pullback strategies' rules (lib/analysis/pullback.ts) — only shown
     // when one of them is allowed to send.
     const [sessionStart, sessionEnd] = tradingHoursUtc();
@@ -201,6 +217,7 @@ export async function GET(req: NextRequest) {
       structure: structure.slice(-18),
       breakout,
       gate,
+      trend,
       asOf: to ?? null,
       topDown: {
         weekly: topDown.weekly,

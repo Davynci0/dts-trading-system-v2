@@ -1,19 +1,17 @@
 # DTS — Gold Trading System
 
-Signal-only gold (XAU/USD) trading system on **4-hour candles**. Five strategies send
-signals: the **trend breakout**, the **support/resistance retest** and three **trend
-pullbacks** — supply/demand zones, Alex G "set & forget" AOIs and the Fibonacci golden zone.
-All five trade with the daily trend only. The scanner looks at the chart every 15 minutes;
-when it finds a setup it counts the confirmations, and only an **A setup** is sent to
-Telegram. The user reviews each signal and executes manually — the system never places trades.
+Signal-only gold (XAU/USD) trading system on **4-hour candles**. It follows gold's trend with
+eleven entry types and manages every trade with a **trailing stop** — there is no take-profit.
+The scanner looks at the chart every 15 minutes; when an entry fires on a 4-hour close it is
+sent to Telegram. The user reviews each signal and executes manually — the system never places
+trades.
 
-Expect about two signals a month, each held for days to weeks. **Read
-[the backtest results](#backtesting) before trusting it:** over fifteen years almost all the
-profit came from the last three.
+Expect about three signals a week, each held for a few days, with **several positions open at
+the same time and all pointing the same way**. Read [the backtest results](#backtesting)
+before trusting it.
 
 **Stack:** Next.js (App Router, single deployable on Vercel) · OANDA v20 (data) ·
-Supabase (auth + persistence) · Telegram Bot API (alerts) · OpenRouter vision model (a note on
-each signal; it can only reject when `VISION_CAN_VETO=true`).
+Supabase (auth + persistence) · Telegram Bot API (alerts).
 
 ## Setup
 
@@ -30,92 +28,82 @@ database needs the files in `supabase/migrations/` that it has not had yet).
 
 | Role | Timeframe | Used for |
 | --- | --- | --- |
-| Execution | H4 (`EXECUTION_TIMEFRAME`) | the chart, every setup, entries, the ATR for stops |
-| Higher timeframe | Daily (`EXECUTION_HTF`) | the daily trend, support/resistance levels |
-| Context | Weekly | a weekly structure that opposes a trade vetoes it |
+| Execution | H4 (`EXECUTION_TIMEFRAME`) | the chart, every entry, the ATR for stops |
+| Higher timeframe | Daily (`EXECUTION_HTF`) | the 50-day and 100-day trend, yesterday's high/low |
 
 A signal is entered at the **close** of the H4 candle that produced it. OANDA's H4 candles
 close at 02:00, 06:00, 10:00, 14:00, 18:00 and 22:00 UTC (an hour earlier during US summer
-time). All of it is set in `lib/analysis/execution.ts`.
+time).
 
-## The trend breakout
+## The trend system
 
-Gold tends to keep going when it breaks a level in the direction of its daily trend. The
-strategy (`lib/analysis/breakout.ts`) enters on the H4 candle that first **closes** beyond the
-one-week channel:
+All of it is in `lib/analysis/trend.ts`, shared by the scanner, the backtest and the chart.
+
+**Two filters decide whether anything may be traded on a candle:**
+
+| Filter | Rule |
+| --- | --- |
+| Daily trend | the last closed daily close is on the same side of its 50-day **and** its 100-day average — above both: buys only, below both: sells only, otherwise nothing |
+| Not stretched | the H4 ADX is below 27 — the system does not join a move that has already run |
+
+**Eleven entries, each on the close of an H4 candle, in the trend's direction:**
+
+| Entry | Fires when |
+| --- | --- |
+| 20-candle, 1-week, 2-week, 1-month, 2-month breakout | the candle is the first to close beyond the high/low of the last 20 / 30 / 60 / 120 / 240 candles |
+| Pullback to the 20 EMA, to the 50 EMA | price dips to the EMA and the candle closes back beyond it, in its own direction |
+| 20/50 EMA cross | the 20 EMA crosses the 50 EMA |
+| Previous-day break | the candle closes beyond yesterday's high/low |
+| Momentum candle | the candle closes more than 1 ATR beyond the previous close |
+| Inside-bar breakout | the candle closes beyond the candle that contained an inside bar |
+
+**One way of managing every trade:**
 
 | | Rule |
 | --- | --- |
-| Level | highest high / lowest low of the previous 30 H4 bars (five trading days) |
-| Daily trend | last closed daily close above the average of the last 50 → upside breaks only; below → downside only |
-| Stop | 3 ATR from the close |
-| Target | 2 × the risk (`BREAKOUT_TARGET_R`) |
+| Stop | 3 ATR from the entry |
+| Exit | a trailing stop 3 ATR (the ATR at entry, a fixed distance) behind the best price — the broker's own trailing stop can run it |
+| Target | none |
+| Time limit | closed at market after 60 trading days |
+| Positions | one per entry type; different entry types may be open side by side (up to eleven) |
+| Costs | a trade is refused when spread + slippage exceed 10% of its risk |
+| Size | 0.25% of the account per trade (`TREND_RISK_PCT`) |
 
-The rule was positive on fifteen years for every channel length tried (30 to 480 bars), which
-is why the plain one-week channel is used rather than the best-scoring one. A small target
-wins often and earns nothing, so the target stays at 2R.
+### Why these rules
 
-## The trend pullbacks and the retest
+They come from a test on fifteen years of gold in which everything was chosen on the first
+ten years (2011–2021) and then checked on the last five:
 
-Zones, set & forget and Fibonacci each find their own setup (a return to a supply/demand zone,
-the first touch of a 50–61.8% area of interest, price inside the 61.8–78.6% golden zone), and
-the retest strategy finds old resistance holding as support (or the reverse). A setup becomes
-a trade under one shared rule (`lib/analysis/pullback.ts`):
+- **Fixed targets earned nothing** in the ten design years, for every entry tried. With a
+  trailing stop the same entries were all positive: losses are cut at about −0.6R on average
+  and the occasional trend pays several R.
+- **Mean reversion lost**: buying RSI dips, fading Bollinger bands and holding through the
+  Asian session were all negative after costs.
+- **Trades against the 100-day trend** made nothing in the design years and lost afterwards —
+  hence the requirement that both trends agree.
+- **Trades that joined a stretched move** (ADX above 27) lost in the design years and were
+  the weakest group afterwards — hence the ADX cap, which roughly doubled the quality.
+- Of 52 big swings in the design years, 49 were traded. The three missed all ran against the
+  daily trend. Entries are late by design: typically after about half the move.
 
-| | Rule | Override |
-| --- | --- | --- |
-| Daily trend | last closed daily close above the average of the last 100 → buys only; below → sells only | — |
-| Weekly structure | must not oppose the trade | — |
-| Stop | 3 ATR from the entry | `PULLBACK_STOP_ATR` |
-| Target | 3 × the risk | `PULLBACK_TARGET_R` |
-| Costs | spread + slippage ≤ 10% of the risk | `MAX_COST_SHARE` |
+### The pattern strategies
 
-Each setup is traded once, on the first candle where the rule holds and the setup is an A setup.
-
-Every H4 close is tradeable. Limiting entries to London/New York hours was tested and was
-worse; `TRADING_HOURS_UTC="7-20"` restores it.
-
-## Support and resistance
-
-`lib/analysis/levels.ts` finds the prices gold has turned at more than once: daily swing highs
-and lows within half an ATR of each other form a level, counted by separate visits. A level
-that has been both a ceiling and a floor is **flipped**. The chart draws the three nearest
-levels on each side of price (flipped ones solid). A flipped level just behind an entry is one
-of the confirmations (★ on the signal).
-
-## A setups
-
-Every strategy has a checklist, shown live on the dashboard's Confirmation Tracker. A setup is
-sent to Telegram only when it is an **A setup** (`MIN_CONFIRMATIONS` in `lib/types.ts`):
-
-| Strategy | Checklist | A setup needs |
-| --- | --- | --- |
-| Trend breakout | close beyond the 1-week channel · daily trend agrees · inside the entry window · key level behind the entry | the first three (they are all-or-nothing) |
-| Zones, set & forget, Fibonacci | the trigger · rejection candle · fresh zone / overlap with another area · RSI turning · daily trend agrees · H4 trend agrees · key level behind the entry | 4 of 7 |
-| S/R retest | retest of a broken level · level turned price 3+ times · candle closes with the trade · daily trend agrees · key level behind the entry | 4 of 5 |
-
-A setup with fewer confirmations is a **B setup**: it stays on the tracker and is sent if it
-later gains the confirmations it lacks. Over fifteen years the A-setup rule made no measurable
-difference to the result (+63R against +67R when every setup was sent) — it is a quality
-screen the trader asked for, not a source of edge. A stricter rule (5 of 7) was worse (+46R).
-
-## One trade at a time
-
-Only one trade is open at a time. When several setups are ready on the same candle the
-breakout goes first, then set & forget, zones, the retest and Fibonacci; others in the same
-direction are recorded as confluence. `SIGNAL_STRATEGIES` (default: all five) decides which
-strategies may send — one left out is still scanned and shown on the tracker.
-
-A trade that has reached neither its stop nor its target after six weeks is closed as expired.
+Supply/demand zones, set & forget, Fibonacci, the support/resistance retest and the 1-week
+range are still scanned, drawn on the chart (layers off by default) and shown under "Pattern
+setups" — as context. They do not send: with fixed targets they made about nothing before
+2023. `SIGNAL_STRATEGIES=zones,…` switches any of them back on.
 
 ## Scanning
 
 - A scheduler (cron-job.org) calls `/api/scan` every 15 minutes with
   `Authorization: Bearer $CRON_SECRET`. Only the first scan after an H4 close can find a new
-  setup; the others re-check the same candle and track open trades.
+  entry; every scan also follows the open trades' trailing stops on M15 candles and records
+  where each stop stands.
 - A signal is only sent within 60 minutes of its candle's close (`MAX_ENTRY_AGE_MIN`). A scan
-  that runs later — after an outage, or at the weekend — still tracks the setup but does not
-  send a trade at a price that is no longer there.
+  that runs later — after an outage, or at the weekend — does not send a trade at a price that
+  is no longer there.
+- An entry type that already has a position open does not send again until that position has
+  been stopped out.
 - `vercel.json` keeps one daily cron as a fallback (Vercel's Hobby plan allows one run per
   day). `.github/workflows/scan.yml` is a second scheduler, currently disabled.
 - The dashboard's **Scan now** button runs a scan on demand.
@@ -124,74 +112,71 @@ A trade that has reached neither its stop nor its target after six weeks is clos
 
 ## Backtesting
 
-The backtest replays whatever is allowed to send (`SIGNAL_STRATEGIES`): the same detection and
-send rules, one trade at a time, higher timeframes from closed bars only, full spread +
-slippage on every trade, and a loss whenever one candle touches both stop and target.
-
 ```bash
-npx tsx --env-file=.env.local scripts/backtest.ts --years=15          # the long run — judge the rules on this
-npx tsx --env-file=.env.local scripts/backtest.ts --years=15 --save   # …and stored for the Backtests page
-npx tsx --env-file=.env.local scripts/backtest.ts                     # the last 3 years
+npx tsx --env-file=.env.local scripts/backtest.ts            # 15 years, printed year by year and by entry type
+npx tsx --env-file=.env.local scripts/backtest.ts --save     # …and stored for the Backtests page
+npx tsx --env-file=.env.local scripts/backtest.ts --m15      # follow the trailing stop on M15 candles
+npx tsx --env-file=.env.local scripts/backtest.ts --years=3  # a shorter window
 ```
 
-Settings come from the environment, so prefix any override to test it
-(`BREAKOUT_TARGET_R=1 npx tsx …`). Candles are cached in `.cache/`; the first run downloads them.
-The `/backtests` page shows stored runs — whole run, per year, per strategy — and its
-**Quick run** button backtests the last ~3 years on the server.
+The backtest uses the scanner's own detection: a signal on a closed H4 candle fills at the
+next candle's open plus the full spread + slippage, each entry type holds one position, and
+within a candle the stop is tested before that candle's own extreme may move it. Candles are
+cached in `.cache/`. The `/backtests` page shows stored runs and its **Quick run** button
+backtests the last ~3 years on the server.
 
-Read the **t** column before the profit factor: inside ±2 an average is not distinguishable
-from zero.
+XAU/USD on H4, 15 years to 2026-11-20:
 
-XAU/USD on H4, 15 years to 2026-11-20, all five strategies, one trade at a time:
+| Period | Trades | Result |
+| --- | --- | --- |
+| 2011-11 → 2021-11 (the years the rules were chosen on) | 1,524 | +266R |
+| 2021-11 → 2023-11 | 389 | +6R |
+| 2023-11 → 2026-11 | 509 | +267R |
+| **All 15 years** | **2,422 (3.1 a week)** | **+539R** |
 
-| Period | Trades | Win rate | Total R |
-| --- | --- | --- | --- |
-| 2011-11 → 2016-11 | 132 | 31% | +0 |
-| 2016-11 → 2021-11 | 128 | 31% | −3 |
-| 2021-11 → 2023-11 | 56 | 32% | +6 |
-| 2023-11 → 2026-11 | 80 | 56% | +60 |
-| **All 15 years** | **396 (about 2 a month)** | **36%** | **+63** |
+44% of trades win; 12 of the 15 years were positive (the losing ones: −24R, −1R, −20R). With
+costs doubled the total is +504R. Following the trailing stop on M15 candles instead of H4
+gives 2,428 trades and +552R. Every one of the eleven entries is positive on its own.
 
-By strategy: breakout 216 trades +29R, retest 47 trades +25R, zones 22 trades +11R, Fibonacci
-96 trades +7R, set & forget 15 trades −9R. Eleven of the fifteen years were positive.
+**Read this before trusting it.**
 
-**Read this before trusting the system.** Almost all the profit comes from the last three
-years, when gold rose from about $2,000 to over $3,500. Over the twelve years before that the
-system made +3R on 316 trades, which is not distinguishable from zero (t = 0.1). The worst
-drawdown was 30R, the longest losing streak 12 trades, and equity once spent about ten years
-below an earlier high. This is a trend-following system: it earns in a strong gold trend and
-roughly breaks even otherwise, and nothing tested here predicts which kind of year is coming.
-Run it on a practice account, and if you risk money, risk a small fraction of a percent per
-trade.
+- **It is a backtest, found by searching.** Around a hundred variants were tried on the way
+  here. The design/holdout split protects against the worst of that, not all of it — expect
+  live results to be weaker.
+- **Positions overlap and point the same way.** Up to eleven are open at once. When the trend
+  turns they are stopped together: the worst drawdown was 61R. At 0.25% risk per trade that is
+  about 15% of the account; at 1% it would be 61%.
+- **Long flat stretches.** 2021–2023 made +6R in two years, and three of the fifteen years
+  lost money.
+- **Wide stops in dollars.** Three H4 ATRs is about $125 an ounce at today's volatility, so
+  the smallest position (0.01 lot) risks about $125. Several of those open at once need a
+  sizeable account; the signal says when 0.25% of the account is less than that.
+- **It trades less than it looks.** While a move is stretched (ADX above 27) nothing new is
+  sent, sometimes for days.
 
-What H4 does give: costs stop mattering. A 3-ATR stop on H4 is tens of dollars, so spread and
-slippage average 1.5% of the risk, and doubling them moves the 15-year total only from +63R to
-+57R. The earlier M15 version of this system made +158R over the same fifteen years on 2,899
-trades, but fell to +22R with costs doubled and had a 94R drawdown.
+Earlier versions for comparison, same fifteen years: the 4-hour pattern strategies with fixed
+targets made +63R (+3R before 2023), and the 15-minute system +158R (+22R before 2023, and
++22R in total with costs doubled).
 
-What H4 costs: wide stops. Three H4 ATRs on gold can exceed $100 an ounce, so on a small
-account 1% of the balance may be less than the risk of the smallest position (0.01 lot). The
-signal says so when that happens; the choice is to skip the trade or accept a larger risk.
-
-`scripts/research-strategies.ts` is an M15 lab for intraday ideas from the earlier version; it
-tests entry rules on three years of M15 data before anything is built into the scanner.
+`scripts/research-strategies.ts` is an M15 lab for intraday ideas from an earlier version.
 
 ## Verification
 
 ```bash
-npx tsx scripts/verify-engine.ts   # detection, scoring, send gate, backtest
+npx tsx scripts/verify-trend.ts    # trend filters, entries, trailing stop, settlement, backtest
+npx tsx scripts/verify-engine.ts   # pattern detection, scoring, send gate
 npx tsx scripts/verify-risk.ts     # stops, targets, sizing, cost cap
 ```
 
 ## Routes
 
-- `/` — dashboard: H4 chart with the strategies drawn in their own colours (breakout amber, set & forget blue, zones green/red, Fibonacci violet; a setup against the trend is drawn muted), key levels, optional structure/trendlines, the open trade plan and past results; a legend says what each strategy is waiting on. `/?asOf=2026-11-19T06:00Z` shows the chart as it stood at that moment
+- `/` — dashboard: H4 chart with the 20 and 50 EMA, the levels the breakout entries wait on, open positions with their trailing stops, key levels and past results; the Trend system panel shows the three filters and what each entry is waiting for. `/?asOf=2026-11-19T06:00Z` shows the chart as it stood at that moment
 - `/backtests` — stored backtest runs and the quick run
 - `/login` — Supabase auth
 - `/api/candles` — OANDA candle proxy (key stays server-side)
 - `/api/analysis` — everything the chart draws, from the same engine the scanner uses (`&to=<ISO time>` for a past moment)
 - `/api/scan` — run the engine (GET = scheduled, POST = dashboard)
-- `/api/signals`, `/api/setups` — live feed + confirmation state
+- `/api/signals`, `/api/setups` — live feed + pattern-setup state
 - `/api/risk/preview` — stop / target / sizing check from live structure
 - `/api/backtest/run`, `/api/backtests/latest` — backtesting
 - `/api/ask-ai`, `/api/vision/validate` — vision model chart read and rendering QA

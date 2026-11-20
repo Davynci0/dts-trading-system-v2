@@ -16,9 +16,17 @@ export interface Signal {
   created_at: string;
   pair: string;
   direction: SignalDirection;
-  strategy: StrategyId;
+  /** a pattern strategy, or "trend" for the trend system (see `variant`) */
+  strategy: StrategyId | "trend";
+  /** trend system: the entry type that fired (TREND_ENTRIES id) */
+  variant?: string | null;
+  /** trend system: fixed trailing distance in price — such a trade has no take-profit */
+  trail_distance?: number | null;
+  /** trend system: where the trailing stop stands now */
+  trail_stop?: number | null;
   entry: number;
   stop_loss: number;
+  /** 0 for a trailing-stop trade */
   take_profit: number;
   r_multiple: number | null;
   /** confirmations met (out of CHECKS[strategy]) */

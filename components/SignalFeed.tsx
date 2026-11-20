@@ -119,8 +119,8 @@ export default function SignalFeed() {
                 </span>
               </span>
               <span className="text-neutral-500">
-                {fmtTime(s.created_at)} · {s.strategy} · {s.confidence}/{CHECKS[s.strategy] ?? 6}
-                {isASetup(s.strategy, s.confidence) ? " · A setup" : " · B setup"}
+                {fmtTime(s.created_at)} · {s.strategy === "trend" ? `trend · ${s.variant ?? ""}` : `${s.strategy} · ${s.confidence}/${CHECKS[s.strategy] ?? 6}`}
+                {s.strategy === "trend" ? "" : isASetup(s.strategy, s.confidence) ? " · A setup" : " · B setup"}
                 {s.confirmations?.["Key level behind the entry"] ? " ★" : ""}
                 {s.status === "skipped" ? " · SKIPPED" : ""}
               </span>
@@ -148,6 +148,12 @@ export default function SignalFeed() {
             {stale && (
               <div className="mt-1 text-amber-400">
                 Open {fmtAge(s.created_at)} without reaching TP or SL — will be replaced if a clearly better setup appears.
+              </div>
+            )}
+            {s.trail_distance != null && (
+              <div className="mt-1 font-mono text-neutral-400">
+                E {s.entry} · SL {s.stop_loss.toFixed(2)} · trailing {s.trail_distance.toFixed(2)}
+                {!s.outcome && s.trail_stop != null && ` · stop now ${s.trail_stop.toFixed(2)}`}
               </div>
             )}
             {s.stop_loss > 0 && s.take_profit > 0 && (
