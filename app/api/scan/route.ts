@@ -3,7 +3,7 @@ import { runScan } from "@/lib/engine/scanner";
 import { isAuthorizedMutation } from "@/lib/apiGuard";
 import { PAIRS, TRADE_TIMEFRAMES, type Pair, type Timeframe } from "@/lib/types";
 
-export const maxDuration = 60; // Hobby plan cap — 9 pairs scan concurrently well inside this
+export const maxDuration = 60; // Hobby plan cap
 
 function parseParams(req: NextRequest, body: Record<string, unknown> | null) {
   const sp = req.nextUrl.searchParams;
@@ -11,7 +11,7 @@ function parseParams(req: NextRequest, body: Record<string, unknown> | null) {
   const pairs = (rawPairs?.length ? rawPairs : [...PAIRS]).filter((p): p is Pair =>
     (PAIRS as readonly string[]).includes(p)
   );
-  // The scanner only runs on M15 execution timeframe; any other timeframe is ignored.
+  // The scanner only runs on the H4 execution timeframe; any other timeframe is ignored.
   const timeframes: Timeframe[] = [...TRADE_TIMEFRAMES];
   return { pairs, timeframes };
 }
@@ -27,7 +27,7 @@ async function handle(req: NextRequest, body: Record<string, unknown> | null) {
   return NextResponse.json(summary);
 }
 
-/** GET — Vercel cron entry point (full scan: all pairs, M15 only). */
+/** GET — Vercel cron entry point (full scan: all pairs, H4 only). */
 export async function GET(req: NextRequest) {
   return handle(req, null);
 }

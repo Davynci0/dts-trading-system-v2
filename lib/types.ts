@@ -56,8 +56,8 @@ export type Pair = (typeof PAIRS)[number];
 export const TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D"] as const;
 export type Timeframe = (typeof TIMEFRAMES)[number];
 
-/** Live scanning and chart TA are locked to 15-minute candles. */
-export const TRADE_TIMEFRAMES = ["M15"] as const satisfies readonly Timeframe[];
+/** Live scanning and chart TA are locked to 4-hour candles. */
+export const TRADE_TIMEFRAMES = ["H4"] as const satisfies readonly Timeframe[];
 
 export const STRATEGIES: { id: StrategyId; label: string }[] = [
   { id: "breakout", label: "Trend Breakout" },

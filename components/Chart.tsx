@@ -157,7 +157,7 @@ export default function Chart({
     // refreshing with new bars must never destroy the user's zoom/pan.
     if (rangeAppliedForRef.current !== viewKey && candles.length > 0) {
       rangeAppliedForRef.current = viewKey;
-      const visibleBars = timeframe === "M15" ? 180 : 150;
+      const visibleBars = 150; // about five weeks of H4 candles
       chartRef.current?.timeScale().setVisibleLogicalRange({
         from: Math.max(0, candles.length - visibleBars),
         to: candles.length + 14, // room on the right for level labels, clear of the candles

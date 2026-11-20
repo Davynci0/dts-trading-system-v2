@@ -1,34 +1,27 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
-import { analyzeM15, M15_TRENDLINE_LOOKBACK } from "@/lib/analysis/execution";
+import { analyzeExecution, EXECUTION_CANDLES, EXECUTION_HTF, EXECUTION_TIMEFRAME, HTF_CANDLES, TRENDLINE_LOOKBACK } from "@/lib/analysis/execution";
 import { findRecentSwing, inGoldenZone } from "@/lib/analysis/fibonacci";
 import { analyzeTopDown, topDownOpposes } from "@/lib/analysis/topDown";
 import { inTradingSession, tradingHoursUtc } from "@/lib/analysis/session";
 import { PULLBACK_TREND_DAYS } from "@/lib/analysis/pullback";
 import { detectKeyLevels, nearestLevels } from "@/lib/analysis/levels";
-import {
-  breakoutLevels,
-  dailyTrend,
-  ASIAN_END_HOUR,
-  ASIAN_ENTRY_END_HOUR,
-  CHANNEL_ENTRY_START_HOUR,
-  CHANNEL_ENTRY_END_HOUR,
-} from "@/lib/analysis/breakout";
+import { breakoutLevels, closeTimeOf, dailyTrend, CHANNEL_BARS } from "@/lib/analysis/breakout";
 import { signalStrategies } from "@/lib/engine/scanner";
 
 export const maxDuration = 60;
 
 /**
- * GET /api/analysis?instrument=XAU_USD&granularity=M15&count=500[&to=<ISO time>]
+ * GET /api/analysis?instrument=XAU_USD&granularity=H4&count=500[&to=<ISO time>]
  * Everything the chart draws, from the same engine the scanner uses. Chart TA
- * is always M15; weekly/daily/H4/H1 are context. `to` returns the analysis as
+ * is always H4; weekly and daily are context. `to` returns the analysis as
  * it stood at that moment, for reviewing a past setup.
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const instrument = sp.get("instrument") ?? "XAU_USD";
-  const granularity = sp.get("granularity") ?? "M15";
-  const count = Math.min(Number(sp.get("count") ?? 500), 5000);
+  const granularity = sp.get("granularity") ?? EXECUTION_TIMEFRAME;
+  const count = Math.min(Number(sp.get("count") ?? EXECUTION_CANDLES), 5000);
   const toParam = sp.get("to");
   const toMs = toParam ? Date.parse(toParam) : NaN;
   if (toParam && !Number.isFinite(toMs)) {
@@ -36,25 +29,25 @@ export async function GET(req: NextRequest) {
   }
   const to = Number.isFinite(toMs) ? new Date(toMs).toISOString() : undefined;
 
-  if (granularity !== "M15") {
-    return NextResponse.json({ error: "Chart technical analysis is locked to M15" }, { status: 400 });
+  if (granularity !== EXECUTION_TIMEFRAME) {
+    return NextResponse.json({ error: `Chart technical analysis is locked to ${EXECUTION_TIMEFRAME}` }, { status: 400 });
   }
 
   try {
-    const [candles, weekly, daily, h4, h1] = await Promise.all([
-      fetchCandles({ instrument, granularity: "M15", count, to }),
+    const [candles, weekly, daily, h1] = await Promise.all([
+      fetchCandles({ instrument, granularity: EXECUTION_TIMEFRAME, count, to }),
       fetchCandles({ instrument, granularity: "W", count: 52, to }),
-      fetchCandles({ instrument, granularity: "D", count: 120, to }), // top-down reads the last 90, the 100-day trend needs more
-      fetchCandles({ instrument, granularity: "H4", count: 120, to }),
-      // 300 closed hours: top-down reads the last 120, the key levels all of them
-      fetchCandles({ instrument, granularity: "H1", count: 300, to }),
+      // closed days: the key levels read all of them, the 100-day trend the last 100, top-down the last 90
+      fetchCandles({ instrument, granularity: EXECUTION_HTF, count: HTF_CANDLES, to }),
+      fetchCandles({ instrument, granularity: "H1", count: 120, to }),
     ]);
-    const analysis = analyzeM15(candles, instrument);
+    const h4 = candles.slice(-120);
+    const analysis = analyzeExecution(candles, instrument);
     if (!analysis) {
       return NextResponse.json({ candles, zones: [], fib: null, aoi: null, topDown: null, structure: [], breakout: null, gate: null });
     }
 
-    const topDown = analyzeTopDown({ weekly, daily: daily.slice(-90), h4, h1: h1.slice(-120) });
+    const topDown = analyzeTopDown({ weekly, daily: daily.slice(-90), h4, h1 });
     const last = candles[candles.length - 1];
 
     // The pullback strategies' trend rule (lib/analysis/pullback.ts): a setup
@@ -81,13 +74,13 @@ export async function GET(req: NextRequest) {
       }));
 
     // Fibonacci: draw the swing the SCANNER would trade (analysis.fib — an
-    // intact leg, chosen with the M15 structure) so the chart and the engine
+    // intact leg, chosen with the H4 structure) so the chart and the engine
     // can never show different retracements. Only when the engine has no
     // setup does the chart fall back to the most recent intact swing, marked
     // as a reference rather than a trade zone.
     const engineFib = analysis.fib;
     const swingFib =
-      engineFib ?? findRecentSwing(candles, analysis.structuralPivots, analysis.atrValue, M15_TRENDLINE_LOOKBACK);
+      engineFib ?? findRecentSwing(candles, analysis.structuralPivots, analysis.atrValue, TRENDLINE_LOOKBACK);
     const retrace = (f: NonNullable<typeof swingFib>, ratio: number) =>
       f.direction === "long" ? f.swingHigh.price - ratio * f.range : f.swingLow.price + ratio * f.range;
     const fib = swingFib
@@ -124,17 +117,12 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Trend breakout: the levels it is waiting on. Only the trend-side level
-    // of each pair is a trigger. The next candle to close is the one that can
-    // break out, so the windows are judged at its open (= this candle's close).
+    // Trend breakout: the one-week channel it is waiting on. Only the
+    // trend-side edge is a trigger.
     const waiting = breakoutLevels(candles, daily);
-    const nextHour = new Date((last.time + 900) * 1000).getUTCHours();
     const breakout = {
       trend: waiting.trend,
-      asian: waiting.asian,
-      channel: waiting.channel,
-      asianWindowOpen: nextHour >= ASIAN_END_HOUR && nextHour < ASIAN_ENTRY_END_HOUR,
-      channelWindowOpen: nextHour >= CHANNEL_ENTRY_START_HOUR && nextHour < CHANNEL_ENTRY_END_HOUR,
+      channel: waiting.channel ? { ...waiting.channel, startTime: candles[Math.max(0, candles.length - CHANNEL_BARS)].time } : null,
     };
 
     // The pullback strategies' rules (lib/analysis/pullback.ts) — only shown
@@ -144,7 +132,7 @@ export async function GET(req: NextRequest) {
     const gate = {
       strategies: [...sending],
       pullback: [...sending].some((s) => s !== "breakout"),
-      inSession: inTradingSession(last.time + 900),
+      inSession: inTradingSession(closeTimeOf(candles)),
       sessionHours: `${String(sessionStart).padStart(2, "0")}:00–${String(sessionEnd).padStart(2, "0")}:00 UTC`,
       trend: pullbackTrend,
       trendDays: PULLBACK_TREND_DAYS,
@@ -190,9 +178,9 @@ export async function GET(req: NextRequest) {
       triggerTime: p.triggerTime,
     }));
 
-    // Support and resistance: the H1 levels the engine grades signals with —
+    // Support and resistance: the daily levels the engine grades signals with —
     // the three nearest on each side of price.
-    const levels = nearestLevels(detectKeyLevels(h1, last.close), last.close, 3).map((l) => ({
+    const levels = nearestLevels(detectKeyLevels(daily, last.close), last.close, 3).map((l) => ({
       kind: l.kind,
       price: l.price,
       top: l.top,
@@ -220,7 +208,7 @@ export async function GET(req: NextRequest) {
         h4: topDown.h4,
         h1: topDown.h1,
         bias: topDown.bias,
-        m15: analysis.structureState,
+        chart: analysis.structureState,
         actionLine: null,
         safetyLine: null,
       },

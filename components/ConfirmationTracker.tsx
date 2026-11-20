@@ -6,14 +6,14 @@ import { ENGINE_VERSION } from "@/lib/engine/version";
 
 const CONFIRMATIONS: Record<StrategyId, string[]> = {
   sr: ["Retest of a broken level", "Level turned price 3+ times", "Candle closes with the trade", "HTF trend agrees", "Key level behind the entry"],
-  breakout: ["Closed beyond the level", "Daily trend agrees", "Inside the entry window", "Key level behind the entry"],
+  breakout: ["Closed beyond the 1-week channel", "Daily trend agrees", "Inside the entry window", "Key level behind the entry"],
   zones: [
     "Price entered zone",
     "Rejection candle in zone",
     "Zone fresh (≤1 touch)",
     "Momentum (RSI) turning",
     "HTF trend agrees",
-    "M15 trend agrees",
+    "H4 trend agrees",
     "Key level behind the entry",
   ],
   setforget: [
@@ -22,7 +22,7 @@ const CONFIRMATIONS: Record<StrategyId, string[]> = {
     "AOI overlaps another POI",
     "Momentum (RSI) turning",
     "HTF trend agrees",
-    "M15 trend agrees",
+    "H4 trend agrees",
     "Key level behind the entry",
   ],
   fibonacci: [
@@ -31,7 +31,7 @@ const CONFIRMATIONS: Record<StrategyId, string[]> = {
     "Zone overlaps another POI",
     "Momentum (RSI) turning",
     "HTF trend agrees",
-    "M15 trend agrees",
+    "H4 trend agrees",
     "Key level behind the entry",
   ],
 };
@@ -80,7 +80,7 @@ export default function ConfirmationTracker({ pair, timeframe }: { pair: string;
       <div className="mb-3 flex items-baseline justify-between">
         <h2 className="text-sm font-semibold text-neutral-100">Confirmation Tracker</h2>
         <span className="text-xs text-neutral-500">
-          {pair.replace("_", "/")} · {timeframe} · M15 TA
+          {pair.replace("_", "/")} · {timeframe}
         </span>
       </div>
       <div className="space-y-4">
@@ -115,10 +115,7 @@ export default function ConfirmationTracker({ pair, timeframe }: { pair: string;
               )}
               <ul className="space-y-0.5">
                 {CONFIRMATIONS[s.id].map((label) => {
-                  // the breakout names the level it broke ("…the Asian range")
-                  const met =
-                    conf[label] === true ||
-                    (s.id === "breakout" && label.startsWith("Closed beyond") && Object.keys(conf).some((k) => k.startsWith("Closed beyond") && conf[k]));
+                  const met = conf[label] === true;
                   return (
                     <li
                       key={label}

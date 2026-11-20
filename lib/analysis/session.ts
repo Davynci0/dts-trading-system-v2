@@ -1,17 +1,15 @@
 /**
- * Trading-session gate for the pullback strategies: London and New York,
- * 07:00–20:00 UTC — the same hours the trend breakout trades.
+ * Trading-session gate. On 4-hour candles every close is tradeable, so the
+ * default is the whole day: a stop of 3 H4 ATRs is tens of dollars on gold,
+ * and the spread — even widened at the daily rollover — is a percent or two of
+ * it. Restricting entries to London/New York hours was tested on fifteen years
+ * and was worse.
  *
- *  - The Asian session is excluded: thin liquidity chops through zones built
- *    by London/NY volatility, and entries there lose in backtests year after
- *    year.
- *  - 21:00–23:00 UTC is the daily rollover, where real spreads are several
- *    times wider than any fixed-spread model assumes.
- *
- * Override with TRADING_HOURS_UTC="start-end" ("0-24" disables the gate).
- * `end` is exclusive; a window may wrap midnight.
+ * Override with TRADING_HOURS_UTC="start-end" (e.g. "7-20"). `end` is
+ * exclusive; a window may wrap midnight. The hour tested is the entry time —
+ * the close of the signal candle.
  */
-const DEFAULT_HOURS: [number, number] = [7, 20];
+const DEFAULT_HOURS: [number, number] = [0, 24];
 
 export function tradingHoursUtc(raw: string | undefined = process.env.TRADING_HOURS_UTC): [number, number] {
   const m = raw?.trim().match(/^(\d{1,2})\s*-\s*(\d{1,2})$/);

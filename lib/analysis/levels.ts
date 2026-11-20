@@ -9,8 +9,8 @@ import { detectPivots } from "./pivots";
  * comes back and turns there again, and a strong one when it has been both a
  * ceiling and a floor (a "flip"). So the detector:
  *
- *  1. takes the swing highs and lows of a higher timeframe (H1 by default —
- *     a few weeks of structure, where M15 would only see a few days),
+ *  1. takes the swing highs and lows of the higher timeframe (daily candles —
+ *     about a year of structure, where H4 alone would see a few months),
  *  2. groups swings that sit within LEVEL_WIDTH_ATR × ATR of each other,
  *  3. counts the group's separate visits (swings at least MIN_TOUCH_GAP bars
  *     apart — one turn often prints two neighbouring pivots),

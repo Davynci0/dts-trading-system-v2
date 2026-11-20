@@ -15,9 +15,9 @@ export function buildSetupKey(version: string, scored: ScoreResult): string {
     return `${version}:${scored.strategy}:${bucketTime(f.swingLow.time)}-${bucketTime(f.swingHigh.time)}`;
   }
   if (scored.strategy === "breakout" && scored.trigger?.breakout) {
-    // one Asian break per trading day; a channel break is identified by its candle
+    // a channel break is identified by its candle
     const b = scored.trigger.breakout;
-    return `${version}:${scored.strategy}:${b.kind}:${b.kind === "asian" ? b.day : b.time}`;
+    return `${version}:${scored.strategy}:${b.kind}:${b.time}`;
   }
   if (scored.strategy === "sr" && scored.trigger?.level) {
     return `${version}:${scored.strategy}:${scored.trigger.level.key}`;

@@ -9,7 +9,7 @@ import { WebSocket } from "ws";
  * Run: npx tsx --env-file=.env.local scripts/test-vision.ts
  */
 import { fetchCandles } from "@/lib/oanda";
-import { analyzeM15 } from "@/lib/analysis/execution";
+import { analyzeExecution } from "@/lib/analysis/execution";
 import { renderSetupPng } from "@/lib/vision/chartRender";
 import { validateSetupVision } from "@/lib/vision/openrouter";
 
@@ -18,11 +18,11 @@ async function main() {
   console.log(`\n=== AI Vision Pipeline Test: ${pair} ===\n`);
 
   console.log("1. Fetching candles...");
-  const candles = await fetchCandles({ instrument: pair, granularity: "M15", count: 500 });
+  const candles = await fetchCandles({ instrument: pair, granularity: "H4", count: 500 });
   console.log(`   Got ${candles.length} candles, last close ${candles[candles.length-1].close}`);
 
-  console.log("2. Running M15 analysis...");
-  const analysis = analyzeM15(candles);
+  console.log("2. Running H4 analysis...");
+  const analysis = analyzeExecution(candles);
   if (!analysis) throw new Error("analysis null");
   console.log(`   zones=${analysis.zones.filter(z=>z.active).length} fib=${analysis.fib ? "yes" : "no"} sf=${analysis.setForget ? "yes" : "no"} trendlines=${analysis.trendlines.length} hs=${analysis.headShoulders.length}`);
 
@@ -51,7 +51,7 @@ async function main() {
     takeProfit,
     rMultiple: (takeProfit - entry) / (entry - stopLoss),
     confirmationsMet: ["Price entered zone", "Zone fresh", "Momentum turning"],
-    trendMode: { htf: false, m15: true },
+    trendMode: { htf: false, chart: true },
     imageBase64: png.toString("base64"),
   });
 

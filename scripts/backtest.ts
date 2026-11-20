@@ -4,11 +4,10 @@ import { WebSocket } from "ws";
 /**
  * Multi-year backtest of the live rules.
  *
- * Runs the backtest exactly as the scanner sends signals — the shared send
- * gate (session, weekly veto, M15 structure), closed-bar higher timeframes,
- * one trade per pair, the per-strategy confirmation minimums, full spread +
- * slippage — and prints the whole window next to each of its years. A second
- * pass doubles the costs.
+ * Runs the backtest exactly as the scanner sends signals — H4 candles, the
+ * shared send gate (daily trend, weekly veto), closed-bar higher timeframes,
+ * one trade per pair, full spread + slippage — and prints the whole window
+ * next to each of its years. A second pass doubles the costs.
  *
  * Read the t column before the profit factor: |t| under 2 means the average
  * is not distinguishable from zero.
@@ -21,7 +20,7 @@ import { WebSocket } from "ws";
  *   SIGNAL_STRATEGIES=breakout,setforget BREAKOUT_TARGET_R=1 npx tsx ...
  */
 import { computeMetrics, runBacktest, type BacktestTrade, type ScopedMetrics } from "@/lib/backtest/engine";
-import { BREAKOUT_TARGET_R, KEY_LEVEL_CHECK, PULLBACK_STOP_ATR, PULLBACK_TARGET_R, PULLBACK_TREND_DAYS } from "@/lib/analysis";
+import { BREAKOUT_TARGET_R, EXECUTION_TIMEFRAME, KEY_LEVEL_CHECK, PULLBACK_STOP_ATR, PULLBACK_TARGET_R, PULLBACK_TREND_DAYS } from "@/lib/analysis";
 import { tradingHoursUtc } from "@/lib/analysis/session";
 import { MAX_COST_SHARE } from "@/lib/analysis/risk";
 import { minConfidenceFor, signalPairs, signalStrategies } from "@/lib/engine/scanner";
@@ -54,19 +53,22 @@ const gateFor = (pair: string) => ({
   fibonacci: minConfidenceFor(pair, "fibonacci"),
 });
 
+/** The H4 bars inside the backtest window (the series is loaded with extra history before it). */
+const bars = (data: PairData) => data.h4.filter((c) => c.time >= START);
+
 function simulate(pair: string, data: PairData, costMultiplier: number): Trade[] {
   const report = runBacktest({
     pair,
-    timeframe: "M15",
-    candles: data.m15,
-    htfCandles: data.h1,
+    timeframe: EXECUTION_TIMEFRAME,
+    candles: bars(data),
+    htfCandles: data.daily,
     topDownCandles: { weekly: data.weekly, daily: data.daily, h4: data.h4, h1: data.h1 },
     minConfidence: gateFor(pair),
     oneTradePerPair: true,
     strategies,
     costMultiplier,
   });
-  return report.trades.map((t) => ({ ...t, pair, entryTime: data.m15[t.entryIndex].time }));
+  return report.trades.map((t) => ({ ...t, pair, entryTime: bars(data)[t.entryIndex].time }));
 }
 
 /** Grade A = a flipped support/resistance level sat just behind the entry. */
@@ -116,8 +118,8 @@ async function save(trades: Trade[]): Promise<void> {
       range_start: new Date(START * 1000).toISOString(),
       range_end: new Date(END * 1000).toISOString(),
       pairs,
-      timeframes: ["M15"],
-      notes: `${YEARS} year${YEARS > 1 ? "s" : ""} · ${strategies.join(" + ")} · ${pairs.map((p) => p.replace("_", "/")).join(", ")}`,
+      timeframes: [EXECUTION_TIMEFRAME],
+      notes: `${YEARS} year${YEARS > 1 ? "s" : ""} · ${EXECUTION_TIMEFRAME} · ${strategies.join(" + ")} · ${pairs.map((p) => p.replace("_", "/")).join(", ")}`,
       config: {
         engine: ENGINE_VERSION,
         years: YEARS,
@@ -158,7 +160,7 @@ async function main() {
   row(" grade B", base.filter((t) => !gradeA(t)));
   if (pairs.length > 1) for (const p of pairs) row(` ${p}`, base.filter((t) => t.pair === p));
   const cost = base.reduce((s, t) => s + t.costR, 0) / Math.max(1, base.length);
-  console.log(`\n${(base.length / (YEARS * 260)).toFixed(1)} trades per trading day; costs average ${(cost * 100).toFixed(1)}% of the risk per trade.`);
+  console.log(`\n${(base.length / (YEARS * 12)).toFixed(1)} trades a month; costs average ${(cost * 100).toFixed(1)}% of the risk per trade.`);
   row("COSTS ×2", stressed);
   console.log("\nA row with under ~200 trades is mostly noise (±0.1R per trade at 200). Judge the portfolio row, every year of it.");
 

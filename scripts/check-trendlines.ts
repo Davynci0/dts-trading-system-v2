@@ -13,7 +13,7 @@ async function main() {
   // Gold-only system now: verify the trendline envelope on every timeframe we trade.
   const checks: [string, string][] = [
     ["XAU_USD", "M5"],
-    ["XAU_USD", "M15"],
+    ["XAU_USD", "H4"],
     ["XAU_USD", "H1"],
     ["XAU_USD", "H4"],
     ["XAU_USD", "D"],

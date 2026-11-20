@@ -4,6 +4,7 @@ import { runBacktest, computeMetrics, LOT_SIZES, type BacktestTrade } from "@/li
 import { createAdminClient } from "@/lib/supabase/admin";
 import { minConfidenceFor, signalPairs, signalStrategies } from "@/lib/engine/scanner";
 import type { StrategyId } from "@/lib/types";
+import { EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
 
 export const maxDuration = 300;
 
@@ -20,8 +21,8 @@ const TIMEFRAME_HOURS: Record<string, number> = {
  * POST /api/backtest/run
  * Body: {
  *   pairs?: string[],        // omit for the pairs that send live signals
- *   timeframe?: "M15",
- *   count?: number,          // M15 candles, 500–5000 (OANDA's per-request cap, ~7 weeks)
+ *   timeframe?: "H4",
+ *   count?: number,          // H4 candles, 500–5000 (OANDA's per-request cap, ~3 years)
  *   accountBalance?: number,
  *   lotSize?: "0.01" | "0.1" | "1",
  *   riskPercent?: number,
@@ -43,7 +44,7 @@ export async function POST(req: NextRequest) {
     strategies?: string[];
   };
   const pairs = body.pairs?.length ? body.pairs : [...signalPairs()];
-  const timeframe = body.timeframe ?? "M15";
+  const timeframe = body.timeframe ?? EXECUTION_TIMEFRAME;
   const count = Math.min(Math.max(body.count ?? 5000, 500), 5000);
   const accountBalance = body.accountBalance ?? 25000;
   const lotSize = body.lotSize;
@@ -53,10 +54,11 @@ export async function POST(req: NextRequest) {
   const validStrategies: StrategyId[] = ["breakout", "zones", "setforget", "fibonacci", "sr"];
   // default: exactly the strategies that send live signals
   const strategies = body.strategies?.filter((s): s is StrategyId => validStrategies.includes(s as StrategyId)) ?? [...signalStrategies()];
-  const horizonHours = count * (TIMEFRAME_HOURS[timeframe] ?? 1 / 4);
+  const horizonHours = count * (TIMEFRAME_HOURS[timeframe] ?? 4);
   const topDownCounts = {
     weekly: Math.min(5000, Math.max(52, Math.ceil(horizonHours / (24 * 7)) + 10)),
-    daily: Math.min(5000, Math.max(90, Math.ceil(horizonHours / 24) + 10)),
+    // + the 300 closed days the key levels and the 100-day trend read before the first bar
+    daily: Math.min(5000, Math.max(90, Math.ceil(horizonHours / 24) + 320)),
     h4: Math.min(5000, Math.max(120, Math.ceil(horizonHours / 4) + 10)),
     h1: Math.min(5000, Math.max(120, Math.ceil(horizonHours) + 10)),
   };
@@ -79,9 +81,9 @@ export async function POST(req: NextRequest) {
           strategies,
           fixedUnits,
           engine:
-            "live send gate (session, weekly veto, M15 structure), closed-bar HTF, one trade per pair, 6-point checklist (no vision), spread+slippage, conservative same-candle SL",
+            "live send gate (session, daily trend, weekly veto), closed-bar HTF, one trade per pair, 6-point checklist (no vision), spread+slippage, conservative same-candle SL",
         },
-        notes: `Quick run · last ${count} M15 candles (~${Math.round(horizonHours / 24)} days) · live rules`,
+        notes: `Quick run · last ${count} ${timeframe} candles (~${Math.round(horizonHours / 24)} trading days) · live rules`,
       })
       .select("id")
       .single();
@@ -95,7 +97,7 @@ export async function POST(req: NextRequest) {
     try {
       const [candles, htfCandles, weekly, daily, h4, h1] = await Promise.all([
         fetchCandles({ instrument: pair, granularity: timeframe, count }),
-        fetchCandles({ instrument: pair, granularity: HTF_OF[timeframe] ?? "H4", count: 500 }),
+        fetchCandles({ instrument: pair, granularity: HTF_OF[timeframe] ?? "D", count: HTF_OF[timeframe] === "D" ? topDownCounts.daily : 500 }),
         fetchCandles({ instrument: pair, granularity: "W", count: topDownCounts.weekly }),
         fetchCandles({ instrument: pair, granularity: "D", count: topDownCounts.daily }),
         fetchCandles({ instrument: pair, granularity: "H4", count: topDownCounts.h4 }),

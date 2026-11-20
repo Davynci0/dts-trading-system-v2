@@ -5,12 +5,12 @@ import Chart from "@/components/Chart";
 import SignalFeed from "@/components/SignalFeed";
 import ConfirmationTracker from "@/components/ConfirmationTracker";
 import AskAIButton from "@/components/AskAIButton";
-import { PAIRS, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
+import { PAIRS, TRADE_TIMEFRAMES, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
 import { pipSize } from "@/lib/analysis/confirmations";
 import { CHART_COLORS, EMPTY_OVERLAY, type OverlayData } from "@/components/chartOverlay";
 
 /**
- * Chart layers in three groups: the four strategies (each in its own colour,
+ * Chart layers in three groups: the strategies (each in its own colour,
  * all on), context a trader may want behind them (key levels on, the rest
  * off so the chart starts clean), and the system's own trades.
  */
@@ -34,7 +34,8 @@ interface TopDownSummary {
   daily: string;
   h4: string;
   h1?: string;
-  m15?: string;
+  /** swing structure of the chart timeframe */
+  chart?: string;
   bias: "bullish" | "bearish" | "neutral";
   actionLine: { kind: string; touches: number } | null;
   safetyLine: { kind: string; touches: number } | null;
@@ -54,9 +55,11 @@ interface GateSummary {
   weeklyBlocks: boolean;
 }
 
+/** The chart, the analysis and the scanner all run on this one timeframe. */
+const timeframe: Timeframe = TRADE_TIMEFRAMES[0];
+
 export default function Dashboard() {
   const [pair, setPair] = useState<Pair>("XAU_USD");
-  const timeframe: Timeframe = "M15";
   const [candles, setCandles] = useState<Candle[]>([]);
   const [liveCandle, setLiveCandle] = useState<Candle | null>(null);
   const [overlay, setOverlay] = useState<OverlayData>(EMPTY_OVERLAY);
@@ -174,7 +177,7 @@ export default function Dashboard() {
     return { text: `Daily trend: 50-day ${arrow(b.trend)} · ${gate.trendDays}-day ${arrow(gate.trend)} — ${allows}`, tone };
   }, [overlay.breakout, gate]);
 
-  /** Colour key for the four strategies, with what each is waiting on right now. */
+  /** Colour key for the five strategies, with what each is waiting on right now. */
   const legend = useMemo(() => {
     const pip = pipSize(pair);
     const digits = pip >= 0.1 ? 2 : pip >= 0.01 ? 3 : 5;
@@ -184,15 +187,12 @@ export default function Dashboard() {
     const b = overlay.breakout;
     let breakout = "no daily trend yet";
     if (b && b.trend !== 0) {
-      const levels = [b.asian ? (b.trend === 1 ? b.asian.high : b.asian.low) : null, b.channel ? (b.trend === 1 ? b.channel.high : b.channel.low) : null].filter(
-        (x): x is number => x != null
-      );
-      // the first level price would reach: the lowest high for a buy, the highest low for a sell
-      const first = levels.length ? (b.trend === 1 ? Math.min(...levels) : Math.max(...levels)) : null;
+      // only the edge of the one-week range on the trend's side is a trigger
+      const level = b.channel ? (b.trend === 1 ? b.channel.high : b.channel.low) : null;
       breakout =
-        first == null
+        level == null
           ? "no level yet"
-          : `${b.trend === 1 ? "buy on a close above" : "sell on a close below"} ${px(first)}${b.asianWindowOpen || b.channelWindowOpen ? "" : " · window closed"}`;
+          : `${b.trend === 1 ? "buy on an H4 close above" : "sell on an H4 close below"} ${px(level)}`;
     }
 
     const a = overlay.aoi;
@@ -211,13 +211,26 @@ export default function Dashboard() {
       ? "no setup"
       : `${f.direction === "long" ? "buy" : "sell"} zone ${px(f.goldenBottom)}–${px(f.goldenTop)}${f.inZone ? " · price inside" : ""}${against(f.tradeable)}`;
 
+    // S/R retest: a level that has been both ceiling and floor, on the trend's side of price
+    const want = gate?.longAllowed ? "support" : gate?.shortAllowed ? "resistance" : null;
+    const price = candles[candles.length - 1]?.close;
+    const flipped = (overlay.levels ?? [])
+      .filter((l) => l.flipped && l.kind === want)
+      .sort((x, y) => Math.abs(x.price - (price ?? x.price)) - Math.abs(y.price - (price ?? y.price)));
+    const retest = !want
+      ? "no trend to trade with"
+      : flipped.length === 0
+        ? `no flipped ${want} nearby`
+        : `${want === "support" ? "buy" : "sell"} on a retest of ${px(flipped[0].price)}`;
+
     return [
       { name: "Breakout", color: CHART_COLORS.breakout, state: breakout, active: !!b && b.trend !== 0 },
+      { name: "S/R retest", color: CHART_COLORS.level, state: retest, active: flipped.length > 0 },
       { name: "Set & forget", color: CHART_COLORS.aoi, state: aoi, active: !!a && a.tradeable !== false },
       { name: "Zones", color: CHART_COLORS.demand, state: zones, active: ready.length > 0 },
       { name: "Fibonacci", color: CHART_COLORS.fib, state: fib, active: !!f && f.isSetup !== false && f.tradeable !== false },
     ];
-  }, [overlay, pair]);
+  }, [overlay, pair, gate, candles]);
 
   async function scanNow() {
     setScanStatus("scanning…");
@@ -225,7 +238,7 @@ export default function Dashboard() {
       const res = await fetch("/api/scan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ pairs: [pair], timeframes: ["M15"] }),
+        body: JSON.stringify({ pairs: [pair], timeframes: [timeframe] }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -246,7 +259,7 @@ export default function Dashboard() {
     // ?asOf=2026-11-19T07:15Z shows the analysis as it stood at that moment
     const review = new URLSearchParams(window.location.search).get("asOf");
     const loadAnalysis = (initial: boolean) =>
-      fetch(`/api/analysis?instrument=${pair}&granularity=M15&count=500${review ? `&to=${encodeURIComponent(review)}` : ""}`, {
+      fetch(`/api/analysis?instrument=${pair}&granularity=${timeframe}&count=500${review ? `&to=${encodeURIComponent(review)}` : ""}`, {
         signal: controller.signal,
       })
         .then(async (res) => {
@@ -308,13 +321,13 @@ export default function Dashboard() {
 
     // 1) initial load
     loadAnalysis(true);
-    // 2) TA refresh every 15 min (new M15 bar) — the signature
+    // 2) TA refresh every 15 min (picks up a new H4 bar soon after it closes) — the signature
     // check inside loadAnalysis skips the re-render when analysis is unchanged
     //    (a past moment does not change, so a review loads once)
     const taTimer = review ? undefined : setInterval(() => loadAnalysis(false), 15 * 60 * 1000);
     // 3) fast live tick — updates only the forming bar via a cheap 1-candle call
     const liveTimer = review ? undefined : setInterval(() => {
-      fetch(`/api/live?instrument=${pair}&granularity=M15`, {
+      fetch(`/api/live?instrument=${pair}&granularity=${timeframe}`, {
         signal: controller.signal,
       })
         .then((r) => r.json())
@@ -376,7 +389,7 @@ export default function Dashboard() {
             </span>
           )}
           <span className="rounded border border-neutral-700 bg-neutral-700 px-2.5 py-1.5 text-sm text-white">
-            M15
+            {timeframe}
           </span>
           {LAYER_GROUPS.map((group) => (
             <div key={group} className="flex items-center gap-1.5">
@@ -434,18 +447,16 @@ export default function Dashboard() {
             {/* what the market is doing, and what that allows */}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-neutral-500">
               {trendLine && <span className={trendLine.tone}>{trendLine.text}</span>}
-              {gate && (
+              {gate && !gate.sessionHours.startsWith("00:00–24:00") && (
                 <span className={gate.inSession ? "text-emerald-400" : "text-neutral-500"}>
                   Session {gate.inSession ? "open" : "closed"} ({gate.sessionHours})
                 </span>
               )}
               <span className="font-mono text-neutral-600">
-                W {topDown.weekly} · D {topDown.daily} · H4 {topDown.h4}
-                {topDown.h1 ? ` · H1 ${topDown.h1}` : ""}
-                {topDown.m15 ? ` · M15 ${topDown.m15}` : ""}
+                W {topDown.weekly} · D {topDown.daily} · {timeframe} {topDown.chart ?? topDown.h4}
               </span>
             </div>
-            {/* the four strategies: colour key and what each is waiting on */}
+            {/* the five strategies: colour key and what each is waiting on */}
             <div className="grid gap-x-4 gap-y-1 sm:grid-cols-2 xl:grid-cols-4">
               {legend.map((item) => (
                 <div key={item.name} className="flex min-w-0 items-baseline gap-1.5">

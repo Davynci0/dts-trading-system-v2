@@ -18,8 +18,12 @@ export interface Settlement {
   hitPrice: number | null;
 }
 
-const EXPIRY_MS = 7 * 24 * 3600 * 1000;
-/** M15 candle duration. `candle.time` is the bar OPEN — the bar is tradeable
+/** A 4-hour trade that has reached neither level after six weeks (30 trading
+ *  days — the backtest's MAX_HOLD_CANDLES) is closed as expired. */
+const EXPIRY_MS = 42 * 24 * 3600 * 1000;
+/** Signals are settled on M15 candles, whatever timeframe produced them: the
+ *  finer bar says which level was touched first far more often than an H4 bar
+ *  can. M15 candle duration. `candle.time` is the bar OPEN — the bar is tradeable
  *  from its open; a bar only predates the signal when it CLOSED before it. */
 const CANDLE_MS = 15 * 60 * 1000;
 

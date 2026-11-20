@@ -14,17 +14,23 @@ import { typicalSpread } from "./instruments";
  *  can't do this job — 0.0003 is 3 pips on EUR/USD but nothing on JPY or gold.) */
 export const MIN_ATR_SPREADS = 2.5;
 
-/** Live TA and signals run on 15-minute candles only. */
-export const EXECUTION_TIMEFRAME = "M15" as const;
-export const EXECUTION_HTF = "H1" as const;
+/** Live TA and signals run on 4-hour candles only; daily candles are the
+ *  higher timeframe (key levels, the daily trend). */
+export const EXECUTION_TIMEFRAME = "H4" as const;
+export const EXECUTION_HTF = "D" as const;
+/** Length of one execution bar. */
+export const EXECUTION_BAR_SECONDS = 4 * 3600;
+/** Candles of each series the scanner, the chart and the backtest analyse. */
+export const EXECUTION_CANDLES = 500;
+export const HTF_CANDLES = 300;
 
-/** 5-bar fractal on M15 = 2.5h each side — real swings, not 45-minute noise. */
-export const M15_PIVOT_K = 5;
-export const M15_SWING_ATR = 0.75;
-export const M15_TRENDLINE_LOOKBACK = 200;
+/** 5-bar fractal on H4 = 20h each side — swings that took about a day to form. */
+export const PIVOT_K = 5;
+export const SWING_ATR = 0.75;
+export const TRENDLINE_LOOKBACK = 200;
 
 
-export interface M15Analysis {
+export interface ExecutionAnalysis {
   candles: Candle[];
   pivots: Pivot[];
   structuralPivots: Pivot[];
@@ -40,17 +46,17 @@ export interface M15Analysis {
 }
 
 /**
- * Full M15 read of one instrument. `instrument` enables the spread-relative
+ * Full execution-timeframe (H4) read of one instrument. `instrument` enables the spread-relative
  * volatility floor; without it only a zero/unknown ATR is rejected.
  */
-export function analyzeM15(candles: Candle[], instrument?: string): M15Analysis | null {
+export function analyzeExecution(candles: Candle[], instrument?: string): ExecutionAnalysis | null {
   if (candles.length < 60) return null;
-  const pivots = detectPivots(candles, M15_PIVOT_K);
+  const pivots = detectPivots(candles, PIVOT_K);
   const atrValue = atr(candles);
   if (atrValue == null || atrValue <= 0) return null;
   if (instrument && atrValue < MIN_ATR_SPREADS * typicalSpread(instrument)) return null;
 
-  const structuralPivots = significantPivots(pivots, atrValue, M15_SWING_ATR);
+  const structuralPivots = significantPivots(pivots, atrValue, SWING_ATR);
   const zones = detectZones(candles);
   const structureState = classifyStructure(structuralPivots);
   const preferredDirection: SignalDirection | null =
@@ -59,11 +65,11 @@ export function analyzeM15(candles: Candle[], instrument?: string): M15Analysis 
     candles,
     structuralPivots,
     atrValue,
-    M15_TRENDLINE_LOOKBACK,
+    TRENDLINE_LOOKBACK,
     preferredDirection ?? undefined
   );
   const setForget = findSetForgetSetup(candles, structuralPivots, atrValue, preferredDirection ?? undefined);
-  const trendlines = detectTrendlines(candles, structuralPivots, atrValue, true, M15_TRENDLINE_LOOKBACK, 3);
+  const trendlines = detectTrendlines(candles, structuralPivots, atrValue, true, TRENDLINE_LOOKBACK, 3);
   const headShoulders: HeadShouldersPattern[] = [];
   {
     const hs = detectHeadShoulders(candles, structuralPivots, atrValue);
@@ -85,7 +91,7 @@ export function analyzeM15(candles: Candle[], instrument?: string): M15Analysis 
   };
 }
 
-/** Active zones close enough to price to matter on the M15 chart. */
+/** Active zones close enough to price to matter on the chart. */
 export function nearbyActiveZones(zones: Zone[], price: number, atrValue: number, limit = 6): Zone[] {
   return zones
     .filter((z) => z.active && price <= z.top + 3 * atrValue && price >= z.bottom - 3 * atrValue)

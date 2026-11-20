@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
+import { EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
 import { detectPivots } from "@/lib/analysis/pivots";
 import { computeRiskLevels } from "@/lib/analysis/risk";
 import type { SignalDirection } from "@/lib/types";
 
 /**
- * GET /api/risk/preview?instrument=XAU_USD&granularity=M15&direction=long&balance=10000
+ * GET /api/risk/preview?instrument=XAU_USD&granularity=H4&direction=long&balance=10000
  *
  * Stage 3 verification endpoint: runs pivot detection + structure-based
  * SL/TP + risk sanity check on live OANDA data and returns the result as JSON.
@@ -15,7 +16,7 @@ import type { SignalDirection } from "@/lib/types";
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const instrument = sp.get("instrument") ?? "XAU_USD";
-  const granularity = sp.get("granularity") ?? "M15";
+  const granularity = sp.get("granularity") ?? EXECUTION_TIMEFRAME;
   const direction = (sp.get("direction") ?? "long") as SignalDirection;
   const balance = Number(sp.get("balance") ?? 10000);
 

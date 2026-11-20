@@ -36,14 +36,16 @@ async function fetchRange(instrument: string, granularity: string, end: number, 
   return out.filter((c) => (seen.has(c.time) ? false : (seen.add(c.time), true))).sort((a, b) => a.time - b.time);
 }
 
-/** `spanDays` of M15 history plus enough higher-timeframe history before it
- *  that the very first M15 bar already has weekly/daily/H4/H1 context. */
-export async function loadPairData(pair: string, spanDays: number): Promise<PairData> {
+/** `spanDays` of history plus enough higher-timeframe history before it that
+ *  the very first bar already has weekly/daily context. The live system runs
+ *  on H4, so the M15 series (the bulk of the download) is only fetched when
+ *  `withM15` is set — the strategy lab still uses it. */
+export async function loadPairData(pair: string, spanDays: number, withM15 = false): Promise<PairData> {
   const end = windowEnd();
-  const file = `${CACHE_DIR}/${pair}-${spanDays}d-${new Date(end).toISOString().slice(0, 10)}.json`;
+  const file = `${CACHE_DIR}/${pair}-${spanDays}d${withM15 ? "" : "-h4"}-${new Date(end).toISOString().slice(0, 10)}.json`;
   if (existsSync(file)) return JSON.parse(readFileSync(file, "utf8")) as PairData;
   const data: PairData = {
-    m15: await fetchRange(pair, "M15", end, spanDays, 40),
+    m15: withM15 ? await fetchRange(pair, "M15", end, spanDays, 40) : [],
     h1: await fetchRange(pair, "H1", end, spanDays + 15, 90),
     h4: await fetchRange(pair, "H4", end, spanDays + 35, 300),
     daily: await fetchRange(pair, "D", end, spanDays + 155, 600),

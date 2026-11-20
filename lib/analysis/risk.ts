@@ -58,7 +58,7 @@ export interface SetupTrigger {
   /** a support/resistance retest — traded under the pullback rule */
   level?: { direction: "long" | "short" };
   /** a trend breakout carries its own stop; the target is a fixed multiple of the risk */
-  breakout?: { kind: "asian" | "channel"; direction: "long" | "short"; stop: number; high: number; low: number };
+  breakout?: { kind: "channel"; direction: "long" | "short"; stop: number; high: number; low: number };
 }
 
 interface Candidate {
@@ -72,8 +72,8 @@ interface Candidate {
  *
  * With a `trigger` (the setup that fired) the levels follow the strategy's
  * own rule, and the target is a fixed multiple of the risk:
- *  - trend breakout → the setup's stop (middle of the Asian range, or
- *    CHANNEL_STOP_ATR × ATR from the close), target BREAKOUT_TARGET_R × risk,
+ *  - trend breakout → the setup's stop (CHANNEL_STOP_ATR × ATR from the
+ *    close), target BREAKOUT_TARGET_R × risk,
  *  - pullback (zone / fib / set & forget) → stop PULLBACK_STOP_ATR × ATR from
  *    the entry, target PULLBACK_TARGET_R × risk.
  * A trade is refused when spread + slippage would exceed MAX_COST_SHARE of
@@ -119,10 +119,7 @@ export function computeRiskLevels(opts: {
     rule = {
       stopLoss: trigger.breakout.stop,
       targetR: BREAKOUT_TARGET_R,
-      stopBasis:
-        trigger.breakout.kind === "asian"
-          ? `middle of the Asian range ${fmt(trigger.breakout.low)}–${fmt(trigger.breakout.high)}`
-          : `${CHANNEL_STOP_ATR} ATR ${long ? "below" : "above"} the breakout close`,
+      stopBasis: `${CHANNEL_STOP_ATR} ATR ${long ? "below" : "above"} the breakout close`,
     };
   } else if (trigger?.zone || trigger?.fib || trigger?.setForget || trigger?.level) {
     rule = {

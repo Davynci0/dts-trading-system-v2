@@ -107,7 +107,7 @@ const agreeing = (direction: SignalDirection): StructureState => (direction === 
 
 /**
  * Send-gate veto: the trade is AGAINST the weekly swing structure. Only the
- * weekly vetoes — an M15 pullback entry is against H1/H4 by nature, so those
+ * weekly vetoes — a pullback entry is against the lower timeframes by nature, so those
  * and the daily are context, not blockers.
  */
 export function topDownOpposes(analysis: TopDownAnalysis, direction: SignalDirection): boolean {

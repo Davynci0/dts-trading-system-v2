@@ -107,7 +107,7 @@ export default function BacktestsPage() {
       const res = await fetch("/api/backtest/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ timeframe: "M15", count: 5000 }),
+        body: JSON.stringify({ count: 5000 }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -147,7 +147,7 @@ export default function BacktestsPage() {
           disabled={running}
           className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
         >
-          {running ? "Running…" : "Quick run (last ~7 weeks)"}
+          {running ? "Running…" : "Quick run (last ~3 years)"}
         </button>
       </div>
 

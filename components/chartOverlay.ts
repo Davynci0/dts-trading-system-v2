@@ -85,7 +85,7 @@ export interface OverlayData {
     touches: number;
     broken: boolean;
   }[];
-  /** head-and-shoulders reversal patterns on the M15 chart */
+  /** head-and-shoulders reversal patterns on the chart */
   headshoulders?: {
     direction: "short" | "long";
     ls: { time: number; price: number };
@@ -108,13 +108,10 @@ export interface OverlayData {
     flipped: boolean;
     time: number;
   }[];
-  /** trend breakout: the Asian range, the one-week channel and the daily trend */
+  /** trend breakout: the one-week channel and the daily trend */
   breakout?: {
     trend: 1 | -1 | 0;
-    asian: { high: number; low: number; startTime: number; endTime: number } | null;
-    channel: { high: number; low: number } | null;
-    asianWindowOpen: boolean;
-    channelWindowOpen: boolean;
+    channel: { high: number; low: number; startTime?: number } | null;
   } | null;
   /** market structure: the engine's swing points, labelled HH / HL / LH / LL */
   structure?: {
@@ -387,46 +384,29 @@ class OverlayPaneView implements IPrimitivePaneView {
           }
 
           // ── strategy: trend breakout ─────────────────────────────────────
-          // The Asian range is a bracket over its own hours; only the level on
-          // the trend's side is a trigger, drawn as one amber line.
-          if (data.breakout) {
+          // The one-week channel is a faint bracket over its own bars; only
+          // the edge on the trend's side is a trigger, drawn as one amber line.
+          if (data.breakout?.channel) {
             const b = data.breakout;
-            const action = b.trend === 1 ? "BUY" : b.trend === -1 ? "SELL" : null;
-            const beyond = b.trend === 1 ? "above" : "below";
-            let rangeEnd = 0;
-            if (b.asian) {
-              const x0 = X(b.asian.startTime);
-              const x1 = X(b.asian.endTime);
-              const yTop = Y(b.asian.high);
-              const yBottom = Y(b.asian.low);
-              if (x0 != null && yTop != null && yBottom != null) {
-                const xEnd = x1 ?? W;
-                rangeEnd = xEnd;
-                ctx.fillStyle = rgba(C.breakout, 0.05);
-                ctx.fillRect(x0, yTop, Math.max(xEnd - x0, 2), yBottom - yTop);
-                ctx.strokeStyle = rgba(C.breakout, 0.4);
-                ctx.lineWidth = 1;
-                ctx.setLineDash([2, 3]);
-                ctx.strokeRect(x0 + 0.5, yTop + 0.5, Math.max(xEnd - x0, 2), yBottom - yTop);
-                ctx.setLineDash([]);
-                tag("Asian range", Math.max(x0, 0) + 6, yTop + 12, C.breakout, "left", 7, { small: true, dim: true });
-              }
+            const ch = b.channel!;
+            const yTop = Y(ch.high);
+            const yBottom = Y(ch.low);
+            const x0 = Math.max((ch.startTime != null ? X(ch.startTime) : null) ?? 0, 0);
+            if (yTop != null && yBottom != null) {
+              ctx.fillStyle = rgba(C.breakout, 0.035);
+              ctx.fillRect(x0, yTop, Math.max(W - x0, 2), yBottom - yTop);
+              // the edge against the trend is context only
+              const idle = b.trend === 1 ? yBottom : b.trend === -1 ? yTop : null;
+              for (const y of idle == null ? [yTop, yBottom] : [idle]) line(x0, W, y, C.breakout, 0.35, 1, [2, 4]);
+              tag("1-week range", x0 + 6, yTop + 12, C.breakout, "left", 7, { small: true, dim: true });
             }
-            if (action) {
-              const asianLevel = b.asian ? (b.trend === 1 ? b.asian.high : b.asian.low) : null;
-              const weekLevel = b.channel ? (b.trend === 1 ? b.channel.high : b.channel.low) : null;
-              const same = asianLevel != null && weekLevel != null && Math.abs(asianLevel - weekLevel) < 1e-9;
-              const trigger = (level: number, from: number, what: string, open: boolean) => {
-                const y = Y(level);
-                if (y == null) return;
-                line(Math.max(from, 0), W, y, C.breakout, open ? 0.95 : 0.55, open ? 1.5 : 1, open ? [] : [6, 4]);
-                tag(`BREAKOUT · ${action} ${beyond} ${fmt(level)} · ${what}${open ? "" : " · closed"}`, W - 4, y - 3, C.breakout, "right", 1, { dim: !open });
-              };
-              if (same) {
-                trigger(asianLevel!, 0, "Asian range + 1-week", b.asianWindowOpen || b.channelWindowOpen);
-              } else {
-                if (asianLevel != null) trigger(asianLevel, rangeEnd, "Asian range", b.asianWindowOpen);
-                if (weekLevel != null) trigger(weekLevel, 0, `1-week ${b.trend === 1 ? "high" : "low"}`, b.channelWindowOpen);
+            if (b.trend !== 0) {
+              const up = b.trend === 1;
+              const level = up ? ch.high : ch.low;
+              const y = Y(level);
+              if (y != null) {
+                line(x0, W, y, C.breakout, 0.95, 1.5, []);
+                tag(`BREAKOUT · ${up ? "BUY above" : "SELL below"} ${fmt(level)} · 1-week ${up ? "high" : "low"}`, W - 4, y - 3, C.breakout, "right", 1);
               }
             }
           }

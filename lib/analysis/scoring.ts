@@ -16,7 +16,7 @@ import { inGoldenZone } from "./fibonacci";
 import { detectZoneEntry } from "./zones";
 import { setForgetEntry, type SetForgetSetup } from "./setForget";
 import type { HeadShouldersPattern } from "./headshoulders";
-import { detectBreakout, dailyTrend, type BreakoutSetup } from "./breakout";
+import { closeTimeOf, detectBreakout, dailyTrend, type BreakoutSetup } from "./breakout";
 import { PULLBACK_TREND_DAYS } from "./pullback";
 import { backingLevel, detectLevelRetest, type KeyLevel, type LevelRetest } from "./levels";
 
@@ -25,7 +25,7 @@ export interface ScoringContext {
   candles: Candle[];
   htfCandles: Candle[];
   pivots: Pivot[];
-  /** Zigzag-filtered swings (analyzeM15.structuralPivots). The M15 trend and
+  /** Zigzag-filtered swings (analyzeExecution.structuralPivots). The H4 trend and
    *  prior-level checks read these so scoring sees the same structure the
    *  setups were built from; falls back to `pivots` for legacy callers. */
   structuralPivots?: Pivot[];
@@ -55,8 +55,8 @@ export interface ScoreResult {
    *  pullback strategies that is "daily trend agrees and the weekly structure
    *  does not oppose"; a breakout only exists when its own trend rule holds. */
   topDownAligned: boolean;
-  /** Whether the M15 swing structure agrees — shown on the checklist, not a gate. */
-  m15Aligned: boolean;
+  /** Whether the H4 swing structure agrees — shown on the checklist, not a gate. */
+  structureAligned: boolean;
   /** False when the entry would fall outside the trading session. */
   inSession: boolean;
   /** The flipped support/resistance level just behind the entry, when there is
@@ -81,8 +81,8 @@ export const KEY_LEVEL_CHECK = "Key level behind the entry";
 /** Checks met at which the tracker treats a pullback setup as well confirmed. Not a send gate. */
 export const SIGNAL_THRESHOLD = 3;
 
-/** M15 execution-timeframe trend alignment: avoid counter-M15 trades. */
-export function m15Agrees(structureState: StructureState, direction: SignalDirection): boolean {
+/** Execution-timeframe (H4) trend alignment. */
+export function structureAgrees(structureState: StructureState, direction: SignalDirection): boolean {
   return (
     (structureState === "uptrend" && direction === "long") ||
     (structureState === "downtrend" && direction === "short")
@@ -102,17 +102,12 @@ function trendPermits(ctx: ScoringContext, direction: SignalDirection): boolean 
 }
 
 /** The moment the latest candle closed — when a signal from it would be entered. */
-function entryTime(candles: Candle[]): number {
-  const last = candles[candles.length - 1];
-  const step = candles.length > 1 ? last.time - candles[candles.length - 2].time : 900;
-  // a weekend/holiday gap before the last bar is not the bar length
-  return last.time + (step > 0 && step <= 4 * 3600 ? step : 900);
-}
+const entryTime = closeTimeOf;
 
-/** M15 trend = the M15 swing structure (HH+HL / LH+LL on the zigzag-filtered
+/** H4 trend = the H4 swing structure (HH+HL / LH+LL on the zigzag-filtered
  *  swings the setups are built from). */
-function m15TrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolean {
-  return m15Agrees(classifyStructure(ctx.structuralPivots ?? ctx.pivots), direction);
+function structureTrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolean {
+  return structureAgrees(classifyStructure(ctx.structuralPivots ?? ctx.pivots), direction);
 }
 
 /** "HTF trend agrees" on the checklist = the daily trend the gate uses. */
@@ -144,7 +139,7 @@ export function scoreSetup(
     if (!setup) return noTrigger(strategy);
     const keyLevel = backingLevel(candles, ctx.htfCandles, setup.direction);
     const confirmations = {
-      [setup.kind === "asian" ? "Closed beyond the Asian range" : "Closed beyond the 1-week channel"]: true,
+      "Closed beyond the 1-week channel": true,
       "Daily trend agrees": true,
       "Inside the entry window": true,
       [KEY_LEVEL_CHECK]: keyLevel != null,
@@ -156,7 +151,7 @@ export function scoreSetup(
       count: Object.values(confirmations).filter(Boolean).length,
       fired: true,
       topDownAligned: true,
-      m15Aligned: true,
+      structureAligned: true,
       inSession: true,
       keyLevel,
       hasTrigger: true,
@@ -183,7 +178,7 @@ export function scoreSetup(
       count,
       fired: count >= SIGNAL_THRESHOLD,
       topDownAligned: trendPermits(ctx, retest.direction),
-      m15Aligned: m15TrendAgrees(ctx, retest.direction),
+      structureAligned: structureTrendAgrees(ctx, retest.direction),
       inSession: inTradingSession(entryTime(candles)),
       keyLevel: retest.level.flipped ? retest.level : null,
       hasTrigger: true,
@@ -203,7 +198,7 @@ export function scoreSetup(
     confirmations["Zone fresh (≤1 touch)"] = zoneIsVeryFresh(entry.zone.touches);
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
-    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx, direction);
+    confirmations["H4 trend agrees"] = structureTrendAgrees(ctx, direction);
   } else if (strategy === "setforget") {
     const entry = setForgetEntry(candles, ctx.setForget ?? null);
     if (!entry) {
@@ -232,7 +227,7 @@ export function scoreSetup(
       );
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
-    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx, direction);
+    confirmations["H4 trend agrees"] = structureTrendAgrees(ctx, direction);
   } else {
     const fib = ctx.fib;
     if (!fib || !inGoldenZone(candles, fib)) {
@@ -252,7 +247,7 @@ export function scoreSetup(
     });
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
-    confirmations["M15 trend agrees"] = m15TrendAgrees(ctx, direction);
+    confirmations["H4 trend agrees"] = structureTrendAgrees(ctx, direction);
   }
 
   const keyLevel = backingLevel(candles, ctx.htfCandles, direction);
@@ -262,7 +257,7 @@ export function scoreSetup(
   // may be sent is the trend gate and the session (lib/analysis/pullback.ts,
   // enforced in lib/engine/select.ts).
   const topDownAligned = trendPermits(ctx, direction);
-  const m15Aligned = m15TrendAgrees(ctx, direction);
+  const structureAligned = structureTrendAgrees(ctx, direction);
   return {
     strategy,
     direction,
@@ -270,7 +265,7 @@ export function scoreSetup(
     count,
     fired: count >= SIGNAL_THRESHOLD,
     topDownAligned,
-    m15Aligned,
+    structureAligned,
     inSession: inTradingSession(entryTime(candles)),
     keyLevel,
     hasTrigger: true,
@@ -286,7 +281,7 @@ function noTrigger(strategy: StrategyId): ScoreResult {
     count: 0,
     fired: false,
     topDownAligned: false,
-    m15Aligned: false,
+    structureAligned: false,
     inSession: false,
     keyLevel: null,
     hasTrigger: false,

@@ -15,7 +15,7 @@ import { findSetForgetSetup, setForgetEntry } from "../lib/analysis/setForget";
 import { scoreSetup, type ScoringContext } from "../lib/analysis/scoring";
 import { runBacktest } from "../lib/backtest/engine";
 import { setupDisposition, signalPairs, signalStrategies } from "../lib/engine/scanner";
-import { detectBreakout, dailyTrend, asianRange, BREAKOUT_TARGET_R, CHANNEL_BARS, CHANNEL_STOP_ATR } from "../lib/analysis/breakout";
+import { closeTimeOf, detectBreakout, dailyTrend, BREAKOUT_TARGET_R, CHANNEL_BARS, CHANNEL_STOP_ATR } from "../lib/analysis/breakout";
 import { computeRiskLevels } from "../lib/analysis/risk";
 import { backingLevel, detectKeyLevels, detectLevelRetest, nearestLevels } from "../lib/analysis/levels";
 import { KEY_LEVEL_CHECK } from "../lib/analysis/scoring";
@@ -206,7 +206,7 @@ check(
 const invertedU = U.map((c, index) =>
   mk(index, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)
 );
-// An M15 pullback entry is against H4/H1 by nature — only the weekly vetoes.
+// A pullback entry is against the lower timeframes by nature — only the weekly vetoes.
 const topDownH4Pullback = analyzeTopDown({ weekly: U, daily: U, h4: invertedU, h1: U });
 check(
   "top-down: an H4 pullback does not veto a weekly-aligned long",
@@ -553,10 +553,10 @@ if (sf) {
 // ============ Trading session gate ============
 {
   const utc = (h: number, m = 0) => Date.UTC(2026, 10, 18, h, m) / 1000;
-  check("session: default window is 07:00–20:00 UTC", tradingHoursUtc(undefined).join("-") === "7-20", tradingHoursUtc(undefined).join("-"));
+  check("session: by default every H4 close is tradeable", tradingHoursUtc(undefined).join("-") === "0-24" && inTradingSession(utc(3)) && inTradingSession(utc(22)), tradingHoursUtc(undefined).join("-"));
   check("session: New York hours are tradeable", inTradingSession(utc(12), [12, 21]) && inTradingSession(utc(20, 45), [12, 21]), "12:00, 20:45");
   check("session: Asia and rollover are not", !inTradingSession(utc(3), [12, 21]) && !inTradingSession(utc(21), [12, 21]), "03:00, 21:00");
-  check("session: override parses, garbage falls back", tradingHoursUtc("6-21").join("-") === "6-21" && tradingHoursUtc("soon").join("-") === "7-20", "6-21 / default");
+  check("session: override parses, garbage falls back", tradingHoursUtc("6-21").join("-") === "6-21" && tradingHoursUtc("soon").join("-") === "0-24", "6-21 / default");
   check("session: a window may wrap midnight; 0-24 disables", inTradingSession(utc(1), [22, 4]) && !inTradingSession(utc(12), [22, 4]) && inTradingSession(utc(3), [0, 24]), "22-4, 0-24");
 }
 
@@ -575,7 +575,7 @@ if (sf) {
     direction,
     scored: {
       strategy: "zones", direction, confirmations: {}, count: 4, fired: true,
-      topDownAligned: true, m15Aligned: true, inSession: true, keyLevel: null, hasTrigger: true, trigger: null, ...o,
+      topDownAligned: true, structureAligned: true, inSession: true, keyLevel: null, hasTrigger: true, trigger: null, ...o,
     },
     risk: riskOk
       ? { ok: true, levels: { direction, entry: 1, stopLoss: 0.99, takeProfit: 1.03, stopDistance: 0.01, rMultiple: 3, atr: 0.005, positionUnits: 1, riskAmount: 1, tpSource: "swing", stopBasis: "", targetBasis: "", riskPips: 100, rewardPips: 300 } }
@@ -585,7 +585,7 @@ if (sf) {
   check("gate: below the confirmation minimum is held", !passesSendGate(cand("long"), 5), sendGateBlock(cand("long"), 5) ?? "");
   check("gate: outside the session is held", /session/.test(sendGateBlock(cand("long", { inSession: false }), 4) ?? ""), sendGateBlock(cand("long", { inSession: false }), 4) ?? "");
   check("gate: against the trend is held", /against the trend/.test(sendGateBlock(cand("long", { topDownAligned: false }), 4) ?? ""), sendGateBlock(cand("long", { topDownAligned: false }), 4) ?? "");
-  check("gate: M15 structure is context, not a gate", passesSendGate(cand("long", { m15Aligned: false }), 4), "sent");
+  check("gate: H4 structure is context, not a gate", passesSendGate(cand("long", { structureAligned: false }), 4), "sent");
   check("gate: failed risk reports the risk reason", sendGateBlock(cand("long", {}, false), 4) === "structure only pays 1.20R", "risk reason");
   const both = selectSignal([cand("long"), cand("short")]);
   check("select: opposite setups never merge into one trade", both != null && both.winners.length === 1 && both.arbitrationNote != null, both ? `${both.side}, ${both.arbitrationNote}` : "none");
@@ -604,57 +604,43 @@ if (sf) {
   const down = days(-2);
   check("breakout: daily trend follows the 50-day average", dailyTrend(up) === 1 && dailyTrend(down) === -1 && dailyTrend(up.slice(0, 30)) === 0, `${dailyTrend(up)} ${dailyTrend(down)} ${dailyTrend(up.slice(0, 30))}`);
 
-  // Asian session 22:00–07:00 UTC ranging 4000–4010, then the London morning.
-  const start = Date.UTC(2026, 10, 17, 22, 0) / 1000;
-  const asia: Candle[] = [];
-  for (let i = 0; i < 36; i++) asia.push(bar(start + i * 900, 4005, i % 2 ? 4010 : 4007, i % 2 ? 4003 : 4000, 4005));
-  const t0700 = start + 36 * 900;
-  const inside = bar(t0700, 4005, 4009, 4004, 4008); // 07:00 — still inside the range
-  const breakUp = bar(t0700 + 900, 4008, 4013, 4007, 4012); // 07:15 — first close above 4010
-  const session = [...asia, inside, breakUp];
-  const range = asianRange(session);
-  check("breakout: Asian range spans 22:00–07:00 UTC only", range?.high === 4010 && range.low === 4000 && range.startTime === start && range.endTime === t0700 - 900, range ? `${range.low}–${range.high}` : "none");
-  check("breakout: nothing while price is inside the range", detectBreakout([...asia, inside], up, 2) === null, "inside");
-  const asian = detectBreakout(session, up, 2);
-  check("breakout: first close above the Asian range with the trend is a long", asian?.kind === "asian" && asian.direction === "long" && asian.level === 4010 && asian.stop === 4005, asian ? `${asian.kind} ${asian.direction} stop ${asian.stop}` : "none");
-  check("breakout: the same break against the daily trend is no trade", detectBreakout(session, down, 2) === null, "counter-trend");
-  const later = [...session, bar(t0700 + 1800, 4012, 4016, 4011, 4015)];
-  check("breakout: only the first break of the day counts", detectBreakout(later, up, 2) === null, "spent");
-  const lateDay = [...asia, ...Array.from({ length: 16 }, (_, i) => bar(t0700 + i * 900, 4005, 4009, 4004, 4006)), bar(t0700 + 16 * 900, 4006, 4014, 4005, 4013)];
-  check("breakout: the Asian range cannot be broken after 11:00 UTC", detectBreakout(lateDay, up, 2) === null, "11:00 bar");
-
-  // One-week channel: CHANNEL_BARS flat bars capped at 4002, then a close through it at 14:00 UTC.
+  // One-week channel on H4: CHANNEL_BARS flat bars capped at 4002 / floored at 3998, then a close through it.
+  const H4 = 4 * 3600;
   const end = Date.UTC(2026, 10, 18, 14, 0) / 1000;
-  const flat: Candle[] = Array.from({ length: CHANNEL_BARS + 5 }, (_, i) => bar(end - (CHANNEL_BARS + 5 - i) * 900, 4000, 4002, 3998, 4000));
+  const flat: Candle[] = Array.from({ length: CHANNEL_BARS + 5 }, (_, i) => bar(end - (CHANNEL_BARS + 5 - i) * H4, 4000, 4002, 3998, 4000));
   const week = [...flat, bar(end, 4000, 4006, 3999, 4005)];
+  check("breakout: nothing while price is inside the channel", detectBreakout(flat, up, 2) === null, "inside");
   const channel = detectBreakout(week, up, 2);
   check("breakout: close above the 1-week high with the trend is a long", channel?.kind === "channel" && channel.direction === "long" && channel.level === 4002 && channel.stop === 4005 - CHANNEL_STOP_ATR * 2, channel ? `${channel.kind} stop ${channel.stop}` : "none");
   check("breakout: a channel break against the trend is no trade", detectBreakout(week, down, 2) === null, "counter-trend");
-  const held = [...week, bar(end + 900, 4005, 4008, 4004, 4007)];
+  const short = detectBreakout([...flat, bar(end, 4000, 4001, 3994, 3995)], down, 2);
+  check("breakout: close below the 1-week low in a downtrend is a short", short?.direction === "short" && short.level === 3998 && short.stop === 3995 + CHANNEL_STOP_ATR * 2, short ? `${short.direction} stop ${short.stop}` : "none");
+  const held = [...week, bar(end + H4, 4005, 4008, 4004, 4007)];
   check("breakout: a second close beyond the channel is not a new break", detectBreakout(held, up, 2) === null, "already broken");
+  check("breakout: the signal is entered when the H4 candle closes", closeTimeOf(week) === end + H4, new Date(closeTimeOf(week) * 1000).toISOString());
 
   // Levels: the setup's own stop, a fixed-R target, and the cost cap.
-  const risk = (stop: number, entry = 4012) =>
-    computeRiskLevels({ instrument: "XAU_USD", direction: "long", entry, candles: session, pivots: [], trigger: { breakout: { kind: "asian", direction: "long", stop, high: 4010, low: 4000 } }, accountBalance: 10000 });
-  const rb = risk(4005);
-  check("breakout: stop at the range middle, target a fixed multiple of the risk", rb.ok && rb.levels.stopLoss === 4005 && Math.abs(rb.levels.takeProfit - (4012 + BREAKOUT_TARGET_R * 7)) < 1e-9 && rb.levels.tpSource === "fixed_r", rb.ok ? `SL ${rb.levels.stopLoss} TP ${rb.levels.takeProfit}` : rb.reason);
-  const tight = risk(4011);
+  const risk = (stop: number, entry = 4005) =>
+    computeRiskLevels({ instrument: "XAU_USD", direction: "long", entry, candles: week, pivots: [], trigger: { breakout: { kind: "channel", direction: "long", stop, high: 4002, low: 3998 } }, accountBalance: 10000 });
+  const rb = risk(3999);
+  check("breakout: the setup's stop, target a fixed multiple of the risk", rb.ok && rb.levels.stopLoss === 3999 && Math.abs(rb.levels.takeProfit - (4005 + BREAKOUT_TARGET_R * 6)) < 1e-9 && rb.levels.tpSource === "fixed_r", rb.ok ? `SL ${rb.levels.stopLoss} TP ${rb.levels.takeProfit}` : rb.reason);
+  const tight = risk(4004);
   check("breakout: a stop the spread would dominate is refused", !tight.ok && tight.reason.includes("of the risk"), !tight.ok ? tight.reason : "unexpectedly ok");
 
   // Scoring, identity and who may send.
-  const ctxB: ScoringContext = { instrument: "XAU_USD", candles: session, htfCandles: session, pivots: [], atrValue: 2, zones: [], fib: null, daily: up };
+  const ctxB: ScoringContext = { instrument: "XAU_USD", candles: week, htfCandles: [], pivots: [], atrValue: 2, zones: [], fib: null, daily: up };
   const scoredB = scoreSetup("breakout", ctxB);
-  check("breakout: scores 3/3 and passes the send gate", scoredB.fired && scoredB.count === 3 && scoredB.inSession && scoredB.topDownAligned && scoredB.m15Aligned, `count=${scoredB.count}`);
+  check("breakout: scores 3/3 and passes the send gate", scoredB.fired && scoredB.count === 3 && scoredB.inSession && scoredB.topDownAligned && scoredB.structureAligned, `count=${scoredB.count}`);
   check("breakout: no setup without daily candles", !scoreSetup("breakout", { ...ctxB, daily: [] }).hasTrigger, "no trend, no trade");
-  const nextDay = session.map((c) => ({ ...c, time: c.time + 86400 }));
+  const nextBar = week.map((c) => ({ ...c, time: c.time + H4 }));
   check(
-    "breakout: one setup identity per Asian break per day",
-    buildSetupKey("v", scoredB) === buildSetupKey("v", scoreSetup("breakout", { ...ctxB })) && buildSetupKey("v", scoredB) !== buildSetupKey("v", scoreSetup("breakout", { ...ctxB, candles: nextDay })),
+    "breakout: one setup identity per breakout candle",
+    buildSetupKey("v", scoredB) === buildSetupKey("v", scoreSetup("breakout", { ...ctxB })) && buildSetupKey("v", scoredB) !== buildSetupKey("v", scoreSetup("breakout", { ...ctxB, candles: nextBar })),
     buildSetupKey("v", scoredB)
   );
   check(
-    "scanner: all four strategies send by default; the override drops unknown names",
-    signalStrategies(undefined).size === 4 && signalStrategies("breakout,setforget,nonsense").size === 2 && !signalStrategies("breakout").has("zones"),
+    "scanner: all five strategies send by default; the override drops unknown names",
+    signalStrategies(undefined).size === 5 && signalStrategies("breakout,setforget,nonsense").size === 2 && !signalStrategies("breakout").has("zones"),
     `[${[...signalStrategies(undefined)].join(",")}]`
   );
 }

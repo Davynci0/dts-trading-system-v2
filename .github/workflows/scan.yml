@@ -1,26 +1,24 @@
 name: Scan
 
-# Runs the signal scan every 15 minutes during the trading session.
+# Runs the signal scan every 15 minutes while the gold market is open.
 #
-# Vercel's Hobby plan only allows one cron run per day, and an M15 scanner has
-# to see every 15-minute candle, so the schedule lives here instead. The scan
-# itself still runs on Vercel — this job only calls /api/scan.
+# Vercel's Hobby plan only allows one cron run per day, and a signal has to be
+# sent soon after its H4 candle closes, so the schedule lives outside Vercel.
+# The scan itself still runs on Vercel — this job only calls /api/scan.
+# (cron-job.org currently does this job; this workflow is a disabled backup.)
 #
 # Required repository secrets (Settings → Secrets and variables → Actions):
 #   SCAN_URL     the deployed site's origin, e.g. https://your-app.vercel.app
 #   CRON_SECRET  the same value as the CRON_SECRET env var on Vercel
 #
-# Keep this window in step with the entry hours in lib/analysis/breakout.ts
-# (and TRADING_HOURS_UTC if a pullback strategy is allowed to send).
 
 on:
   schedule:
-    # 07:01–20:46 UTC, Monday–Friday: the trend breakout's entry windows
-    # (Asian-range break 07:00–11:00, one-week channel break 07:00–20:00). One
-    # minute past each quarter hour so the M15 candle that just closed is
-    # already marked complete by OANDA. A breakout only exists on the candle
-    # that closes beyond the level, so a skipped run is a missed signal.
-    - cron: "1,16,31,46 7-20 * * 1-5"
+    # Sunday–Friday, around the clock: H4 candles close every four hours and a
+    # signal may only be sent within 60 minutes of that close. One minute past
+    # each quarter hour so the candle that just closed is already marked
+    # complete by OANDA.
+    - cron: "1,16,31,46 * * * 0-5"
   workflow_dispatch:
 
 # GitHub can start scheduled runs late; never let two scans overlap.

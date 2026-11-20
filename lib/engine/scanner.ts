@@ -4,8 +4,12 @@ import { fetchCandles } from "@/lib/oanda";
 import {
   scoreSetup,
   computeRiskLevels,
-  analyzeM15,
+  analyzeExecution,
+  closeTimeOf,
+  EXECUTION_CANDLES,
   EXECUTION_HTF,
+  EXECUTION_TIMEFRAME,
+  HTF_CANDLES,
   type ScoringContext,
   type ScoreResult,
 } from "@/lib/analysis";
@@ -115,40 +119,43 @@ export async function runScan(opts: {
         timeframe: "H4",
         strategy: "zones",
         kind: "error",
-        detail: `top-down analysis unavailable (continuing with M15 only): ${(e as Error).message.slice(0, 120)}`,
+        detail: `top-down analysis unavailable (continuing with ${EXECUTION_TIMEFRAME} only): ${(e as Error).message.slice(0, 120)}`,
       });
-      // Non-fatal: M15 scanning continues without top-down context.
-      // For pairs with TREND_MODE=M15/HTF-only this doesn't affect signals
-      // (the disabled trend check is auto-true; HTF falls back to H1 candles).
-      // For TREND_MODE=BOTH pairs, scoring falls back to H1-based HTF agreement.
+      // Non-fatal: scanning continues without the weekly-structure veto.
     }
 
-    for (const tf of timeframes.filter((t) => t === "M15")) {
+    for (const tf of timeframes.filter((t) => t === EXECUTION_TIMEFRAME)) {
       units++;
       try {
-        const candles = await fetchCandles({ instrument: pair, granularity: "M15", count: 500 });
+        const candles = await fetchCandles({ instrument: pair, granularity: EXECUTION_TIMEFRAME, count: EXECUTION_CANDLES });
         const htfCandles = await fetchCandles({
           instrument: pair,
           granularity: EXECUTION_HTF,
-          count: 300,
+          count: HTF_CANDLES,
         });
-        const m15 = analyzeM15(candles, pair);
-        if (!m15) continue;
+        // A signal is entered at the close of the candle that produced it. A scan
+        // that runs long after that close (a missed run, the weekend) may track
+        // the setup but must not send a trade at a price that is no longer there.
+        const barAgeMin = (Date.now() / 1000 - closeTimeOf(candles)) / 60;
+        const staleBar = barAgeMin > MAX_ENTRY_AGE_MIN;
+        const staleNote = `signal candle closed ${Math.round(barAgeMin)} min ago — too late to enter (limit ${MAX_ENTRY_AGE_MIN} min)`;
+        const ta = analyzeExecution(candles, pair);
+        if (!ta) continue;
 
-        const { pivots, atrValue, zones, fib, setForget } = m15;
+        const { pivots, atrValue, zones, fib, setForget } = ta;
 
         const ctx: ScoringContext = {
           instrument: pair,
           candles,
           htfCandles,
           pivots,
-          structuralPivots: m15.structuralPivots,
+          structuralPivots: ta.structuralPivots,
           atrValue,
           zones,
           fib,
           setForget,
           topDown,
-          headShoulders: m15.headShoulders,
+          headShoulders: ta.headShoulders,
           daily: dailyCandles,
         };
 
@@ -183,6 +190,7 @@ export async function runScan(opts: {
           if (
             strategy === "zones" &&
             signalStrategies().has("zones") &&
+            !staleBar &&
             !zoneAlerted &&
             sendTelegrams &&
             zoneAlertPairs().has(pair)
@@ -232,6 +240,22 @@ export async function runScan(opts: {
               count: scored.count,
               signaled: prior?.signaled === true,
               lastSkip: cooldownNote,
+              lastSeen: now,
+              zoneAlerted,
+              lastSignaledAt: prior?.lastSignaledAt,
+              lastSignaledCount: prior?.lastSignaledCount,
+            });
+            continue;
+          }
+          if (disposition.eligible && staleBar) {
+            if (prior?.lastSkip !== "stale") {
+              events.push({ pair, timeframe: tf, strategy, kind: "skipped", detail: staleNote });
+            }
+            await saveSetup(supabase, pair, tf, setupKey, {
+              confirmations: scored.confirmations,
+              count: scored.count,
+              signaled: prior?.signaled === true,
+              lastSkip: "stale",
               lastSeen: now,
               zoneAlerted,
               lastSignaledAt: prior?.lastSignaledAt,
@@ -356,7 +380,7 @@ function triggerDescription(scored: ScoreResult): string {
   }
   if (scored.strategy === "breakout" && scored.trigger?.breakout) {
     const b = scored.trigger.breakout;
-    return `closed ${b.direction === "long" ? "above" : "below"} the ${b.kind === "asian" ? "Asian range" : "1-week channel"} at ${b.level.toFixed(2)} with the daily trend`;
+    return `closed ${b.direction === "long" ? "above" : "below"} the 1-week channel at ${b.level.toFixed(2)} with the daily trend`;
   }
   if (scored.strategy === "fibonacci" && scored.trigger?.fib) {
     const f = scored.trigger.fib;
@@ -458,6 +482,10 @@ export function minConfidenceFor(_pair: string, strategy: StrategyId): number {
 /** Allow the same setup to fire more than once (no permanent signaled dedup).
  *  Useful for scalping/re-entry styles. Default false. */
 const ALLOW_REPEAT_SIGNALS = (process.env.ALLOW_REPEAT_SIGNALS ?? "false") === "true";
+/** A signal may only be sent this many minutes after its candle closed. With a
+ *  scan every 15 minutes that is four chances; later than that the entry price
+ *  has moved on. Override with MAX_ENTRY_AGE_MIN. */
+const MAX_ENTRY_AGE_MIN = Math.max(5, Number(process.env.MAX_ENTRY_AGE_MIN ?? 60));
 /** Minimum minutes between repeat signals for the same setup. Default 60. */
 const REPEAT_SIGNAL_COOLDOWN_MIN = Math.max(0, Number(process.env.REPEAT_SIGNAL_COOLDOWN_MIN ?? 60));
 /** Whether to run the AI vision read on a signal's chart. Default true. */
@@ -477,7 +505,7 @@ const DEFAULT_SIGNAL_PAIRS = ["XAU_USD"];
 /** Strategies allowed to SEND live signals. The rest are still scanned and
  *  shown on the dashboard's tracker, but only as watch-only setups. Override
  *  with SIGNAL_STRATEGIES=breakout,setforget (ids from StrategyId). */
-const DEFAULT_SIGNAL_STRATEGIES: StrategyId[] = ["breakout", "setforget", "zones", "fibonacci"];
+const DEFAULT_SIGNAL_STRATEGIES: StrategyId[] = ["breakout", "setforget", "zones", "sr", "fibonacci"];
 
 export function signalStrategies(override?: string | undefined): Set<StrategyId> {
   const raw = override ?? process.env.SIGNAL_STRATEGIES;
@@ -567,7 +595,7 @@ async function reconcileAndSignal(args: {
 
   // Send gate + side/primary selection live in lib/engine/select.ts, shared
   // with the backtest: valid risk, the strategy's confirmation minimum, the
-  // trading session, no opposing weekly structure and an agreeing M15 trend
+  // trading session, no opposing weekly structure and an agreeing daily trend
   // (a trend check that is switched off for the pair evaluates to true).
   const candidates = fired.filter((f) => passesSendGate(f, minConfidenceFor(pair, f.scored.strategy)));
   const selection = selectSignal(candidates);
@@ -654,7 +682,7 @@ async function reconcileAndSignal(args: {
           confirmationsMet: Object.entries(primary.scored.confirmations)
             .filter(([, v]) => v)
             .map(([k]) => k),
-          trendMode: { htf: true, m15: false },
+          trendMode: { htf: true, chart: false },
           imageBase64: png.toString("base64"),
         });
 

@@ -639,7 +639,7 @@ async function main() {
   // just a quirk of one market.
   const pairs = process.argv.slice(2).length ? process.argv.slice(2) : [...PAIRS];
   const markets: Market[] = [];
-  for (const pair of pairs) markets.push(buildMarket(pair, (await loadPairData(pair, SPAN_DAYS)).m15));
+  for (const pair of pairs) markets.push(buildMarket(pair, (await loadPairData(pair, SPAN_DAYS, true)).m15));
 
   console.log(
     `${pairs.length} instruments, ~${markets[0].n} M15 bars each. Costs: full spread + ${SLIPPAGE_PIPS} pip, capped at ${MAX_COST_SHARE * 100}% of risk.`

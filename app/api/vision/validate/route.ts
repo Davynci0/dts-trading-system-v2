@@ -26,7 +26,7 @@ export async function POST(req: NextRequest) {
     granularity?: string;
   } | null;
   const instrument = body?.instrument ?? "XAU_USD";
-  const granularity = body?.granularity ?? "M15";
+  const granularity = body?.granularity ?? "H4";
 
   try {
     const [candles, weekly, daily, h4, h1] = await Promise.all([

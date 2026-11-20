@@ -1,7 +1,8 @@
 import type { Candle, StrategyId } from "@/lib/types";
 import { buildSetupKey } from "@/lib/analysis/setupKey";
 import {
-  analyzeM15,
+  analyzeExecution,
+  EXECUTION_BAR_SECONDS,
   scoreSetup,
   computeRiskLevels,
   type ScoringContext,
@@ -15,9 +16,9 @@ import { passesSendGate, selectSignal, type SignalCandidate } from "@/lib/engine
 export { SPREAD_PIPS, SLIPPAGE_PIPS };
 const WINDOW = 500; // rolling analysis window per step
 const WARMUP = 80;
-/** Live signals stay open until TP/SL or the 7-day expiry (lib/engine/outcomes.ts);
- *  5 trading days of M15 bars mirrors that. Override per run with maxHoldCandles. */
-const MAX_HOLD_CANDLES = 480;
+/** Live signals stay open until TP/SL or the six-week expiry (lib/engine/outcomes.ts);
+ *  30 trading days of H4 bars mirrors that. Override per run with maxHoldCandles. */
+const MAX_HOLD_CANDLES = 180;
 const OUT_OF_SAMPLE_FRACTION = 0.3; // last 30% = walk-forward segment
 
 /** Standard lot sizes in units. 0.1 lot = 10,000 units for most brokers. */
@@ -249,7 +250,7 @@ export function runBacktest(opts: {
   const traded = new Set<string>();
   const oosStart = Math.floor(candles.length * (1 - OUT_OF_SAMPLE_FRACTION));
 
-  const stepSeconds = barSeconds(candles, 900);
+  const stepSeconds = barSeconds(candles, EXECUTION_BAR_SECONDS);
   const htfClosed = closedBarCursor(htfCandles, 3600);
   const tdClosed = topDownCandles
     ? {
@@ -297,9 +298,9 @@ export function runBacktest(opts: {
     // 2) evaluate strategies on the closed-candle window (no lookahead)
     if (oneTradePerPair && Object.keys(open).length > 0) continue; // live parity: one trade per pair
     const windowCandles = candles.slice(Math.max(0, i - WINDOW), i + 1);
-    const m15 = analyzeM15(windowCandles, pair);
-    if (!m15) continue;
-    const { pivots, atrValue, zones, fib, setForget } = m15;
+    const ta = analyzeExecution(windowCandles, pair);
+    if (!ta) continue;
+    const { pivots, atrValue, zones, fib, setForget } = ta;
 
     // Higher timeframes: only bars that had CLOSED when this candle closed.
     const closeTime = candles[i].time + stepSeconds;
@@ -331,13 +332,13 @@ export function runBacktest(opts: {
       candles: windowCandles,
       htfCandles: htfSlice,
       pivots,
-      structuralPivots: m15.structuralPivots,
+      structuralPivots: ta.structuralPivots,
       atrValue,
       zones,
       fib,
       setForget,
       topDown,
-      headShoulders: m15.headShoulders,
+      headShoulders: ta.headShoulders,
       daily,
     };
 
