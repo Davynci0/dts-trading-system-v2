@@ -386,8 +386,11 @@ export function runBacktest(opts: {
     for (const { primary, group } of entries) {
       if (!primary.risk.ok) continue;
       const levels = primary.risk.levels;
-      // position size: fixed lots override risk-based sizing
-      const units = fixedUnits ?? levels.positionUnits;
+      // position size: fixed lots override risk-based sizing. A stop too wide
+      // for one whole unit at the risk budget still trades here — R does not
+      // depend on size, and dropping those trades would silently remove the
+      // most volatile periods — so it is sized fractionally for the P&L column.
+      const units = fixedUnits ?? (levels.positionUnits > 0 ? levels.positionUnits : levels.riskAmount / levels.stopDistance);
       if (!units || units <= 0) continue;
       for (const c of group) traded.add(c.setupKey);
 

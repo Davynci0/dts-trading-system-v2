@@ -60,7 +60,7 @@ export interface ScoreResult {
   /** False when the entry would fall outside the trading session. */
   inSession: boolean;
   /** The flipped support/resistance level just behind the entry, when there is
-   *  one. It grades the signal (KEY_LEVEL_CHECK) — it never gates it. */
+   *  one. It is one confirmation on the checklist (KEY_LEVEL_CHECK). */
   keyLevel: KeyLevel | null;
   /** true when no core trigger exists at all — caller should not track state */
   hasTrigger: boolean;

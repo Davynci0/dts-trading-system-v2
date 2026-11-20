@@ -113,14 +113,25 @@ export function nearestLevels(levels: KeyLevel[], price: number, count = 3): Key
   return [...by("resistance"), ...by("support")].sort((a, b) => b.price - a.price);
 }
 
+/** The series' own bar length: the median spacing of its last bars (the median
+ *  ignores weekend gaps and the 23h/25h daily bars around clock changes). */
+function barLength(series: Candle[]): number {
+  const diffs: number[] = [];
+  for (let i = Math.max(1, series.length - 60); i < series.length; i++) diffs.push(series[i].time - series[i - 1].time);
+  if (diffs.length === 0) return 86400;
+  diffs.sort((x, y) => x - y);
+  return diffs[Math.floor(diffs.length / 2)];
+}
+
 /** Levels that were known before `candle` opened: built from higher-timeframe
  *  bars that had already closed, so the trader could have drawn them in advance.
  *  Cached per higher-timeframe series — every strategy asks on every candle. */
 const knownCache = new WeakMap<Candle[], { time: number; price: number; atr: number; levels: KeyLevel[] }>();
-function knownLevels(htf: Candle[], candle: Candle, price: number, htfSeconds: number): { atr: number; levels: KeyLevel[] } {
+function knownLevels(htf: Candle[], candle: Candle, price: number, htfSeconds?: number): { atr: number; levels: KeyLevel[] } {
   const hit = knownCache.get(htf);
   if (hit && hit.time === candle.time && hit.price === price) return hit;
-  const known = htf.filter((c) => c.time + htfSeconds <= candle.time);
+  const span = htfSeconds ?? barLength(htf);
+  const known = htf.filter((c) => c.time + span <= candle.time);
   const atrValue = atr(known) ?? 0;
   const entry = { time: candle.time, price, atr: atrValue, levels: atrValue > 0 ? detectKeyLevels(known, price) : [] };
   knownCache.set(htf, entry);
@@ -131,10 +142,10 @@ function knownLevels(htf: Candle[], candle: Candle, price: number, htfSeconds: n
  * The flipped key level sitting just behind an entry, if there is one: a
  * level that has been both ceiling and floor, on the protective side of the
  * latest close (below a long, above a short) and within one higher-timeframe
- * ATR of it. Trades taken with such a level behind them did about twice as
- * well as the rest in testing — it grades a signal, it does not gate one.
+ * ATR of it. It is one confirmation on the checklist. `htfSeconds` overrides
+ * the higher-timeframe bar length, which is otherwise read from the series.
  */
-export function backingLevel(candles: Candle[], htf: Candle[], direction: "long" | "short", htfSeconds = 3600): KeyLevel | null {
+export function backingLevel(candles: Candle[], htf: Candle[], direction: "long" | "short", htfSeconds?: number): KeyLevel | null {
   if (candles.length === 0) return null;
   const last = candles[candles.length - 1];
   const { atr: atrValue, levels } = knownLevels(htf, last, last.close, htfSeconds);
@@ -171,7 +182,7 @@ export interface LevelRetest {
  * Levels are built only from `htf` bars that had closed before the candle
  * opened, so the level is one the trader could have drawn in advance.
  */
-export function detectLevelRetest(candles: Candle[], htf: Candle[], htfSeconds = 3600): LevelRetest | null {
+export function detectLevelRetest(candles: Candle[], htf: Candle[], htfSeconds?: number): LevelRetest | null {
   if (candles.length === 0) return null;
   const last = candles[candles.length - 1];
   const { atr: atrValue, levels } = knownLevels(htf, last, last.open, htfSeconds);

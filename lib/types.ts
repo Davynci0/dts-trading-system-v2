@@ -67,6 +67,25 @@ export const STRATEGIES: { id: StrategyId; label: string }[] = [
   { id: "sr", label: "Support/Resistance Retest" },
 ];
 
+/**
+ * Confirmations a setup needs to be an **A setup** — the only kind that is sent
+ * to Telegram. A setup with fewer is a B setup: tracked and shown, not sent.
+ *
+ *  - breakout: its three rule checks (close beyond the channel, daily trend,
+ *    entry window) — they are all-or-nothing, so every breakout is an A setup;
+ *  - pullbacks and the retest: the trigger and the daily trend (always met
+ *    when the rule passes) plus at least two more of the remaining checks.
+ */
+export const MIN_CONFIRMATIONS: Record<StrategyId, number> = {
+  breakout: 3,
+  zones: 4,
+  setforget: 4,
+  fibonacci: 4,
+  sr: 4,
+};
+export const isASetup = (strategy: StrategyId, confirmations: number): boolean =>
+  confirmations >= (MIN_CONFIRMATIONS[strategy] ?? 4);
+
 /** How many checks each strategy's confirmation list has. */
 export const CHECKS: Record<StrategyId, number> = {
   breakout: 4,

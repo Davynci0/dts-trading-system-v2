@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CHECKS, type Signal } from "@/lib/types";
+import { CHECKS, isASetup, type Signal } from "@/lib/types";
 import { pipSize } from "@/lib/analysis/confirmations";
 
 const fmtPips = (price: number, pair: string) => (price / pipSize(pair)).toFixed(1);
@@ -120,7 +120,8 @@ export default function SignalFeed() {
               </span>
               <span className="text-neutral-500">
                 {fmtTime(s.created_at)} · {s.strategy} · {s.confidence}/{CHECKS[s.strategy] ?? 6}
-                {s.confirmations?.["Key level behind the entry"] ? " · grade A ★" : " · grade B"}
+                {isASetup(s.strategy, s.confidence) ? " · A setup" : " · B setup"}
+                {s.confirmations?.["Key level behind the entry"] ? " ★" : ""}
                 {s.status === "skipped" ? " · SKIPPED" : ""}
               </span>
             </div>

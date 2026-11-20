@@ -1,5 +1,5 @@
 import type { Candle, Pair, StrategyId, Timeframe } from "@/lib/types";
-import { CHECKS, TRADE_TIMEFRAMES } from "@/lib/types";
+import { CHECKS, MIN_CONFIRMATIONS, TRADE_TIMEFRAMES } from "@/lib/types";
 import { fetchCandles } from "@/lib/oanda";
 import {
   scoreSetup,
@@ -462,18 +462,9 @@ function skipReasonFor(pair: string, f: Firing): string {
   return sendGateBlock(f, minConfidenceFor(pair, f.scored.strategy)) ?? "not selected";
 }
 
-/** Confirmations a setup needs before it may be sent. The breakout either
- *  meets all three of its conditions or does not exist. For the pullback
- *  strategies the core trigger is enough: what gates them is the daily trend,
- *  the weekly structure and the session (lib/analysis/pullback.ts) — requiring
- *  more of the checklist was tested and made every one of them worse. */
-export const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
-  breakout: 3,
-  zones: 1,
-  setforget: 1,
-  fibonacci: 1,
-  sr: 1,
-};
+/** Confirmations a setup needs before it may be sent — the A-setup rule
+ *  (MIN_CONFIRMATIONS in lib/types.ts). A setup below it stays on the tracker. */
+export const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = MIN_CONFIRMATIONS;
 
 export function minConfidenceFor(_pair: string, strategy: StrategyId): number {
   return STRATEGY_MIN_CONFIDENCE[strategy];

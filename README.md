@@ -3,8 +3,9 @@
 Signal-only gold (XAU/USD) trading system on **4-hour candles**. Five strategies send
 signals: the **trend breakout**, the **support/resistance retest** and three **trend
 pullbacks** — supply/demand zones, Alex G "set & forget" AOIs and the Fibonacci golden zone.
-All five trade with the daily trend only. Telegram is the single alert channel. The user
-reviews each signal and executes manually — the system never places trades.
+All five trade with the daily trend only. The scanner looks at the chart every 15 minutes;
+when it finds a setup it counts the confirmations, and only an **A setup** is sent to
+Telegram. The user reviews each signal and executes manually — the system never places trades.
 
 Expect about two signals a month, each held for days to weeks. **Read
 [the backtest results](#backtesting) before trusting it:** over fifteen years almost all the
@@ -69,9 +70,7 @@ a trade under one shared rule (`lib/analysis/pullback.ts`):
 | Target | 3 × the risk | `PULLBACK_TARGET_R` |
 | Costs | spread + slippage ≤ 10% of the risk | `MAX_COST_SHARE` |
 
-Each setup is traded once, on the first candle where the rule holds. The checklist on the
-tracker (rejection candle, RSI turn, confluence, …) is context for the trader; it is not a
-gate — requiring more of it made every strategy worse in testing.
+Each setup is traded once, on the first candle where the rule holds and the setup is an A setup.
 
 Every H4 close is tradeable. Limiting entries to London/New York hours was tested and was
 worse; `TRADING_HOURS_UTC="7-20"` restores it.
@@ -81,8 +80,24 @@ worse; `TRADING_HOURS_UTC="7-20"` restores it.
 `lib/analysis/levels.ts` finds the prices gold has turned at more than once: daily swing highs
 and lows within half an ATR of each other form a level, counted by separate visits. A level
 that has been both a ceiling and a floor is **flipped**. The chart draws the three nearest
-levels on each side of price (flipped ones solid). A signal with a flipped level just behind
-its entry is **grade A**, the rest grade B — a label, not a filter.
+levels on each side of price (flipped ones solid). A flipped level just behind an entry is one
+of the confirmations (★ on the signal).
+
+## A setups
+
+Every strategy has a checklist, shown live on the dashboard's Confirmation Tracker. A setup is
+sent to Telegram only when it is an **A setup** (`MIN_CONFIRMATIONS` in `lib/types.ts`):
+
+| Strategy | Checklist | A setup needs |
+| --- | --- | --- |
+| Trend breakout | close beyond the 1-week channel · daily trend agrees · inside the entry window · key level behind the entry | the first three (they are all-or-nothing) |
+| Zones, set & forget, Fibonacci | the trigger · rejection candle · fresh zone / overlap with another area · RSI turning · daily trend agrees · H4 trend agrees · key level behind the entry | 4 of 7 |
+| S/R retest | retest of a broken level · level turned price 3+ times · candle closes with the trade · daily trend agrees · key level behind the entry | 4 of 5 |
+
+A setup with fewer confirmations is a **B setup**: it stays on the tracker and is sent if it
+later gains the confirmations it lacks. Over fifteen years the A-setup rule made no measurable
+difference to the result (+63R against +67R when every setup was sent) — it is a quality
+screen the trader asked for, not a source of edge. A stricter rule (5 of 7) was worse (+46R).
 
 ## One trade at a time
 
@@ -131,28 +146,32 @@ XAU/USD on H4, 15 years to 2026-11-20, all five strategies, one trade at a time:
 
 | Period | Trades | Win rate | Total R |
 | --- | --- | --- | --- |
-| 2011-11 → 2016-11 | 139 | 32% | +8 |
-| 2016-11 → 2021-11 | 125 | 33% | −4 |
-| 2021-11 → 2023-11 | 55 | 33% | +4 |
-| 2023-11 → 2026-11 | 64 | 59% | +58 |
-| **All 15 years** | **383 (about 2 a month)** | **37%** | **+67** |
+| 2011-11 → 2016-11 | 132 | 31% | +0 |
+| 2016-11 → 2021-11 | 128 | 31% | −3 |
+| 2021-11 → 2023-11 | 56 | 32% | +6 |
+| 2023-11 → 2026-11 | 80 | 56% | +60 |
+| **All 15 years** | **396 (about 2 a month)** | **36%** | **+63** |
 
-By strategy: breakout 191 trades +49R, retest 67 trades +22R, zones 27 trades +9R, Fibonacci
-74 trades −5R, set & forget 24 trades −8R. Ten of the fifteen years were positive.
+By strategy: breakout 216 trades +29R, retest 47 trades +25R, zones 22 trades +11R, Fibonacci
+96 trades +7R, set & forget 15 trades −9R. Eleven of the fifteen years were positive.
 
 **Read this before trusting the system.** Almost all the profit comes from the last three
 years, when gold rose from about $2,000 to over $3,500. Over the twelve years before that the
-system made +8R on 319 trades, which is not distinguishable from zero (t = 0.3). The worst
-drawdown was 22R, the longest losing streak 12 trades, and equity once spent about ten years
+system made +3R on 316 trades, which is not distinguishable from zero (t = 0.1). The worst
+drawdown was 30R, the longest losing streak 12 trades, and equity once spent about ten years
 below an earlier high. This is a trend-following system: it earns in a strong gold trend and
 roughly breaks even otherwise, and nothing tested here predicts which kind of year is coming.
 Run it on a practice account, and if you risk money, risk a small fraction of a percent per
 trade.
 
 What H4 does give: costs stop mattering. A 3-ATR stop on H4 is tens of dollars, so spread and
-slippage average 1.5% of the risk, and doubling them moves the 15-year total only from +67R to
-+60R. The earlier M15 version of this system made +158R over the same fifteen years on 2,899
+slippage average 1.5% of the risk, and doubling them moves the 15-year total only from +63R to
++57R. The earlier M15 version of this system made +158R over the same fifteen years on 2,899
 trades, but fell to +22R with costs doubled and had a 94R drawdown.
+
+What H4 costs: wide stops. Three H4 ATRs on gold can exceed $100 an ounce, so on a small
+account 1% of the balance may be less than the risk of the smallest position (0.01 lot). The
+signal says so when that happens; the choice is to skip the trade or accept a larger risk.
 
 `scripts/research-strategies.ts` is an M15 lab for intraday ideas from the earlier version; it
 tests entry rules on three years of M15 data before anything is built into the scanner.

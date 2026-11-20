@@ -125,7 +125,7 @@ export default function BacktestsPage() {
     ["Combined", results.filter((r) => r.scope === "combined"), true],
     ["Per year", rowsOf("year:"), false],
     ["Per strategy", rowsOf("strategy:"), true],
-    ["By grade", rowsOf("grade:"), true],
+    ["By key level", rowsOf("grade:"), true],
     ["Per pair", rowsOf("pair:"), true],
   ];
   const hasAll = results.some((r) => r.metrics.all);

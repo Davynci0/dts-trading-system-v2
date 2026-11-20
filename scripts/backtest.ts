@@ -71,7 +71,7 @@ function simulate(pair: string, data: PairData, costMultiplier: number): Trade[]
   return report.trades.map((t) => ({ ...t, pair, entryTime: bars(data)[t.entryIndex].time }));
 }
 
-/** Grade A = a flipped support/resistance level sat just behind the entry. */
+/** A flipped support/resistance level sat just behind the entry. */
 const gradeA = (t: Trade) => t.checks[KEY_LEVEL_CHECK] === true;
 const inYear = (k: number) => (t: Trade) => t.entryTime >= START + k * YEAR_S && t.entryTime < START + (k + 1) * YEAR_S;
 const byTime = (trades: Trade[]) => [...trades].sort((a, b) => a.entryTime - b.entryTime);
@@ -107,8 +107,8 @@ async function save(trades: Trade[]): Promise<void> {
     scopes[`year:${String(k + 1).padStart(2, "0")} · ${month(START + k * YEAR_S)} → ${month(START + (k + 1) * YEAR_S)}`] = scoped(trades.filter(inYear(k)));
   }
   for (const s of STRATEGIES) if (strategies.includes(s.id)) scopes[`strategy:${s.id}`] = scoped(trades.filter((t) => t.strategy === s.id));
-  scopes["grade:A · key level behind the entry"] = scoped(trades.filter(gradeA));
-  scopes["grade:B · no key level"] = scoped(trades.filter((t) => !gradeA(t)));
+  scopes["grade:key level behind the entry"] = scoped(trades.filter(gradeA));
+  scopes["grade:no key level"] = scoped(trades.filter((t) => !gradeA(t)));
   for (const p of pairs) scopes[`pair:${p}`] = scoped(trades.filter((t) => t.pair === p));
 
   const live = signalPairs();
@@ -156,8 +156,8 @@ async function main() {
   console.log(`\nLive rules, ${YEARS} year${YEARS > 1 ? "s" : ""} to ${new Date(END * 1000).toISOString().slice(0, 10)} (Y1 oldest), R multiples after full spread + slippage`);
   row("PORTFOLIO", base);
   for (const s of STRATEGIES) if (strategies.includes(s.id)) row(` ${s.id}`, base.filter((t) => t.strategy === s.id));
-  row(" grade A", base.filter(gradeA));
-  row(" grade B", base.filter((t) => !gradeA(t)));
+  row(" key level", base.filter(gradeA));
+  row(" no level", base.filter((t) => !gradeA(t)));
   if (pairs.length > 1) for (const p of pairs) row(` ${p}`, base.filter((t) => t.pair === p));
   const cost = base.reduce((s, t) => s + t.costR, 0) / Math.max(1, base.length);
   console.log(`\n${(base.length / (YEARS * 12)).toFixed(1)} trades a month; costs average ${(cost * 100).toFixed(1)}% of the risk per trade.`);

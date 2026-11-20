@@ -69,8 +69,7 @@ export async function sendFinalSignal(opts: {
   confidence: number; // confirmations met
   /** how many checks the strategy's list has */
   checks?: number;
-  /** the flipped support/resistance level just behind the entry, when there is one —
-   *  it makes the signal grade A (those trades did about twice as well in testing) */
+  /** the flipped support/resistance level just behind the entry, when there is one */
   keyLevel?: { price: number; touches: number } | null;
   visionNote: string | null;
   positionUnits: number;
@@ -82,7 +81,13 @@ export async function sendFinalSignal(opts: {
   const checks = opts.checks ?? 6;
   const digits = opts.pair.startsWith("XAU") ? 2 : opts.pair.includes("JPY") ? 3 : 5;
   const px = (n: number) => n.toFixed(digits);
-  const grade = opts.keyLevel ? "A ★" : "B";
+  // H4 stops are wide: on a small account 1% of the balance can be less than
+  // one unit's risk. Say so instead of printing a size of zero.
+  const unitRisk = Math.abs(opts.entry - opts.stopLoss);
+  const sizeLine =
+    opts.positionUnits >= 1
+      ? `Size: ${opts.positionUnits.toLocaleString()} units (risk $${opts.riskAmount.toFixed(0)}, 1%)`
+      : `Size: the stop is too wide for 1% risk — the smallest size (1 unit, 0.01 lot) risks $${unitRisk.toFixed(0)}, 1% of the account is $${opts.riskAmount.toFixed(0)}`;
   await sendTelegramMessage(
     [
       opts.replacedCount
@@ -94,11 +99,11 @@ export async function sendFinalSignal(opts: {
       `Entry \`${px(opts.entry)}\`  SL \`${px(opts.stopLoss)}\`  TP \`${px(opts.takeProfit)}\``,
       `Risk *${opts.riskPips.toFixed(1)} pips* → Target *${opts.rewardPips.toFixed(1)} pips*`,
       `SL ${opts.stopBasis} · TP at ${opts.targetBasis}`,
-      `R:R *${opts.rMultiple.toFixed(2)}* · Grade *${grade}* · checks ${opts.confidence}/${checks}`,
+      `R:R *${opts.rMultiple.toFixed(2)}* · *A setup* · confirmations ${opts.confidence}/${checks}`,
       opts.keyLevel
         ? `Key level behind the entry: ${px(opts.keyLevel.price)} (support and resistance, ${opts.keyLevel.touches} touches)`
         : `No key level behind the entry`,
-      `Size: ${opts.positionUnits.toLocaleString()} units (risk $${opts.riskAmount.toFixed(0)}, 1%)`,
+      sizeLine,
       opts.visionNote ? `📝 Context: ${opts.visionNote}` : null,
       opts.comparison ? `\n${opts.comparison.replace(/[_*`\[]/g, " ")}` : null,
       `_Signal only — review and execute manually._`,

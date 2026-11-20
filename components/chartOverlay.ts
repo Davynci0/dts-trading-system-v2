@@ -250,8 +250,8 @@ class OverlayPaneView implements IPrimitivePaneView {
 
           // ── context: support / resistance ────────────────────────────────
           // A line at each level with a short tag on the right. Levels that have
-          // been both ceiling and floor ("flipped") are the ones that grade a
-          // signal, so they are solid; the rest are dotted.
+          // been both ceiling and floor ("flipped") count as a confirmation, so
+          // they are solid; the rest are dotted.
           for (const lvl of data.levels ?? []) {
             const y = Y(lvl.price);
             if (y == null) continue;

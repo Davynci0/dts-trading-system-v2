@@ -32,7 +32,7 @@ const priorityOf = (s: StrategyId) => {
   return i < 0 ? STRATEGY_PRIORITY.length : i;
 };
 
-/** Strategies that may only send grade A signals (a flipped key level behind the entry). Default: none. */
+/** Research switch: strategies that may only send with a flipped key level behind the entry. Default: none. */
 export const REQUIRE_KEY_LEVEL = new Set((process.env.REQUIRE_KEY_LEVEL ?? "").split(",").map((x) => x.trim()).filter(Boolean));
 
 /**
@@ -49,7 +49,7 @@ export function sendGateBlock(c: SignalCandidate, minConfidence: number): string
   if (c.scored.count < minConfidence) return `only ${c.scored.count} confirmations (needs ${minConfidence})`;
   if (!c.scored.inSession) return "outside the trading session (London/New York hours only)";
   if (!c.scored.topDownAligned) return `against the trend: the daily trend or the weekly structure opposes the ${c.direction}`;
-  if (REQUIRE_KEY_LEVEL.has(c.strategy) && !c.scored.keyLevel) return "no key level behind the entry (grade B)";
+  if (REQUIRE_KEY_LEVEL.has(c.strategy) && !c.scored.keyLevel) return "no key level behind the entry";
   return null;
 }
 

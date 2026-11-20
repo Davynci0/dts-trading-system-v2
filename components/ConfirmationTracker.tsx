@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { STRATEGIES, type StrategyId } from "@/lib/types";
+import { MIN_CONFIRMATIONS, STRATEGIES, isASetup, type StrategyId } from "@/lib/types";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 
 const CONFIRMATIONS: Record<StrategyId, string[]> = {
@@ -49,7 +49,9 @@ interface SetupRow {
 }
 
 /**
- * Live per-strategy confirmation tracker. Reads setup
+ * Live per-strategy confirmation tracker: which confirmations each active
+ * setup has, and whether that makes it an A setup (sent to Telegram) or a B
+ * setup (tracked only). Reads setup
  * state written by the scanner (/api/setups); polls every 30s.
  * Shows only the selected pair/timeframe's most recent setup per strategy —
  * each pair has its own independent confirmation state.
@@ -108,9 +110,10 @@ export default function ConfirmationTracker({ pair, timeframe }: { pair: string;
                 </div>
               )}
               {latest && (
-                <div className="mb-1 font-mono text-[10px] text-neutral-500">
-                  {latest.pair.replace("_", "/")} {latest.timeframe}
-                  {latest.payload.signaled ? " · SIGNALED" : ""}
+                <div className={`mb-1 font-mono text-[10px] ${isASetup(s.id, count) ? "text-teal-400" : "text-amber-400/80"}`}>
+                  {isASetup(s.id, count)
+                    ? `A setup${latest.payload.signaled ? " · sent to Telegram" : " · not sent yet (trend rule, an open trade or timing)"}`
+                    : `B setup · needs ${MIN_CONFIRMATIONS[s.id]} confirmations to be sent`}
                 </div>
               )}
               <ul className="space-y-0.5">
