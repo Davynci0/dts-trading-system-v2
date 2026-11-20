@@ -50,7 +50,7 @@ export async function POST(req: NextRequest) {
   const riskPercent = body.riskPercent ?? 0.01;
   const minConfidence = body.minConfidence; // undefined → live per-strategy gate
   const fixedUnits = lotSize ? LOT_SIZES[lotSize] ?? undefined : undefined;
-  const validStrategies: StrategyId[] = ["breakout", "zones", "setforget", "fibonacci"];
+  const validStrategies: StrategyId[] = ["breakout", "zones", "setforget", "fibonacci", "sr"];
   // default: exactly the strategies that send live signals
   const strategies = body.strategies?.filter((s): s is StrategyId => validStrategies.includes(s as StrategyId)) ?? [...signalStrategies()];
   const horizonHours = count * (TIMEFRAME_HOURS[timeframe] ?? 1 / 4);
@@ -112,6 +112,7 @@ export async function POST(req: NextRequest) {
         riskPercent,
         minConfidence: minConfidence ?? {
           breakout: minConfidenceFor(pair, "breakout"),
+          sr: minConfidenceFor(pair, "sr"),
           zones: minConfidenceFor(pair, "zones"),
           setforget: minConfidenceFor(pair, "setforget"),
           fibonacci: minConfidenceFor(pair, "fibonacci"),

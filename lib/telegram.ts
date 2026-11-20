@@ -67,8 +67,11 @@ export async function sendFinalSignal(opts: {
   stopBasis: string;
   targetBasis: string;
   confidence: number; // confirmations met
-  /** how many checks the strategy has (6 for the pullback strategies, 3 for the breakout) */
+  /** how many checks the strategy's list has */
   checks?: number;
+  /** the flipped support/resistance level just behind the entry, when there is one —
+   *  it makes the signal grade A (those trades did about twice as well in testing) */
+  keyLevel?: { price: number; touches: number } | null;
   visionNote: string | null;
   positionUnits: number;
   riskAmount: number;
@@ -77,7 +80,9 @@ export async function sendFinalSignal(opts: {
   replacedCount?: number;
 }): Promise<void> {
   const checks = opts.checks ?? 6;
-  const confidence = opts.confidence >= Math.min(5, checks) ? "HIGH ★" : "standard";
+  const digits = opts.pair.startsWith("XAU") ? 2 : opts.pair.includes("JPY") ? 3 : 5;
+  const px = (n: number) => n.toFixed(digits);
+  const grade = opts.keyLevel ? "A ★" : "B";
   await sendTelegramMessage(
     [
       opts.replacedCount
@@ -86,10 +91,13 @@ export async function sendFinalSignal(opts: {
           ? `🆕 *NEW SETUP (your open trade stays)*`
           : null,
       `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (${opts.strategy})`,
-      `Entry \`${opts.entry}\`  SL \`${opts.stopLoss}\`  TP \`${opts.takeProfit}\``,
+      `Entry \`${px(opts.entry)}\`  SL \`${px(opts.stopLoss)}\`  TP \`${px(opts.takeProfit)}\``,
       `Risk *${opts.riskPips.toFixed(1)} pips* → Target *${opts.rewardPips.toFixed(1)} pips*`,
       `SL ${opts.stopBasis} · TP at ${opts.targetBasis}`,
-      `R:R *${opts.rMultiple.toFixed(2)}* · Confidence *${confidence}* (${opts.confidence}/${checks})`,
+      `R:R *${opts.rMultiple.toFixed(2)}* · Grade *${grade}* · checks ${opts.confidence}/${checks}`,
+      opts.keyLevel
+        ? `Key level behind the entry: ${px(opts.keyLevel.price)} (support and resistance, ${opts.keyLevel.touches} touches)`
+        : `No key level behind the entry`,
       `Size: ${opts.positionUnits.toLocaleString()} units (risk $${opts.riskAmount.toFixed(0)}, 1%)`,
       opts.visionNote ? `📝 Context: ${opts.visionNote}` : null,
       opts.comparison ? `\n${opts.comparison.replace(/[_*`\[]/g, " ")}` : null,

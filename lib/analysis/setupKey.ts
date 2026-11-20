@@ -19,6 +19,9 @@ export function buildSetupKey(version: string, scored: ScoreResult): string {
     const b = scored.trigger.breakout;
     return `${version}:${scored.strategy}:${b.kind}:${b.kind === "asian" ? b.day : b.time}`;
   }
+  if (scored.strategy === "sr" && scored.trigger?.level) {
+    return `${version}:${scored.strategy}:${scored.trigger.level.key}`;
+  }
   if (scored.strategy === "zones" && scored.trigger?.zone) {
     return `${version}:${scored.strategy}:${scored.trigger.zone.id}`;
   }

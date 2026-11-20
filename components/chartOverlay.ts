@@ -90,10 +90,16 @@ export interface OverlayData {
     target: number;
     triggerTime: number;
   }[];
-  /** horizontal support/resistance levels from recent structural pivots */
+  /** support/resistance: H1 levels price has turned at more than once */
   levels?: {
     kind: "support" | "resistance";
     price: number;
+    /** the band the level's swing points span */
+    top: number;
+    bottom: number;
+    touches: number;
+    /** has acted as both support and resistance */
+    flipped: boolean;
     time: number;
   }[];
   /** trend breakout: the Asian range, the one-week channel and the daily trend */
@@ -317,32 +323,34 @@ class OverlayPaneView implements IPrimitivePaneView {
             );
           }
 
-          // horizontal support/resistance levels from recent structural pivots
+          // support/resistance: a thin band where the swings cluster and a line
+          // at the level. Flipped levels (both ceiling and floor) are the ones
+          // that grade a signal, so they are drawn solid; the rest are dashed.
           for (const lvl of data.levels ?? []) {
             const y = source.priceToY(lvl.price);
-            const x0 = source.timeToX(lvl.time);
             if (y == null) continue;
             const tone = lvl.kind === "support" ? UP : DOWN;
-            const color = `${tone}1)`;
-            ctx.strokeStyle = `${tone}0.8)`;
-            ctx.lineWidth = 1;
-            ctx.setLineDash(lvl.kind === "support" ? [3, 5] : [5, 3]);
-            ctx.beginPath();
-            if (x0 != null) {
-              ctx.moveTo(x0, y);
-            } else {
-              ctx.moveTo(0, y);
+            const yTop = source.priceToY(lvl.top);
+            const yBottom = source.priceToY(lvl.bottom);
+            if (yTop != null && yBottom != null && yBottom - yTop >= 1) {
+              ctx.fillStyle = `${tone}0.07)`;
+              ctx.fillRect(0, yTop, W, yBottom - yTop);
             }
+            ctx.strokeStyle = `${tone}${lvl.flipped ? "0.9)" : "0.65)"}`;
+            ctx.lineWidth = lvl.flipped ? 1.5 : 1;
+            ctx.setLineDash(lvl.flipped ? [] : [5, 4]);
+            ctx.beginPath();
+            ctx.moveTo(0, y);
             ctx.lineTo(W, y);
             ctx.stroke();
             ctx.setLineDash([]);
-            // label with price at the right edge
+            ctx.lineWidth = 1;
             label(
-              `${lvl.kind === "support" ? "S" : "R"} ${fmt(lvl.price)}`,
+              `${lvl.kind === "support" ? "S" : "R"} ${fmt(lvl.price)} · ${lvl.touches} touches${lvl.flipped ? " · flipped" : ""}`,
               W - 2,
               y - 5,
-              color,
-              "bold 10px sans-serif",
+              `${tone}1)`,
+              "bold 10px monospace",
               "right",
               3
             );

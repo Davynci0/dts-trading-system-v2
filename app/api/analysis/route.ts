@@ -4,8 +4,11 @@ import { analyzeM15, M15_TRENDLINE_LOOKBACK } from "@/lib/analysis/execution";
 import { findRecentSwing, inGoldenZone } from "@/lib/analysis/fibonacci";
 import { analyzeTopDown, topDownOpposes } from "@/lib/analysis/topDown";
 import { inTradingSession, tradingHoursUtc } from "@/lib/analysis/session";
+import { PULLBACK_TREND_DAYS } from "@/lib/analysis/pullback";
+import { detectKeyLevels, nearestLevels } from "@/lib/analysis/levels";
 import {
   breakoutLevels,
+  dailyTrend,
   ASIAN_END_HOUR,
   ASIAN_ENTRY_END_HOUR,
   CHANNEL_ENTRY_START_HOUR,
@@ -33,16 +36,17 @@ export async function GET(req: NextRequest) {
     const [candles, weekly, daily, h4, h1] = await Promise.all([
       fetchCandles({ instrument, granularity: "M15", count }),
       fetchCandles({ instrument, granularity: "W", count: 52 }),
-      fetchCandles({ instrument, granularity: "D", count: 90 }),
+      fetchCandles({ instrument, granularity: "D", count: 120 }), // top-down reads the last 90, the 100-day trend needs more
       fetchCandles({ instrument, granularity: "H4", count: 120 }),
-      fetchCandles({ instrument, granularity: "H1", count: 120 }),
+      // 300 closed hours: top-down reads the last 120, the key levels all of them
+      fetchCandles({ instrument, granularity: "H1", count: 300 }),
     ]);
     const analysis = analyzeM15(candles, instrument);
     if (!analysis) {
       return NextResponse.json({ candles, zones: [], fib: null, aoi: null, topDown: null, structure: [], breakout: null, gate: null });
     }
 
-    const topDown = analyzeTopDown({ weekly, daily, h4, h1 });
+    const topDown = analyzeTopDown({ weekly, daily: daily.slice(-90), h4, h1: h1.slice(-120) });
     const last = candles[candles.length - 1];
     // Draw all active zones on the chart, not just the ones near current price,
     // so the user can see the full technical landscape.
@@ -114,17 +118,23 @@ export async function GET(req: NextRequest) {
       channelWindowOpen: nextHour >= CHANNEL_ENTRY_START_HOUR && nextHour < CHANNEL_ENTRY_END_HOUR,
     };
 
-    // The pullback strategies' send gate (lib/engine/select.ts) — only shown
+    // The pullback strategies' rules (lib/analysis/pullback.ts) — only shown
     // when one of them is allowed to send.
     const [sessionStart, sessionEnd] = tradingHoursUtc();
     const sending = signalStrategies();
+    const pullbackTrend = dailyTrend(daily, PULLBACK_TREND_DAYS);
     const gate = {
       strategies: [...sending],
       pullback: [...sending].some((s) => s !== "breakout"),
       inSession: inTradingSession(last.time + 900),
       sessionHours: `${String(sessionStart).padStart(2, "0")}:00–${String(sessionEnd).padStart(2, "0")}:00 UTC`,
-      longAllowed: !topDownOpposes(topDown, "long"),
-      shortAllowed: !topDownOpposes(topDown, "short"),
+      trend: pullbackTrend,
+      trendDays: PULLBACK_TREND_DAYS,
+      longAllowed: pullbackTrend === 1 && !topDownOpposes(topDown, "long"),
+      shortAllowed: pullbackTrend === -1 && !topDownOpposes(topDown, "short"),
+      // the daily trend allows this side but the weekly structure opposes it
+      weeklyBlocks:
+        (pullbackTrend === 1 && topDownOpposes(topDown, "long")) || (pullbackTrend === -1 && topDownOpposes(topDown, "short")),
     };
 
     const sf = analysis.setForget;
@@ -160,10 +170,16 @@ export async function GET(req: NextRequest) {
       triggerTime: p.triggerTime,
     }));
 
-    const levels = analysis.levels.map((l) => ({
+    // Support and resistance: the H1 levels the engine grades signals with —
+    // the three nearest on each side of price.
+    const levels = nearestLevels(detectKeyLevels(h1, last.close), last.close, 3).map((l) => ({
       kind: l.kind,
       price: l.price,
-      time: l.time,
+      top: l.top,
+      bottom: l.bottom,
+      touches: l.touches,
+      flipped: l.flipped,
+      time: l.firstTime,
     }));
 
     return NextResponse.json({

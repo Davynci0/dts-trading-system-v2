@@ -26,7 +26,7 @@ const fmt = {
   day: (iso: string | null) => (iso ? iso.slice(0, 10) : "?"),
 };
 
-const scopeLabel = (scope: string) => scope.replace(/^(strategy|pair|year):/, "").replace("_", "/");
+const scopeLabel = (scope: string) => scope.replace(/^(strategy|pair|year|grade):/, "").replace("_", "/");
 
 /** Colour by sign only when the average is statistically distinguishable from zero. */
 function verdict(m: MetricsCore): string {
@@ -125,6 +125,7 @@ export default function BacktestsPage() {
     ["Combined", results.filter((r) => r.scope === "combined"), true],
     ["Per year", rowsOf("year:"), false],
     ["Per strategy", rowsOf("strategy:"), true],
+    ["By grade", rowsOf("grade:"), true],
     ["Per pair", rowsOf("pair:"), true],
   ];
   const hasAll = results.some((r) => r.metrics.all);

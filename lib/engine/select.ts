@@ -1,7 +1,6 @@
 import type { SignalDirection, StrategyId } from "@/lib/types";
 import type { ScoreResult } from "@/lib/analysis/scoring";
 import type { RiskResult } from "@/lib/analysis/risk";
-import type { TopDownAnalysis } from "@/lib/analysis/topDown";
 
 /**
  * The final "which setup becomes the trade" decision, shared by the live
@@ -15,19 +14,27 @@ export interface SignalCandidate {
   risk: RiskResult;
 }
 
-/** Tie-break between agreeing setups: which one defines the trade's levels. */
-export const STRATEGY_QUALITY_BONUS: Record<StrategyId, number> = {
-  breakout: 12,
-  setforget: 8,
-  zones: 4,
-  fibonacci: 0,
+/**
+ * Which setup becomes the trade when several are ready on the same candle.
+ * The breakout first (the highest win rate), then set & forget, zones, the
+ * support/resistance retest and fibonacci — the order the combined system
+ * was validated in.
+ */
+const DEFAULT_PRIORITY: StrategyId[] = ["breakout", "setforget", "zones", "sr", "fibonacci"];
+/** Override the order with STRATEGY_PRIORITY=breakout,sr,… (unlisted strategies keep their place after). */
+export const STRATEGY_PRIORITY: StrategyId[] = (() => {
+  const raw = (process.env.STRATEGY_PRIORITY ?? "").split(",").map((x) => x.trim()) as StrategyId[];
+  const listed = raw.filter((x) => DEFAULT_PRIORITY.includes(x));
+  return [...listed, ...DEFAULT_PRIORITY.filter((x) => !listed.includes(x))];
+})();
+const priorityOf = (s: StrategyId) => {
+  const i = STRATEGY_PRIORITY.indexOf(s);
+  return i < 0 ? STRATEGY_PRIORITY.length : i;
 };
 
 /**
- * Send gate: tradeable structure (stop/target/R/costs), the strategy's
- * confirmation minimum, the trading session, no opposing weekly structure
- * and an agreeing M15 trend. A trend check that is switched off for the pair
- * evaluates to true.
+ * Send gate: tradeable levels (stop, target, costs), the strategy's
+ * confirmation minimum, the trading session and the strategy's trend rule.
  */
 export function passesSendGate(c: SignalCandidate, minConfidence: number): boolean {
   return sendGateBlock(c, minConfidence) === null;
@@ -38,26 +45,8 @@ export function sendGateBlock(c: SignalCandidate, minConfidence: number): string
   if (!c.risk.ok) return c.risk.reason;
   if (c.scored.count < minConfidence) return `only ${c.scored.count} confirmations (needs ${minConfidence})`;
   if (!c.scored.inSession) return "outside the trading session (London/New York hours only)";
-  if (!c.scored.topDownAligned) return `counter-trend: the weekly structure opposes the ${c.direction}`;
-  if (!c.scored.m15Aligned) return `counter-trend: the M15 trend disagrees with the ${c.direction}`;
+  if (!c.scored.topDownAligned) return `against the trend: the daily trend or the weekly structure opposes the ${c.direction}`;
   return null;
-}
-
-export function setupQuality(c: SignalCandidate): number {
-  let q = c.scored.count * 10;
-  if (c.scored.topDownAligned) q += 35; // not fighting the weekly structure
-  const rejection = Object.entries(c.scored.confirmations).some(
-    ([k, v]) => v && /Rejection|Momentum/.test(k)
-  );
-  if (rejection) q += 12;
-  if (c.risk.ok) {
-    q += Math.min(14, c.risk.levels.rMultiple * 3); // reward potential
-    q += Math.min(8, 1 / Math.max(0.1, c.risk.levels.stopDistance / c.risk.levels.atr)); // tighter stop vs ATR
-  } else {
-    q -= 50;
-  }
-  q += STRATEGY_QUALITY_BONUS[c.scored.strategy];
-  return q;
 }
 
 export interface Selection<T extends SignalCandidate> {
@@ -70,31 +59,22 @@ export interface Selection<T extends SignalCandidate> {
 }
 
 /**
- * Reduce the candidates that passed the send gate to one trade: a single
- * direction wins (HTF bias first, summed quality as the fallback), and the
- * best setup on that side defines the levels.
+ * Reduce the candidates that passed the send gate to one trade: the
+ * highest-priority strategy defines the direction and the levels, and any
+ * other candidate in the same direction is recorded as confluence.
  */
-export function selectSignal<T extends SignalCandidate>(
-  candidates: T[],
-  topDown?: TopDownAnalysis
-): Selection<T> | null {
+export function selectSignal<T extends SignalCandidate>(candidates: T[]): Selection<T> | null {
   if (candidates.length === 0) return null;
-  const longs = candidates.filter((c) => c.direction === "long");
-  const shorts = candidates.filter((c) => c.direction === "short");
-
-  let side: SignalDirection;
-  let arbitrationNote: string | null = null;
-  if (longs.length === 0 || shorts.length === 0) {
-    side = longs.length > 0 ? "long" : "short";
-  } else if (topDown && topDown.bias !== "neutral") {
-    side = topDown.bias === "bullish" ? "long" : "short";
-    arbitrationNote = `both sides present — chose ${side} via HTF bias`;
-  } else {
-    const sideScore = (arr: T[]) => arr.reduce((s, c) => s + setupQuality(c), 0);
-    side = sideScore(longs) >= sideScore(shorts) ? "long" : "short";
-    arbitrationNote = `conflict resolved by confirmation majority: ${side}`;
-  }
-
-  const winners = [...(side === "long" ? longs : shorts)].sort((a, b) => setupQuality(b) - setupQuality(a));
-  return { side, winners, primary: winners[0], arbitrationNote };
+  const ranked = [...candidates].sort(
+    (a, b) => priorityOf(a.strategy) - priorityOf(b.strategy) || b.scored.count - a.scored.count
+  );
+  const primary = ranked[0];
+  const winners = ranked.filter((c) => c.direction === primary.direction);
+  const opposed = ranked.length - winners.length;
+  return {
+    side: primary.direction,
+    winners,
+    primary,
+    arbitrationNote: opposed > 0 ? `${opposed} opposite setup${opposed > 1 ? "s" : ""} set aside — ${primary.strategy} takes priority` : null,
+  };
 }

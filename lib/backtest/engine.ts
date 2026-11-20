@@ -4,7 +4,6 @@ import {
   analyzeM15,
   scoreSetup,
   computeRiskLevels,
-  trendModeFor,
   type ScoringContext,
   type ScoreResult,
   type RiskLevels,
@@ -27,7 +26,7 @@ export const LOT_SIZES: Record<string, number> = {
   "0.1": 10000,
   "1": 100000,
 };
-const ALL_STRATEGIES: StrategyId[] = ["breakout", "zones", "setforget", "fibonacci"];
+const ALL_STRATEGIES: StrategyId[] = ["breakout", "zones", "setforget", "fibonacci", "sr"];
 
 export interface BacktestTrade {
   strategy: StrategyId;
@@ -186,8 +185,8 @@ export function runBacktest(opts: {
   fixedUnits?: number;
   /** Risk percent of account balance per trade (default 0.01 = 1%). Only used when fixedUnits is omitted. */
   riskPercent?: number;
-  /** Minimum confirmations to enter a trade. A single number applies to all
-   *  strategies; a per-strategy record mirrors the live scanner's gate. Default 3. */
+  /** Minimum confirmations to enter a trade — a research filter. A single
+   *  number applies to all strategies. Default 1: the core trigger alone, as live. */
   minConfidence?: number | Partial<Record<StrategyId, number>>;
   /** Live-parity mode: at most ONE open trade at a time (per pair), regardless
    *  of strategy — mirrors the scanner's one-trade-per-pair rule. When false
@@ -203,9 +202,8 @@ export function runBacktest(opts: {
   /** USD value of 1 unit of the quote currency — sizes USD risks correctly on
    *  JPY pairs and crosses (GBP_JPY, GBP_AUD, ...). Defaults to 1 (USD-quoted). */
   quoteUsdRate?: number;
-  /** Apply the scanner's send gate: HTF bias and M15 trend must both agree
-   *  (each honours the pair's trend mode). Default true — set false only to
-   *  research raw setups the live system would never send. */
+  /** Apply the scanner's send gate (session and trend rule). Default true —
+   *  set false only to research raw setups the live system would never send. */
   requireTrendAlignment?: boolean;
   /** Bars a trade may stay open before it is closed at market. */
   maxHoldCandles?: number;
@@ -229,7 +227,7 @@ export function runBacktest(opts: {
     topDownCandles,
     accountBalance = 10000,
     fixedUnits,
-    minConfidence = 3,
+    minConfidence = 1,
     oneTradePerPair = false,
     strategies = ALL_STRATEGIES,
     requireChecks = [],
@@ -242,7 +240,7 @@ export function runBacktest(opts: {
   } = opts;
   const minFor = (s: StrategyId): number => {
     if (typeof minConfidence === "number") return minConfidence;
-    return minConfidence[s] ?? 3;
+    return minConfidence[s] ?? 1;
   };
   const cost = tradeCost(pair) * Math.max(0, costMultiplier);
 
@@ -252,7 +250,6 @@ export function runBacktest(opts: {
   const oosStart = Math.floor(candles.length * (1 - OUT_OF_SAMPLE_FRACTION));
 
   const stepSeconds = barSeconds(candles, 900);
-  const trendMode = trendModeFor(pair);
   const htfClosed = closedBarCursor(htfCandles, 3600);
   const tdClosed = topDownCandles
     ? {
@@ -313,7 +310,7 @@ export function runBacktest(opts: {
     if (topDownCandles && tdClosed) {
       const w = tdClosed.weekly(closeTime);
       const d = tdClosed.daily(closeTime);
-      daily = topDownCandles.daily.slice(Math.max(0, d - 90), d);
+      daily = topDownCandles.daily.slice(Math.max(0, d - 120), d); // the 100-day trend needs more than top-down's 90
       const h4 = tdClosed.h4(closeTime);
       const h1 = tdClosed.h1(closeTime);
       const key = `${w}:${d}:${h4}:${h1}`;
@@ -340,7 +337,6 @@ export function runBacktest(opts: {
       fib,
       setForget,
       topDown,
-      trendMode,
       headShoulders: m15.headShoulders,
       daily,
     };
@@ -352,7 +348,7 @@ export function runBacktest(opts: {
       if (!strategies.includes(strategy)) continue;
       if (open[strategy]) continue; // one open trade per strategy
       const scored = scoreSetup(strategy, ctx);
-      if (!scored.hasTrigger || !scored.fired) continue;
+      if (!scored.hasTrigger) continue;
       if (scored.count < minFor(strategy)) continue;
       // research filters: measure individual checks' marginal value
       if (requireChecks.some((c) => scored.confirmations[c] !== true)) continue;
@@ -381,7 +377,7 @@ export function runBacktest(opts: {
 
     // Live parity: agreeing strategies collapse into ONE trade defined by the
     // best setup. Otherwise each strategy books its own trade.
-    const selection = oneTradePerPair ? selectSignal(candidates, topDown) : null;
+    const selection = oneTradePerPair ? selectSignal(candidates) : null;
     const entries = selection
       ? [{ primary: selection.primary, group: selection.winners }]
       : candidates.map((c) => ({ primary: c, group: [c] }));

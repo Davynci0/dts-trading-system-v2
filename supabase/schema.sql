@@ -8,7 +8,7 @@ create table if not exists public.signals (
   created_at timestamptz not null default now(),
   pair text not null,
   direction text not null check (direction in ('long', 'short')),
-  strategy text not null check (strategy in ('trendline', 'structure', 'zones', 'setforget', 'fibonacci', 'breakout')),
+  strategy text not null check (strategy in ('trendline', 'structure', 'zones', 'setforget', 'fibonacci', 'breakout', 'sr')),
   entry double precision not null,
   stop_loss double precision not null,
   take_profit double precision not null,

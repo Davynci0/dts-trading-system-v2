@@ -4,11 +4,10 @@ import type { Zone } from "./zones";
 import type { StructureState } from "./structure";
 import type { FibSetup } from "./fibonacci";
 import { classifyStructure } from "./structure";
-import { topDownAgrees, topDownOpposes, type TopDownAnalysis } from "./topDown";
+import { topDownOpposes, type TopDownAnalysis } from "./topDown";
 import { inTradingSession } from "./session";
 import {
   goldenZoneHasPoi,
-  htfAgrees,
   isRejectionCandle,
   rsiTurning,
   zoneIsVeryFresh,
@@ -17,24 +16,9 @@ import { inGoldenZone } from "./fibonacci";
 import { detectZoneEntry } from "./zones";
 import { setForgetEntry, type SetForgetSetup } from "./setForget";
 import type { HeadShouldersPattern } from "./headshoulders";
-import { detectBreakout, type BreakoutSetup } from "./breakout";
-
-const REQUIRE_HTF_TREND = (process.env.REQUIRE_HTF_TREND ?? "true") !== "false";
-const REQUIRE_M15_TREND = (process.env.REQUIRE_M15_TREND ?? "true") !== "false";
-
-/** Per-pair trend filter mode. Override the global REQUIRE_* settings per pair.
- *  Values: BOTH (default from global), M15 (M15 only), HTF (HTF only), NONE.
- *  Set via TREND_MODE_XAU_USD=M15, TREND_MODE_GBP_JPY=BOTH, etc. */
-export type TrendMode = "BOTH" | "M15" | "HTF" | "NONE";
-
-export function trendModeFor(instrument: string): { htf: boolean; m15: boolean } {
-  const raw = process.env[`TREND_MODE_${instrument}`]?.toUpperCase();
-  if (raw === "M15") return { htf: false, m15: true };
-  if (raw === "HTF") return { htf: true, m15: false };
-  if (raw === "NONE") return { htf: false, m15: false };
-  if (raw === "BOTH") return { htf: true, m15: true };
-  return { htf: REQUIRE_HTF_TREND, m15: REQUIRE_M15_TREND };
-}
+import { detectBreakout, dailyTrend, type BreakoutSetup } from "./breakout";
+import { PULLBACK_TREND_DAYS } from "./pullback";
+import { backingLevel, detectLevelRetest, type KeyLevel, type LevelRetest } from "./levels";
 
 export interface ScoringContext {
   instrument: string;
@@ -52,11 +36,9 @@ export interface ScoringContext {
   setForget?: SetForgetSetup | null;
   /** Present in live/top-down runs; absent only for legacy test callers. */
   topDown?: TopDownAnalysis;
-  /** Per-pair trend filter override; defaults from REQUIRE_* env vars. */
-  trendMode?: { htf: boolean; m15: boolean };
   /** Active H&S / inverse-H&S reversal patterns (neckline break just fired). */
   headShoulders?: HeadShouldersPattern[];
-  /** Closed daily candles — the trend breakout's daily-trend filter. */
+  /** Closed daily candles — every strategy's daily-trend filter reads these. */
   daily?: Candle[];
 }
 
@@ -69,12 +51,17 @@ export interface ScoreResult {
   count: number;
   /** signal fires at >= 3 */
   fired: boolean;
-  /** False when the weekly structure opposes this setup (send-gate veto). */
+  /** Send gate: the strategy's higher-timeframe trend rule is satisfied. For the
+   *  pullback strategies that is "daily trend agrees and the weekly structure
+   *  does not oppose"; a breakout only exists when its own trend rule holds. */
   topDownAligned: boolean;
-  /** False when M15 structure conflicts with this setup. */
+  /** Whether the M15 swing structure agrees — shown on the checklist, not a gate. */
   m15Aligned: boolean;
   /** False when the entry would fall outside the trading session. */
   inSession: boolean;
+  /** The flipped support/resistance level just behind the entry, when there is
+   *  one. It grades the signal (KEY_LEVEL_CHECK) — it never gates it. */
+  keyLevel: KeyLevel | null;
   /** true when no core trigger exists at all — caller should not track state */
   hasTrigger: boolean;
   /** the setup's trigger for risk context */
@@ -83,10 +70,16 @@ export interface ScoreResult {
     zone?: Zone;
     setForget?: SetForgetSetup;
     breakout?: BreakoutSetup;
+    level?: LevelRetest;
   } | null;
 }
 
-export const SIGNAL_THRESHOLD = 3; // threshold that makes a setup "watchable" / tracked
+/** The one checklist item that separated better trades from the rest in
+ *  testing: a flipped support/resistance level just behind the entry. */
+export const KEY_LEVEL_CHECK = "Key level behind the entry";
+
+/** Checks met at which the tracker treats a pullback setup as well confirmed. Not a send gate. */
+export const SIGNAL_THRESHOLD = 3;
 
 /** M15 execution-timeframe trend alignment: avoid counter-M15 trades. */
 export function m15Agrees(structureState: StructureState, direction: SignalDirection): boolean {
@@ -96,18 +89,16 @@ export function m15Agrees(structureState: StructureState, direction: SignalDirec
   );
 }
 
-function htfTrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolean {
-  const mode = ctx.trendMode ?? { htf: REQUIRE_HTF_TREND, m15: REQUIRE_M15_TREND };
-  if (!mode.htf) return true;
-  return ctx.topDown ? topDownAgrees(ctx.topDown, direction) : htfAgrees(ctx.htfCandles, direction);
+/** Daily trend for the pullback strategies: +1 / −1 / 0 (unknown). */
+function pullbackTrend(ctx: ScoringContext): 1 | -1 | 0 {
+  return dailyTrend(ctx.daily ?? [], PULLBACK_TREND_DAYS);
 }
 
-/** Send-gate veto: nothing on the higher timeframes argues against the trade.
- *  Looser than the confirmation point above — a ranging weekly passes. */
-function htfTrendPermits(ctx: ScoringContext, direction: SignalDirection): boolean {
-  const mode = ctx.trendMode ?? { htf: REQUIRE_HTF_TREND, m15: REQUIRE_M15_TREND };
-  if (!mode.htf) return true;
-  return ctx.topDown ? !topDownOpposes(ctx.topDown, direction) : htfAgrees(ctx.htfCandles, direction);
+/** The pullback strategies' trend gate: the daily trend agrees with the trade
+ *  and the weekly swing structure does not oppose it. */
+function trendPermits(ctx: ScoringContext, direction: SignalDirection): boolean {
+  if (pullbackTrend(ctx) !== (direction === "long" ? 1 : -1)) return false;
+  return !ctx.topDown || !topDownOpposes(ctx.topDown, direction);
 }
 
 /** The moment the latest candle closed — when a signal from it would be entered. */
@@ -118,20 +109,20 @@ function entryTime(candles: Candle[]): number {
   return last.time + (step > 0 && step <= 4 * 3600 ? step : 900);
 }
 
-/**
- * M15 trend = the M15 swing structure (HH+HL / LH+LL on the zigzag-filtered
- * swings the setups are built from). It deliberately does NOT also require
- * price beyond a rising EMA50: every strategy here buys a pullback, and a
- * 50–79% retracement sits on the wrong side of a fast EMA by construction.
- */
+/** M15 trend = the M15 swing structure (HH+HL / LH+LL on the zigzag-filtered
+ *  swings the setups are built from). */
 function m15TrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolean {
-  const mode = ctx.trendMode ?? { htf: REQUIRE_HTF_TREND, m15: REQUIRE_M15_TREND };
-  if (!mode.m15) return true;
   return m15Agrees(classifyStructure(ctx.structuralPivots ?? ctx.pivots), direction);
 }
 
+/** "HTF trend agrees" on the checklist = the daily trend the gate uses. */
+function htfTrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolean {
+  return pullbackTrend(ctx) === (direction === "long" ? 1 : -1);
+}
+
 /**
- * 6-point confirmation scoring. Deterministic checks only.
+ * Find a strategy's setup on the latest candle and score its checklist.
+ * Deterministic checks only.
  */
 export function scoreSetup(
   strategy: StrategyId,
@@ -151,22 +142,52 @@ export function scoreSetup(
     // its own — the pullback strategies' gates do not apply.
     const setup = detectBreakout(candles, ctx.daily ?? [], ctx.atrValue);
     if (!setup) return noTrigger(strategy);
+    const keyLevel = backingLevel(candles, ctx.htfCandles, setup.direction);
     const confirmations = {
       [setup.kind === "asian" ? "Closed beyond the Asian range" : "Closed beyond the 1-week channel"]: true,
       "Daily trend agrees": true,
       "Inside the entry window": true,
+      [KEY_LEVEL_CHECK]: keyLevel != null,
     };
     return {
       strategy,
       direction: setup.direction,
       confirmations,
-      count: 3,
+      count: Object.values(confirmations).filter(Boolean).length,
       fired: true,
       topDownAligned: true,
       m15Aligned: true,
       inSession: true,
+      keyLevel,
       hasTrigger: true,
       trigger: { breakout: setup },
+    };
+  }
+
+  if (strategy === "sr") {
+    const retest = detectLevelRetest(candles, ctx.htfCandles);
+    if (!retest) return noTrigger(strategy);
+    const last = candles[candles.length - 1];
+    const confirmations = {
+      "Retest of a broken level": true, // core trigger
+      "Level turned price 3+ times": retest.level.touches >= 3,
+      "Candle closes with the trade": retest.direction === "long" ? last.close > last.open : last.close < last.open,
+      "HTF trend agrees": htfTrendAgrees(ctx, retest.direction),
+      [KEY_LEVEL_CHECK]: retest.level.flipped,
+    };
+    const count = Object.values(confirmations).filter(Boolean).length;
+    return {
+      strategy,
+      direction: retest.direction,
+      confirmations,
+      count,
+      fired: count >= SIGNAL_THRESHOLD,
+      topDownAligned: trendPermits(ctx, retest.direction),
+      m15Aligned: m15TrendAgrees(ctx, retest.direction),
+      inSession: inTradingSession(entryTime(candles)),
+      keyLevel: retest.level.flipped ? retest.level : null,
+      hasTrigger: true,
+      trigger: { level: retest },
     };
   }
 
@@ -234,13 +255,13 @@ export function scoreSetup(
     confirmations["M15 trend agrees"] = m15TrendAgrees(ctx, direction);
   }
 
+  const keyLevel = backingLevel(candles, ctx.htfCandles, direction);
+  confirmations[KEY_LEVEL_CHECK] = keyLevel != null;
   const count = Object.values(confirmations).filter(Boolean).length;
-  // Top-down / M15 agreement are confirmation points here, not vetoes — a
-  // strategy reaching the threshold still "fires" for tracking. The send gate
-  // (lib/engine/select.ts) is what requires these flags. Both honour the
-  // pair's trend mode, so a pair with a check switched off is never vetoed
-  // by it.
-  const topDownAligned = htfTrendPermits(ctx, direction);
+  // The checklist is context for the trader. What decides whether the setup
+  // may be sent is the trend gate and the session (lib/analysis/pullback.ts,
+  // enforced in lib/engine/select.ts).
+  const topDownAligned = trendPermits(ctx, direction);
   const m15Aligned = m15TrendAgrees(ctx, direction);
   return {
     strategy,
@@ -251,6 +272,7 @@ export function scoreSetup(
     topDownAligned,
     m15Aligned,
     inSession: inTradingSession(entryTime(candles)),
+    keyLevel,
     hasTrigger: true,
     trigger,
   };
@@ -266,6 +288,7 @@ function noTrigger(strategy: StrategyId): ScoreResult {
     topDownAligned: false,
     m15Aligned: false,
     inSession: false,
+    keyLevel: null,
     hasTrigger: false,
     trigger: null,
   };

@@ -3,6 +3,7 @@ import { atr } from "./indicators";
 import { tradeCost, pipSize } from "./instruments";
 import { significantPivots, type Pivot } from "./pivots";
 import { BREAKOUT_TARGET_R, CHANNEL_STOP_ATR } from "./breakout";
+import { PULLBACK_STOP_ATR, PULLBACK_TARGET_R } from "./pullback";
 
 export const STOP_BUFFER_ATR_FRACTION = 0.25; // room beyond the swing so the stop isn't on the wick
 export const MIN_STOP_ATR = 0.5; // a stop inside half an ATR sits within normal candle noise
@@ -13,11 +14,9 @@ export const MIN_RR = Math.max(0, Number(process.env.MIN_R_MULTIPLE ?? 2.0));
 export const RISK_PCT_PER_TRADE = 0.01; // 1% account risk per trade
 const STRUCTURE_SWING_ATR = 0.5; // only swings this many ATR in size count as structure
 // Trading costs (spread + slippage) may be at most this share of the risk: a
-// stop a few pips from entry on a pair with a multi-pip spread gives most of
+// stop a few pips from entry on an instrument with a wide spread gives most of
 // its edge to the broker. Override with MAX_COST_SHARE (0 disables).
 export const MAX_COST_SHARE = Math.max(0, Number(process.env.MAX_COST_SHARE ?? 0.1));
-/** Fib depth past which a retracement has stopped being a pullback. */
-const DEEP_RETRACE = 0.786;
 
 export interface RiskLevels {
   direction: SignalDirection;
@@ -56,6 +55,8 @@ export interface SetupTrigger {
   zone?: { kind: "demand" | "supply"; top: number; bottom: number };
   fib?: { direction: "long" | "short"; swingLow: { price: number }; swingHigh: { price: number }; goldenTop: number; goldenBottom: number };
   setForget?: { direction: "long" | "short"; legLow: { price: number }; legHigh: { price: number }; aoiTop: number; aoiBottom: number };
+  /** a support/resistance retest — traded under the pullback rule */
+  level?: { direction: "long" | "short" };
   /** a trend breakout carries its own stop; the target is a fixed multiple of the risk */
   breakout?: { kind: "asian" | "channel"; direction: "long" | "short"; stop: number; high: number; low: number };
 }
@@ -67,49 +68,20 @@ interface Candidate {
 }
 
 /**
- * The price that proves the setup wrong, when the setup defines one:
- *  - supply/demand zone → the zone's far (distal) edge,
- *  - fib golden zone    → its deep (78.6%) edge,
- *  - set & forget AOI   → the 78.6% retracement of the impulse leg.
- * A stop anywhere short of this sits INSIDE the area the trade expects price
- * to work in, and is hit by the ordinary fill of that area.
- */
-function invalidationLevel(trigger: SetupTrigger | null | undefined, long: boolean): { price: number; label: string } | null {
-  if (!trigger) return null;
-  if (trigger.zone) {
-    return long
-      ? { price: trigger.zone.bottom, label: "demand zone low" }
-      : { price: trigger.zone.top, label: "supply zone high" };
-  }
-  if (trigger.fib) {
-    return long
-      ? { price: trigger.fib.goldenBottom, label: "78.6% retracement" }
-      : { price: trigger.fib.goldenTop, label: "78.6% retracement" };
-  }
-  if (trigger.setForget) {
-    const { legLow, legHigh } = trigger.setForget;
-    const range = legHigh.price - legLow.price;
-    return long
-      ? { price: legHigh.price - DEEP_RETRACE * range, label: "78.6% retracement of the impulse leg" }
-      : { price: legLow.price + DEEP_RETRACE * range, label: "78.6% retracement of the impulse leg" };
-  }
-  return null;
-}
-
-/**
- * Stop and target come from market structure; ATR (volatility) and trading
- * costs only decide whether the structure is tradeable.
+ * Entry, stop, target and position size for one trade.
  *
- * - Stop: beyond the setup's own invalidation level when the caller passes the
- *   `trigger` (see invalidationLevel); otherwise beyond the nearest
- *   significant swing. Either way it must clear MIN_STOP_ATR of noise and be
- *   wide enough that entry costs stay under MAX_COST_SHARE of the risk — a
- *   stop that is too tight is widened to that floor, never left in the noise.
- * - Target: the nearest structural level ahead — a swing extreme or an
- *   opposing supply/demand zone. With no level ahead (e.g. price at new highs)
- *   it falls back to a measured move of the last swing leg.
- * - Skipped when the stop ends up too far away. When MIN_RR > 0, it also
- *   requires the chosen target to pay at least MIN_RR.
+ * With a `trigger` (the setup that fired) the levels follow the strategy's
+ * own rule, and the target is a fixed multiple of the risk:
+ *  - trend breakout → the setup's stop (middle of the Asian range, or
+ *    CHANNEL_STOP_ATR × ATR from the close), target BREAKOUT_TARGET_R × risk,
+ *  - pullback (zone / fib / set & forget) → stop PULLBACK_STOP_ATR × ATR from
+ *    the entry, target PULLBACK_TARGET_R × risk.
+ * A trade is refused when spread + slippage would exceed MAX_COST_SHARE of
+ * the risk.
+ *
+ * Without a trigger (the risk-preview endpoint) the levels come from market
+ * structure: stop beyond the nearest significant swing, target at the nearest
+ * swing or opposing zone that pays at least MIN_RR.
  */
 export function computeRiskLevels(opts: {
   instrument: string;
@@ -139,35 +111,49 @@ export function computeRiskLevels(opts: {
     return { ok: false, reason: "ATR unavailable (not enough candles)", levels: null };
   }
 
-  // --- trend breakout: the setup defines both levels ---
-  const breakout = opts.trigger?.breakout;
-  if (breakout) {
-    const stopLoss = breakout.stop;
-    const stopDistance = (entry - stopLoss) * (long ? 1 : -1);
+  // --- a strategy setup: its own stop rule and a fixed-R target ---
+  const trigger = opts.trigger;
+  const sign = long ? 1 : -1;
+  let rule: { stopLoss: number; targetR: number; stopBasis: string } | null = null;
+  if (trigger?.breakout) {
+    rule = {
+      stopLoss: trigger.breakout.stop,
+      targetR: BREAKOUT_TARGET_R,
+      stopBasis:
+        trigger.breakout.kind === "asian"
+          ? `middle of the Asian range ${fmt(trigger.breakout.low)}–${fmt(trigger.breakout.high)}`
+          : `${CHANNEL_STOP_ATR} ATR ${long ? "below" : "above"} the breakout close`,
+    };
+  } else if (trigger?.zone || trigger?.fib || trigger?.setForget || trigger?.level) {
+    rule = {
+      stopLoss: entry - sign * PULLBACK_STOP_ATR * atrValue,
+      targetR: PULLBACK_TARGET_R,
+      stopBasis: `${PULLBACK_STOP_ATR} ATR ${long ? "below" : "above"} the entry`,
+    };
+  }
+  if (rule) {
+    const stopDistance = (entry - rule.stopLoss) * sign;
     if (!(stopDistance > 0)) {
-      return { ok: false, reason: "price has already closed through the breakout's stop", levels: null };
+      return { ok: false, reason: "price has already closed through the setup's stop", levels: null };
     }
     if (!(quoteUsdRate > 0)) {
       return { ok: false, reason: "USD conversion rate for the quote currency is unavailable — cannot size the position", levels: null };
     }
-    const takeProfit = entry + (long ? 1 : -1) * BREAKOUT_TARGET_R * stopDistance;
+    const takeProfit = entry + sign * rule.targetR * stopDistance;
     const riskAmount = accountBalance * RISK_PCT_PER_TRADE;
     const levels: RiskLevels = {
       direction,
       entry,
-      stopLoss,
+      stopLoss: rule.stopLoss,
       takeProfit,
       stopDistance,
-      rMultiple: BREAKOUT_TARGET_R,
+      rMultiple: rule.targetR,
       atr: atrValue,
       positionUnits: Math.floor(riskAmount / (stopDistance * quoteUsdRate)),
       riskAmount,
       tpSource: "fixed_r",
-      stopBasis:
-        breakout.kind === "asian"
-          ? `middle of the Asian range ${fmt(breakout.low)}–${fmt(breakout.high)}`
-          : `${CHANNEL_STOP_ATR} ATR ${long ? "below" : "above"} the breakout close`,
-      targetBasis: `${BREAKOUT_TARGET_R}× the risk`,
+      stopBasis: rule.stopBasis,
+      targetBasis: `${rule.targetR}× the risk`,
       riskPips: pips(stopDistance),
       rewardPips: pips(Math.abs(takeProfit - entry)),
     };
@@ -191,27 +177,10 @@ export function computeRiskLevels(opts: {
   // spread + slippage paid at entry is a small share of what is being risked
   const costFloor = MAX_COST_SHARE > 0 ? tradeCost(instrument) / MAX_COST_SHARE : 0;
   const minStop = Math.max(MIN_STOP_ATR * atrValue, costFloor);
-  const widenedNote = costFloor > MIN_STOP_ATR * atrValue ? "widened so costs stay a small share of the risk" : "widened to clear candle noise";
 
   let stopLoss: number;
   let stopBasis: string;
-  const invalidation = invalidationLevel(opts.trigger, long);
-  if (invalidation) {
-    // --- stop: beyond the level that proves this setup wrong ---
-    if (long ? entry <= invalidation.price : entry >= invalidation.price) {
-      return {
-        ok: false,
-        reason: `price has already closed through the setup's invalidation (${invalidation.label} ${fmt(invalidation.price)})`,
-        levels: null,
-      };
-    }
-    stopLoss = long ? invalidation.price - buffer : invalidation.price + buffer;
-    stopBasis = `${long ? "below" : "above"} ${invalidation.label} ${fmt(invalidation.price)}`;
-    if (Math.abs(entry - stopLoss) < minStop) {
-      stopLoss = long ? entry - minStop : entry + minStop;
-      stopBasis += ` (${widenedNote})`;
-    }
-  } else if (long) {
+  if (long) {
     // --- stop: beyond the price-nearest significant swing that clears the
     // minimum distance. Anchoring to the nearest swing in PRICE (not the most
     // recent one) keeps the stop proportional to the structure around entry. ---

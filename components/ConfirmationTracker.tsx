@@ -5,7 +5,8 @@ import { STRATEGIES, type StrategyId } from "@/lib/types";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 
 const CONFIRMATIONS: Record<StrategyId, string[]> = {
-  breakout: ["Closed beyond the level", "Daily trend agrees", "Inside the entry window"],
+  sr: ["Retest of a broken level", "Level turned price 3+ times", "Candle closes with the trade", "HTF trend agrees", "Key level behind the entry"],
+  breakout: ["Closed beyond the level", "Daily trend agrees", "Inside the entry window", "Key level behind the entry"],
   zones: [
     "Price entered zone",
     "Rejection candle in zone",
@@ -13,6 +14,7 @@ const CONFIRMATIONS: Record<StrategyId, string[]> = {
     "Momentum (RSI) turning",
     "HTF trend agrees",
     "M15 trend agrees",
+    "Key level behind the entry",
   ],
   setforget: [
     "AOI first touch",
@@ -21,6 +23,7 @@ const CONFIRMATIONS: Record<StrategyId, string[]> = {
     "Momentum (RSI) turning",
     "HTF trend agrees",
     "M15 trend agrees",
+    "Key level behind the entry",
   ],
   fibonacci: [
     "Price in golden zone",
@@ -29,6 +32,7 @@ const CONFIRMATIONS: Record<StrategyId, string[]> = {
     "Momentum (RSI) turning",
     "HTF trend agrees",
     "M15 trend agrees",
+    "Key level behind the entry",
   ],
 };
 

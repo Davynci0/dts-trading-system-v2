@@ -1,4 +1,4 @@
-export type StrategyId = "breakout" | "fibonacci" | "zones" | "setforget";
+export type StrategyId = "breakout" | "fibonacci" | "zones" | "setforget" | "sr";
 export type SignalDirection = "long" | "short";
 
 export interface Candle {
@@ -64,12 +64,14 @@ export const STRATEGIES: { id: StrategyId; label: string }[] = [
   { id: "zones", label: "Supply/Demand Zone" },
   { id: "setforget", label: "Alex G Set & Forget" },
   { id: "fibonacci", label: "Fibonacci Retracement" },
+  { id: "sr", label: "Support/Resistance Retest" },
 ];
 
 /** How many checks each strategy's confirmation list has. */
 export const CHECKS: Record<StrategyId, number> = {
-  breakout: 3,
-  zones: 6,
-  setforget: 6,
-  fibonacci: 6,
+  breakout: 4,
+  zones: 7,
+  setforget: 7,
+  fibonacci: 7,
+  sr: 5,
 };

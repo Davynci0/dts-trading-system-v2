@@ -1,19 +1,17 @@
 /**
- * Trading-session gate. Signals are only sent during the New York session
- * (which opens inside the London overlap): 12:00–21:00 UTC.
+ * Trading-session gate for the pullback strategies: London and New York,
+ * 07:00–20:00 UTC — the same hours the trend breakout trades.
  *
  *  - The Asian session is excluded: thin liquidity chops through zones built
  *    by London/NY volatility, and entries there lose in backtests year after
  *    year.
  *  - 21:00–23:00 UTC is the daily rollover, where real spreads are several
  *    times wider than any fixed-spread model assumes.
- *  - The London morning (06:00–12:00) is the judgement call; add it back with
- *    TRADING_HOURS_UTC="6-21".
  *
  * Override with TRADING_HOURS_UTC="start-end" ("0-24" disables the gate).
  * `end` is exclusive; a window may wrap midnight.
  */
-const DEFAULT_HOURS: [number, number] = [12, 21];
+const DEFAULT_HOURS: [number, number] = [7, 20];
 
 export function tradingHoursUtc(raw: string | undefined = process.env.TRADING_HOURS_UTC): [number, number] {
   const m = raw?.trim().match(/^(\d{1,2})\s*-\s*(\d{1,2})$/);

@@ -6,7 +6,6 @@ import {
   computeRiskLevels,
   analyzeM15,
   EXECUTION_HTF,
-  trendModeFor,
   type ScoringContext,
   type ScoreResult,
 } from "@/lib/analysis";
@@ -27,10 +26,11 @@ const STRATEGY_LABELS: Record<StrategyId, string> = {
   zones: "Supply/Demand Zone",
   setforget: "Alex G Set & Forget",
   fibonacci: "Fibonacci Retracement",
+  sr: "Support/Resistance Retest",
 };
 
 /** Every strategy is scanned and tracked; SIGNAL_STRATEGIES decides which may send. */
-const ENABLED_STRATEGIES: StrategyId[] = ["breakout", "zones", "setforget", "fibonacci"];
+const ENABLED_STRATEGIES: StrategyId[] = ["breakout", "zones", "setforget", "fibonacci", "sr"];
 
 
 interface SetupState {
@@ -102,11 +102,12 @@ export async function runScan(opts: {
     try {
       const [weekly, daily, h4, h1] = await Promise.all([
         fetchCandles({ instrument: pair, granularity: "W", count: 52 }),
-        fetchCandles({ instrument: pair, granularity: "D", count: 90 }),
+        // 120 closed days: top-down reads the last 90, the 100-day trend needs more
+        fetchCandles({ instrument: pair, granularity: "D", count: 120 }),
         fetchCandles({ instrument: pair, granularity: "H4", count: 120 }),
         fetchCandles({ instrument: pair, granularity: "H1", count: 120 }),
       ]);
-      topDown = analyzeTopDown({ weekly, daily, h4, h1 });
+      topDown = analyzeTopDown({ weekly, daily: daily.slice(-90), h4, h1 });
       dailyCandles = daily;
     } catch (e) {
       events.push({
@@ -147,7 +148,6 @@ export async function runScan(opts: {
           fib,
           setForget,
           topDown,
-          trendMode: trendModeFor(pair),
           headShoulders: m15.headShoulders,
           daily: dailyCandles,
         };
@@ -350,6 +350,10 @@ export async function runScan(opts: {
 }
 
 function triggerDescription(scored: ScoreResult): string {
+  if (scored.strategy === "sr" && scored.trigger?.level) {
+    const l = scored.trigger.level;
+    return `retest of ${l.direction === "long" ? "old resistance as support" : "old support as resistance"} at ${l.level.price.toFixed(2)} (${l.level.touches} touches)`;
+  }
   if (scored.strategy === "breakout" && scored.trigger?.breakout) {
     const b = scored.trigger.breakout;
     return `closed ${b.direction === "long" ? "above" : "below"} the ${b.kind === "asian" ? "Asian range" : "1-week channel"} at ${b.level.toFixed(2)} with the daily trend`;
@@ -434,54 +438,46 @@ function skipReasonFor(pair: string, f: Firing): string {
   return sendGateBlock(f, minConfidenceFor(pair, f.scored.strategy)) ?? "not selected";
 }
 
-/** Per-strategy minimum confirmations required before a signal is sent.
- *  Zones and set & forget send at 4 of 6 — 3/6 is the weakest bucket for
- *  every strategy and nothing is gained above 4. Fibonacci is the most
- *  frequent setup and the weakest, so it needs a perfect 6/6.
- *
- *  Override with ZONES_MIN_CONFIDENCE / SETFORGET_MIN_CONFIDENCE /
- *  FIB_MIN_CONFIDENCE (1–6); check the effect with scripts/backtest.ts.
- */
-const ZONES_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.ZONES_MIN_CONFIDENCE ?? 4)));
-const FIB_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.FIB_MIN_CONFIDENCE ?? 6)));
-const SETFORGET_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.SETFORGET_MIN_CONFIDENCE ?? 4)));
+/** Confirmations a setup needs before it may be sent. The breakout either
+ *  meets all three of its conditions or does not exist. For the pullback
+ *  strategies the core trigger is enough: what gates them is the daily trend,
+ *  the weekly structure and the session (lib/analysis/pullback.ts) — requiring
+ *  more of the checklist was tested and made every one of them worse. */
 export const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
-  // a breakout either meets all three of its conditions or does not exist
   breakout: 3,
-  zones: ZONES_MIN_CONFIDENCE,
-  setforget: SETFORGET_MIN_CONFIDENCE,
-  fibonacci: FIB_MIN_CONFIDENCE,
+  zones: 1,
+  setforget: 1,
+  fibonacci: 1,
+  sr: 1,
 };
 
-/** Per-pair gate override: set FIB_MIN_CONFIDENCE_XAU_USD=4 (or ZONES_...,
- *  SETFORGET_...) to use a different confirmation minimum for one pair. */
-export function minConfidenceFor(pair: string, strategy: StrategyId): number {
-  const envName = `${strategy.toUpperCase()}_MIN_CONFIDENCE_${pair}`;
-  const raw = Number(process.env[envName]);
-  if (Number.isFinite(raw) && raw >= 1 && raw <= 6) return Math.round(raw);
+export function minConfidenceFor(_pair: string, strategy: StrategyId): number {
   return STRATEGY_MIN_CONFIDENCE[strategy];
 }
-
-/** Pairs allowed to SEND live signals (Telegram + signals table). A scanned
- *  pair that is not listed is watch-only: TA, confirmation trackers and feed
- *  events, but no signal. Override with the SIGNAL_PAIRS env. */
-const DEFAULT_SIGNAL_PAIRS = ["XAU_USD"];
 
 /** Allow the same setup to fire more than once (no permanent signaled dedup).
  *  Useful for scalping/re-entry styles. Default false. */
 const ALLOW_REPEAT_SIGNALS = (process.env.ALLOW_REPEAT_SIGNALS ?? "false") === "true";
 /** Minimum minutes between repeat signals for the same setup. Default 60. */
 const REPEAT_SIGNAL_COOLDOWN_MIN = Math.max(0, Number(process.env.REPEAT_SIGNAL_COOLDOWN_MIN ?? 60));
-/** Whether to run AI vision validation before sending a signal. Default true.
- *  Vision can only REJECT a signal; it never creates a setup. */
+/** Whether to run the AI vision read on a signal's chart. Default true. */
 const AI_VISION_ENABLED = (process.env.AI_VISION_ENABLED ?? "true") !== "false";
-/** Minimum AI vision confidence (1–10) to approve a signal. Default 5. */
+/** The vision read is a note on the signal, not a veto: the strategies' record
+ *  was measured without it, so by default it cannot hold a signal back. Set
+ *  VISION_CAN_VETO=true to let a rejection (or a confidence under
+ *  VISION_MIN_CONFIDENCE) skip the signal. */
+const VISION_CAN_VETO = (process.env.VISION_CAN_VETO ?? "false") === "true";
+/** Minimum AI vision confidence (1–10) to approve a signal when it can veto. Default 5. */
 const VISION_MIN_CONFIDENCE = Math.max(1, Math.min(10, Number(process.env.VISION_MIN_CONFIDENCE ?? 5)));
+
+/** A scanned pair that is not listed here is watch-only: TA, confirmation
+ *  trackers and feed events, but no signal. Override with the SIGNAL_PAIRS env. */
+const DEFAULT_SIGNAL_PAIRS = ["XAU_USD"];
 
 /** Strategies allowed to SEND live signals. The rest are still scanned and
  *  shown on the dashboard's tracker, but only as watch-only setups. Override
  *  with SIGNAL_STRATEGIES=breakout,setforget (ids from StrategyId). */
-const DEFAULT_SIGNAL_STRATEGIES: StrategyId[] = ["breakout"];
+const DEFAULT_SIGNAL_STRATEGIES: StrategyId[] = ["breakout", "setforget", "zones", "fibonacci"];
 
 export function signalStrategies(override?: string | undefined): Set<StrategyId> {
   const raw = override ?? process.env.SIGNAL_STRATEGIES;
@@ -574,7 +570,7 @@ async function reconcileAndSignal(args: {
   // trading session, no opposing weekly structure and an agreeing M15 trend
   // (a trend check that is switched off for the pair evaluates to true).
   const candidates = fired.filter((f) => passesSendGate(f, minConfidenceFor(pair, f.scored.strategy)));
-  const selection = selectSignal(candidates, ctx.topDown);
+  const selection = selectSignal(candidates);
   if (!selection) {
     for (const f of fired) {
       const reason = skipReasonFor(pair, f);
@@ -621,17 +617,18 @@ async function reconcileAndSignal(args: {
       .filter(Boolean)
       .join(" ") || null;
 
-    // ── AI Vision validation ──────────────────────────────────────────────
-    // The deterministic engine has already passed ALL confirmations and risk.
-    // Here a vision model gets a second set of eyes on the chart. It can only
-    // REJECT a signal — never create one. Vision failure is non-fatal: on any
-    // error we send the deterministic signal and note the failure.
+    // ── AI vision read ────────────────────────────────────────────────────
+    // A vision model looks at the chart of a pullback signal and its opinion
+    // is attached to the signal. It never creates a setup, and unless
+    // VISION_CAN_VETO is set it does not hold one back either. A vision
+    // failure is non-fatal: the signal is sent and the failure noted.
     let visionVerdict: VisionVerdict | null = null;
     let visionNote: string | null = null;
     let visionRejected = false;
+    let visionDisagrees = false;
 
-    // The breakout's record was measured without the vision check, and nothing
-    // shows a chart read improves it — so it is not allowed to veto one.
+    // A breakout has no zone or retracement for the model to judge, so the
+    // read is only made for the pullback strategies.
     if (AI_VISION_ENABLED && primary.strategy !== "breakout") {
       try {
         const png = await renderSetupPng(candles, {
@@ -657,7 +654,7 @@ async function reconcileAndSignal(args: {
           confirmationsMet: Object.entries(primary.scored.confirmations)
             .filter(([, v]) => v)
             .map(([k]) => k),
-          trendMode: trendModeFor(pair),
+          trendMode: { htf: true, m15: false },
           imageBase64: png.toString("base64"),
         });
 
@@ -667,9 +664,8 @@ async function reconcileAndSignal(args: {
             + ` Red flags: ${visionVerdict.redFlags.length ? visionVerdict.redFlags.join("; ") : "none"}.`
             .slice(0, 300);
 
-          if (!visionVerdict.supports || visionVerdict.confidence < VISION_MIN_CONFIDENCE) {
-            visionRejected = true;
-          }
+          visionDisagrees = !visionVerdict.supports || visionVerdict.confidence < VISION_MIN_CONFIDENCE;
+          visionRejected = VISION_CAN_VETO && visionDisagrees;
         } else {
           visionNote = "[ vision analysis unavailable ]";
         }
@@ -698,7 +694,7 @@ async function reconcileAndSignal(args: {
         confidence,
         confirmations: primary.scored.confirmations,
         vision_note: visionNote ?? note,
-        vision_verdict: visionRejected ? "rejects" : visionVerdict ? "supports" : "skipped",
+        vision_verdict: visionDisagrees ? "rejects" : visionVerdict ? "supports" : "skipped",
         confluence_strategies: confluence,
         status: effectiveStatus,
         skip_reason: effectiveSkipReason,
@@ -726,6 +722,7 @@ async function reconcileAndSignal(args: {
         targetBasis: L.targetBasis,
         confidence,
         checks: CHECKS[primary.strategy],
+        keyLevel: primary.scored.keyLevel,
         visionNote: visionNote ?? note,
         positionUnits: L.positionUnits,
         riskAmount: L.riskAmount,

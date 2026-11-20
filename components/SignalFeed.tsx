@@ -120,7 +120,7 @@ export default function SignalFeed() {
               </span>
               <span className="text-neutral-500">
                 {fmtTime(s.created_at)} · {s.strategy} · {s.confidence}/{CHECKS[s.strategy] ?? 6}
-                {s.confidence >= Math.min(5, CHECKS[s.strategy] ?? 6) ? " ★" : ""}
+                {s.confirmations?.["Key level behind the entry"] ? " · grade A ★" : " · grade B"}
                 {s.status === "skipped" ? " · SKIPPED" : ""}
               </span>
             </div>
@@ -200,8 +200,8 @@ export default function SignalFeed() {
               <div className="mt-1 text-neutral-500">AI: {s.vision_note}</div>
             )}
             {s.vision_verdict === "rejects" && (
-              <div className="mt-1 text-red-500 font-mono text-xs">
-                ⛔ AI vision rejected this setup ({s.confidence}/10)
+              <div className={`mt-1 font-mono text-xs ${s.status === "skipped" ? "text-red-500" : "text-amber-400"}`}>
+                {s.status === "skipped" ? "⛔ AI vision rejected this setup" : "⚠ AI vision disagrees — sent anyway (it is a note, not a veto)"}
               </div>
             )}
           </li>

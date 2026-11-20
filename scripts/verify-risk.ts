@@ -188,51 +188,45 @@ check("K: stop anchors on real swing, not the 0.3-pip wiggle", rK.ok && Math.abs
   }
 }
 
-// ---- N: stop anchored to the setup's own invalidation level ----
+// ---- N: a pullback setup trades a fixed rule — 3 ATR stop, 2R target ----
 {
   const zone = { kind: "demand" as const, top: 1.0995, bottom: 1.097 };
-  const rN = run({
-    direction: "long",
-    entry: 1.099,
-    // a minor swing low sits INSIDE the zone — the old rule put the stop there
-    pivots: [p(20, "low", 1.0978), p(40, "high", 1.115)],
-    trigger: { zone },
-  });
-  check("N: stop sits beyond the zone's far edge, not inside it", rN.ok && Math.abs(rN.levels.stopLoss - (zone.bottom - buf)) < 1e-9, rN.ok ? rN.levels.stopLoss.toFixed(5) : rN.reason);
-  check("N: basis names the zone", rN.ok && rN.levels.stopBasis.includes("demand zone low"), rN.ok ? rN.levels.stopBasis : "");
-
-  const rN2 = run({ direction: "long", entry: 1.0965, pivots: [p(20, "low", 1.09), p(40, "high", 1.115)], trigger: { zone } });
-  check("N: price already through the invalidation is rejected", !rN2.ok && rN2.reason.includes("invalidation"), !rN2.ok ? rN2.reason : "unexpectedly ok");
+  const rN = run({ direction: "long", entry: 1.099, pivots: [p(20, "low", 1.0978), p(40, "high", 1.115)], trigger: { zone } });
+  check("N: long pullback stops 3 ATR below the entry", rN.ok && Math.abs(rN.levels.stopLoss - (1.099 - 3 * A)) < 1e-9, rN.ok ? rN.levels.stopLoss.toFixed(5) : rN.reason);
+  check("N: target is twice the risk", rN.ok && Math.abs(rN.levels.takeProfit - (1.099 + 6 * A)) < 1e-9 && rN.levels.rMultiple === 2 && rN.levels.tpSource === "fixed_r", rN.ok ? `${rN.levels.takeProfit.toFixed(5)} ${rN.levels.rMultiple}R` : rN.reason);
+  check("N: basis states the rule", rN.ok && rN.levels.stopBasis === "3 ATR below the entry" && rN.levels.targetBasis === "2× the risk", rN.ok ? `${rN.levels.stopBasis} / ${rN.levels.targetBasis}` : "");
 
   const fib = { direction: "short" as const, swingLow: { price: 1.09 }, swingHigh: { price: 1.11 }, goldenBottom: 1.10236, goldenTop: 1.10572 };
-  const rN3 = run({ direction: "short", entry: 1.103, pivots: [p(20, "high", 1.11), p(40, "low", 1.09)], trigger: { fib } });
-  check("N: fib short stops above the 78.6% edge", rN3.ok && Math.abs(rN3.levels.stopLoss - (fib.goldenTop + buf)) < 1e-9, rN3.ok ? rN3.levels.stopLoss.toFixed(5) : rN3.reason);
+  const rN2 = run({ direction: "short", entry: 1.103, pivots: [], trigger: { fib } });
+  check("N: short pullback mirrors it, with no swing needed", rN2.ok && Math.abs(rN2.levels.stopLoss - (1.103 + 3 * A)) < 1e-9 && Math.abs(rN2.levels.takeProfit - (1.103 - 6 * A)) < 1e-9, rN2.ok ? `SL ${rN2.levels.stopLoss.toFixed(5)} TP ${rN2.levels.takeProfit.toFixed(5)}` : rN2.reason);
+
+  const rN3 = run({ direction: "long", entry: 1.099, pivots: [p(20, "low", 1.0955), p(40, "high", 1.115)] });
+  check("N: without a setup the levels still come from structure", rN3.ok && rN3.levels.tpSource === "swing" && rN3.levels.stopBasis.includes("swing low"), rN3.ok ? `${rN3.levels.tpSource} / ${rN3.levels.stopBasis}` : rN3.reason);
 }
 
-// ---- O: entry costs may not eat more than 10% of the risk ----
+// ---- O: a trade whose costs exceed 10% of its risk is refused ----
 {
   const nzd: Candle[] = [];
   for (let i = 0; i < 60; i++) {
     const c = i % 2 === 0 ? 2.25 : 2.2506;
     nzd.push({ time: 1_700_000_000 + i * 900, open: c, high: c + 0.0006, low: c - 0.0006, close: c, volume: 1 });
   }
-  const np = piv(nzd);
-  // a tight zone right under price: the thesis stop would be ~6 pips away,
-  // but GBP/NZD costs 5 pips a round trip — most of the risk
+  // GBP/NZD costs 5 pips a round trip; a 3-ATR stop on these candles is 36 pips
   const rO = computeRiskLevels({
     instrument: "GBP_NZD",
     direction: "long",
     entry: 2.25,
     candles: nzd,
-    pivots: [np(20, "low", 2.24), np(40, "high", 2.262)],
+    pivots: [],
     trigger: { zone: { kind: "demand", top: 2.2502, bottom: 2.2497 } },
     accountBalance: 10000,
     quoteUsdRate: 0.58,
   });
-  const cost = 0.0005;
-  check("O: a too-tight stop is widened to the cost floor", rO.levels != null && Math.abs(rO.levels.stopDistance - cost / 0.1) < 1e-9, rO.levels ? `${(rO.levels.stopDistance * 1e4).toFixed(1)} pips` : "no levels");
-  check("O: the basis says why it was widened", !!rO.levels?.stopBasis.includes("widened so costs"), rO.levels?.stopBasis ?? "");
-  check("O: costs end at ≤10% of the risk", rO.levels != null && cost / rO.levels.stopDistance <= 0.1 + 1e-9, rO.levels ? `${((cost / rO.levels.stopDistance) * 100).toFixed(1)}%` : "");
+  check("O: costs above the cap refuse the trade", !rO.ok && rO.reason.includes("14% of the risk"), !rO.ok ? rO.reason : "unexpectedly ok");
+  check("O: the refused trade still reports its levels", !rO.ok && rO.levels != null && Math.abs(rO.levels.stopDistance - 0.0036) < 1e-9, !rO.ok && rO.levels ? `${(rO.levels.stopDistance * 1e4).toFixed(1)} pips` : "no levels");
+  const gold: Candle[] = nzd.map((c) => ({ ...c, open: c.open * 1800, high: c.high * 1800, low: c.low * 1800, close: c.close * 1800 }));
+  const rO2 = computeRiskLevels({ instrument: "XAU_USD", direction: "long", entry: 4050, candles: gold, pivots: [], trigger: { zone: { kind: "demand", top: 4051, bottom: 4049 } }, accountBalance: 10000 });
+  check("O: gold's $0.35 cost is a small share of a 3-ATR stop", rO2.ok && 0.35 / rO2.levels.stopDistance < 0.1, rO2.ok ? `${((0.35 / rO2.levels.stopDistance) * 100).toFixed(1)}%` : rO2.reason);
 }
 
 console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} TEST(S) FAILED`);

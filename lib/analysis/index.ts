@@ -33,7 +33,9 @@ export {
 } from "./breakout";
 export { inTradingSession, tradingHoursUtc } from "./session";
 export { pipSize, typicalSpread, tradeCost, roundNumberStep, SPREAD_PIPS, SLIPPAGE_PIPS } from "./instruments";
-export { scoreSetup, SIGNAL_THRESHOLD, m15Agrees, trendModeFor, type ScoringContext, type ScoreResult, type TrendMode } from "./scoring";
+export { scoreSetup, SIGNAL_THRESHOLD, KEY_LEVEL_CHECK, m15Agrees, type ScoringContext, type ScoreResult } from "./scoring";
+export { detectKeyLevels, nearestLevels, backingLevel, detectLevelRetest, type KeyLevel, type LevelRetest } from "./levels";
+export { PULLBACK_TREND_DAYS, PULLBACK_STOP_ATR, PULLBACK_TARGET_R } from "./pullback";
 export {
   analyzeM15,
   nearbyActiveZones,

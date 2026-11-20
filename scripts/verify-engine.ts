@@ -17,6 +17,8 @@ import { runBacktest } from "../lib/backtest/engine";
 import { setupDisposition, signalPairs, signalStrategies } from "../lib/engine/scanner";
 import { detectBreakout, dailyTrend, asianRange, BREAKOUT_TARGET_R, CHANNEL_BARS, CHANNEL_STOP_ATR } from "../lib/analysis/breakout";
 import { computeRiskLevels } from "../lib/analysis/risk";
+import { backingLevel, detectKeyLevels, detectLevelRetest, nearestLevels } from "../lib/analysis/levels";
+import { KEY_LEVEL_CHECK } from "../lib/analysis/scoring";
 import { buildSetupKey } from "../lib/analysis/setupKey";
 import { analyzeTopDown, topDownAgrees, topDownOpposes } from "../lib/analysis/topDown";
 import { detectHeadShoulders } from "../lib/analysis/headshoulders";
@@ -29,6 +31,10 @@ import type { Pivot } from "../lib/analysis/pivots";
 function mk(i: number, o: number, h: number, l: number, c: number): Candle {
   return { time: 1_700_000_000 + i * 900, open: o, high: h, low: l, close: c, volume: 1 };
 }
+
+/** 120 closed daily candles drifting by `step` — the strategies' daily-trend filter. */
+const dailySeries = (step: number): Candle[] =>
+  Array.from({ length: 120 }, (_, i) => ({ time: i * 86400, open: 1 + step * i, high: 1 + step * i, low: 1 + step * i, close: 1 + step * i, volume: 1 }));
 
 let failures = 0;
 function check(name: string, cond: boolean, detail: string) {
@@ -320,12 +326,21 @@ if (entryD) {
     atrValue: atr(D)!,
     zones: zonesD,
     fib: null,
+    daily: dailySeries(0.001),
   };
   const scoredD = scoreSetup("zones", ctxD);
   console.log("[zones scoring]", scoredD.count, JSON.stringify(scoredD.confirmations));
   check("zones: rejection candle detected in zone", scoredD.confirmations["Rejection candle in zone"] === true, "pin bar");
   check("zones: freshness confirmed (1 touch ≤ 1)", entryD.zone.touches <= 1, `touches=${entryD.zone.touches}`);
-  check("zones: fires at 5/6", scoredD.fired && scoredD.count === 5, `count=${scoredD.count}`);
+  check("zones: 5 of 6 checks met with the daily trend", scoredD.count === 5 && scoredD.confirmations["HTF trend agrees"] === true, `count=${scoredD.count}`);
+  check("pullback gate: a long with the daily trend may be sent", scoredD.topDownAligned, "daily up");
+  check("pullback gate: the same long against the daily trend may not", !scoreSetup("zones", { ...ctxD, daily: dailySeries(-0.001) }).topDownAligned, "daily down");
+  check("pullback gate: no daily history, no trade", !scoreSetup("zones", { ...ctxD, daily: [] }).topDownAligned, "unknown trend");
+  check(
+    "pullback gate: an opposing weekly structure blocks it even with the daily trend",
+    !scoreSetup("zones", { ...ctxD, topDown: analyzeTopDown({ weekly: invertedU, daily: U, h4: U, h1: U }) }).topDownAligned,
+    "weekly down"
+  );
 }
 
 // stale visit: price parked inside the zone beyond the entry window → no trigger
@@ -377,12 +392,13 @@ if (fib) {
     atrValue: atrF,
     zones: detectZones(F),
     fib,
+    daily: dailySeries(0.001),
   };
   const noVision = scoreSetup("fibonacci", ctx);
   console.log("[scoring] fib:", noVision.count, JSON.stringify(noVision.confirmations));
   check("scoring: trigger present", noVision.hasTrigger, `count=${noVision.count}`);
   check("scoring: rejection candle detected", noVision.confirmations["Rejection candle in zone"] === true, "pin bar");
-  check("scoring: fires at 4/6", noVision.fired && noVision.count === 4, `count=${noVision.count}`);
+  check("scoring: 4 of 6 checks met", noVision.count === 4, `count=${noVision.count}`);
 }
 
 // A retracement that CLOSES below the swing origin has invalidated the swing:
@@ -537,10 +553,10 @@ if (sf) {
 // ============ Trading session gate ============
 {
   const utc = (h: number, m = 0) => Date.UTC(2026, 10, 18, h, m) / 1000;
-  check("session: default window is 12:00–21:00 UTC", tradingHoursUtc(undefined).join("-") === "12-21", tradingHoursUtc(undefined).join("-"));
+  check("session: default window is 07:00–20:00 UTC", tradingHoursUtc(undefined).join("-") === "7-20", tradingHoursUtc(undefined).join("-"));
   check("session: New York hours are tradeable", inTradingSession(utc(12), [12, 21]) && inTradingSession(utc(20, 45), [12, 21]), "12:00, 20:45");
   check("session: Asia and rollover are not", !inTradingSession(utc(3), [12, 21]) && !inTradingSession(utc(21), [12, 21]), "03:00, 21:00");
-  check("session: override parses, garbage falls back", tradingHoursUtc("6-21").join("-") === "6-21" && tradingHoursUtc("soon").join("-") === "12-21", "6-21 / default");
+  check("session: override parses, garbage falls back", tradingHoursUtc("6-21").join("-") === "6-21" && tradingHoursUtc("soon").join("-") === "7-20", "6-21 / default");
   check("session: a window may wrap midnight; 0-24 disables", inTradingSession(utc(1), [22, 4]) && !inTradingSession(utc(12), [22, 4]) && inTradingSession(utc(3), [0, 24]), "22-4, 0-24");
 }
 
@@ -559,7 +575,7 @@ if (sf) {
     direction,
     scored: {
       strategy: "zones", direction, confirmations: {}, count: 4, fired: true,
-      topDownAligned: true, m15Aligned: true, inSession: true, hasTrigger: true, trigger: null, ...o,
+      topDownAligned: true, m15Aligned: true, inSession: true, keyLevel: null, hasTrigger: true, trigger: null, ...o,
     },
     risk: riskOk
       ? { ok: true, levels: { direction, entry: 1, stopLoss: 0.99, takeProfit: 1.03, stopDistance: 0.01, rMultiple: 3, atr: 0.005, positionUnits: 1, riskAmount: 1, tpSource: "swing", stopBasis: "", targetBasis: "", riskPips: 100, rewardPips: 300 } }
@@ -568,12 +584,15 @@ if (sf) {
   check("gate: a complete setup may be sent", passesSendGate(cand("long"), 4), "ok");
   check("gate: below the confirmation minimum is held", !passesSendGate(cand("long"), 5), sendGateBlock(cand("long"), 5) ?? "");
   check("gate: outside the session is held", /session/.test(sendGateBlock(cand("long", { inSession: false }), 4) ?? ""), sendGateBlock(cand("long", { inSession: false }), 4) ?? "");
-  check("gate: against the weekly is held", /weekly/.test(sendGateBlock(cand("long", { topDownAligned: false }), 4) ?? ""), sendGateBlock(cand("long", { topDownAligned: false }), 4) ?? "");
+  check("gate: against the trend is held", /against the trend/.test(sendGateBlock(cand("long", { topDownAligned: false }), 4) ?? ""), sendGateBlock(cand("long", { topDownAligned: false }), 4) ?? "");
+  check("gate: M15 structure is context, not a gate", passesSendGate(cand("long", { m15Aligned: false }), 4), "sent");
   check("gate: failed risk reports the risk reason", sendGateBlock(cand("long", {}, false), 4) === "structure only pays 1.20R", "risk reason");
-  const both = selectSignal([cand("long"), cand("short")], topDownU);
-  check("select: HTF bias settles a long/short conflict", both?.side === "long" && both.winners.length === 1, both ? both.side : "none");
+  const both = selectSignal([cand("long"), cand("short")]);
+  check("select: opposite setups never merge into one trade", both != null && both.winners.length === 1 && both.arbitrationNote != null, both ? `${both.side}, ${both.arbitrationNote}` : "none");
+  const ranked = selectSignal([{ ...cand("long", { count: 6 }), strategy: "fibonacci" as const }, { ...cand("short", { count: 3 }), strategy: "breakout" as const }]);
+  check("select: the breakout takes priority over a pullback setup", ranked?.primary.strategy === "breakout" && ranked.side === "short", ranked ? `${ranked.primary.strategy} ${ranked.side}` : "none");
   const stronger = selectSignal([cand("long", { count: 4 }), cand("short", { count: 6 })]);
-  check("select: without a bias the stronger side wins", stronger?.side === "short", stronger ? stronger.side : "none");
+  check("select: between equal strategies the better-confirmed setup leads", stronger?.side === "short", stronger ? stronger.side : "none");
   check("select: nothing to select from → null", selectSignal([]) === null, "null");
 }
 
@@ -634,10 +653,58 @@ if (sf) {
     buildSetupKey("v", scoredB)
   );
   check(
-    "scanner: the breakout is the only strategy that sends by default",
-    signalStrategies(undefined).size === 1 && signalStrategies(undefined).has("breakout") && signalStrategies("breakout,setforget,nonsense").size === 2,
+    "scanner: all four strategies send by default; the override drops unknown names",
+    signalStrategies(undefined).size === 4 && signalStrategies("breakout,setforget,nonsense").size === 2 && !signalStrategies("breakout").has("zones"),
     `[${[...signalStrategies(undefined)].join(",")}]`
   );
+}
+
+// ============ Support / resistance ============
+{
+  // An hourly path that turns at ~4010 three times: twice as a ceiling
+  // (bars 10 and 30), then — after breaking above — once as a floor (bar 56).
+  const path = (pts: [number, number][]): Candle[] => {
+    const out: Candle[] = [];
+    for (let i = 0; i <= pts[pts.length - 1][0]; i++) {
+      let p = pts[0][1];
+      for (let k = 0; k < pts.length - 1; k++) {
+        const [x0, y0] = pts[k];
+        const [x1, y1] = pts[k + 1];
+        if (i >= x0 && i <= x1) p = y0 + ((y1 - y0) / (x1 - x0)) * (i - x0);
+      }
+      out.push({ time: i * 3600, open: p, high: p + 0.2, low: p - 0.2, close: p, volume: 1 });
+    }
+    return out;
+  };
+  const flipPath = path([[0, 4000], [10, 4010], [20, 3995], [30, 4010.3], [36, 4002], [46, 4025], [56, 4010.2], [66, 4030]]);
+  const levels = detectKeyLevels(flipPath, 4030);
+  const key = levels.find((l) => Math.abs(l.price - 4010.2) < 0.5);
+  console.log("\n[levels]", levels.map((l) => `${l.kind} ${l.price.toFixed(2)} x${l.touches}${l.flipped ? " flip" : ""}`).join(" | "));
+  check("levels: three turns at one price make one level", key?.touches === 3 && key.highs === 2 && key.lows === 1, key ? `${key.touches} touches (${key.highs} highs, ${key.lows} lows)` : "none");
+  check("levels: a level that was ceiling then floor is flipped", key?.flipped === true, key ? String(key.flipped) : "none");
+  check("levels: support above price is resistance below it", key?.kind === "support" && detectKeyLevels(flipPath, 4000).find((l) => Math.abs(l.price - 4010.2) < 0.5)?.kind === "resistance", "kind follows price");
+  check("levels: a single swing is not a level", !levels.some((l) => Math.abs(l.price - 3995) < 0.5), "one touch at 3995");
+  check("levels: nearest picks at most N per side", nearestLevels(levels, 4030, 1).filter((l) => l.kind === "support").length <= 1, "1 per side");
+
+  const after = flipPath[flipPath.length - 1].time + 3600;
+  const dip: Candle = { time: after + 900, open: 4012, high: 4012.4, low: 4010.3, close: 4011.5, volume: 1 }; // into the band, closes back above
+  const retest = detectLevelRetest([dip], flipPath);
+  check("levels: old resistance holding as support is a long retest", retest?.direction === "long" && Math.abs(retest.level.price - 4010.2) < 0.5, retest ? `${retest.direction} @${retest.level.price.toFixed(2)}` : "none");
+  const through: Candle = { ...dip, close: 4009.5 }; // closes below the level
+  check("levels: a close through the level is not a retest", detectLevelRetest([through], flipPath) === null, "closed below");
+  const early: Candle = { ...dip, time: flipPath[58].time }; // only swings confirmed before this bar may count
+  const earlyRetest = detectLevelRetest([early], flipPath);
+  check("levels: only swings known before the candle count", earlyRetest === null || earlyRetest.level.lows === 0, earlyRetest ? `${earlyRetest.level.lows} lows` : "no level yet");
+
+  const behindLong = backingLevel([dip], flipPath, "long");
+  check("levels: a flipped level just under a long backs it", behindLong != null && behindLong.flipped && Math.abs(behindLong.price - 4010.2) < 0.5, behindLong ? behindLong.price.toFixed(2) : "none");
+  check("levels: the same level does not back a short", backingLevel([dip], flipPath, "short") === null, "wrong side");
+  const far: Candle = { ...dip, open: 4022, high: 4022.5, low: 4021.5, close: 4022 };
+  check("levels: a level too far behind does not count", backingLevel([far], flipPath, "long") === null, "more than 1 ATR away");
+
+  // the grade shows up on a scored setup as its own checklist line
+  const graded = scoreSetup("sr", { instrument: "XAU_USD", candles: [dip], htfCandles: flipPath, pivots: [], atrValue: 2, zones: [], fib: null, daily: dailySeries(0.001) });
+  check("levels: the retest strategy scores the key-level check", graded.hasTrigger && graded.confirmations[KEY_LEVEL_CHECK] === true && graded.keyLevel != null, graded.hasTrigger ? JSON.stringify(graded.confirmations) : "no trigger");
 }
 
 // ============ Stage 9: backtest engine smoke ============

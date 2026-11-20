@@ -40,8 +40,12 @@ interface GateSummary {
   pullback: boolean;
   inSession: boolean;
   sessionHours: string;
+  /** daily trend the pullback strategies trade with: +1 up, −1 down, 0 unknown */
+  trend: 1 | -1 | 0;
+  trendDays: number;
   longAllowed: boolean;
   shortAllowed: boolean;
+  weeklyBlocks: boolean;
 }
 
 export default function Dashboard() {
@@ -363,7 +367,7 @@ export default function Dashboard() {
               <>
                 <span className="text-neutral-300">Breakout</span>
                 <span className={overlay.breakout.trend === 1 ? "text-emerald-400" : overlay.breakout.trend === -1 ? "text-rose-400" : "text-zinc-400"}>
-                  daily trend {overlay.breakout.trend === 1 ? "up — buys only" : overlay.breakout.trend === -1 ? "down — sells only" : "unknown"}
+                  50-day trend {overlay.breakout.trend === 1 ? "up — buys only" : overlay.breakout.trend === -1 ? "down — sells only" : "unknown"}
                 </span>
                 <span className={overlay.breakout.asianWindowOpen ? "text-emerald-400" : "text-neutral-500"}>
                   Asian-range window {overlay.breakout.asianWindowOpen ? "open" : "closed"} (07–11 UTC)
@@ -375,15 +379,19 @@ export default function Dashboard() {
             )}
             {gate?.pullback && (
               <>
-                <span className="text-neutral-300">Send gate</span>
-                <span className={gate.inSession ? "text-emerald-400" : "text-amber-400"}>
-                  {gate.inSession ? "in session" : `outside session (${gate.sessionHours})`}
+                <span className="text-neutral-300">Pullbacks</span>
+                <span className={gate.weeklyBlocks ? "text-amber-400" : gate.trend === 1 ? "text-emerald-400" : gate.trend === -1 ? "text-rose-400" : "text-zinc-400"}>
+                  {gate.trendDays}-day trend {gate.trend === 1 ? "up" : gate.trend === -1 ? "down" : "unknown"}
+                  {gate.weeklyBlocks
+                    ? " — blocked by the weekly structure"
+                    : gate.longAllowed
+                      ? " — buys only"
+                      : gate.shortAllowed
+                        ? " — sells only"
+                        : ""}
                 </span>
-                <span className={gate.longAllowed ? "text-emerald-400" : "text-rose-400"}>
-                  longs {gate.longAllowed ? "allowed" : "blocked by weekly"}
-                </span>
-                <span className={gate.shortAllowed ? "text-emerald-400" : "text-rose-400"}>
-                  shorts {gate.shortAllowed ? "allowed" : "blocked by weekly"}
+                <span className={gate.inSession ? "text-emerald-400" : "text-neutral-500"}>
+                  session {gate.inSession ? "open" : "closed"} ({gate.sessionHours})
                 </span>
               </>
             )}
