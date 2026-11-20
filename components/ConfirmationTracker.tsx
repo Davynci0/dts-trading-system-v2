@@ -6,14 +6,14 @@ import { ENGINE_VERSION } from "@/lib/engine/version";
 
 const CONFIRMATIONS: Record<StrategyId, string[]> = {
   sr: ["Retest of a broken level", "Level turned price 3+ times", "Candle closes with the trade", "HTF trend agrees", "Key level behind the entry"],
-  breakout: ["Closed beyond the 1-week channel", "Daily trend agrees", "Inside the entry window", "Key level behind the entry"],
+  breakout: ["Closed beyond the 30-candle channel", "Daily trend agrees", "Inside the entry window", "Key level behind the entry"],
   zones: [
     "Price entered zone",
     "Rejection candle in zone",
     "Zone fresh (≤1 touch)",
     "Momentum (RSI) turning",
     "HTF trend agrees",
-    "H4 trend agrees",
+    "Chart trend agrees",
     "Key level behind the entry",
   ],
   setforget: [
@@ -22,7 +22,7 @@ const CONFIRMATIONS: Record<StrategyId, string[]> = {
     "AOI overlaps another POI",
     "Momentum (RSI) turning",
     "HTF trend agrees",
-    "H4 trend agrees",
+    "Chart trend agrees",
     "Key level behind the entry",
   ],
   fibonacci: [
@@ -31,7 +31,7 @@ const CONFIRMATIONS: Record<StrategyId, string[]> = {
     "Zone overlaps another POI",
     "Momentum (RSI) turning",
     "HTF trend agrees",
-    "H4 trend agrees",
+    "Chart trend agrees",
     "Key level behind the entry",
   ],
 };

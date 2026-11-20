@@ -17,7 +17,7 @@ import { CHART_COLORS, EMPTY_OVERLAY, type OverlayData } from "@/components/char
  */
 const LAYERS = [
   { id: "trend", label: "Trend system", group: "Strategies", color: CHART_COLORS.trend, on: true },
-  { id: "breakout", label: "1-week range", group: "Patterns", color: CHART_COLORS.breakout, on: false },
+  { id: "breakout", label: "30-candle range", group: "Patterns", color: CHART_COLORS.breakout, on: false },
   { id: "aoi", label: "Set & forget", group: "Patterns", color: CHART_COLORS.aoi, on: false },
   { id: "zones", label: "Zones", group: "Patterns", color: CHART_COLORS.demand, on: false },
   { id: "fib", label: "Fibonacci", group: "Patterns", color: CHART_COLORS.fib, on: false },
@@ -220,7 +220,7 @@ export default function Dashboard() {
       breakout =
         level == null
           ? "no level yet"
-          : `${b.trend === 1 ? "buy on an H4 close above" : "sell on an H4 close below"} ${px(level)}`;
+          : `${b.trend === 1 ? "buy on a close above" : "sell on a close below"} ${px(level)}`;
     }
 
     const a = overlay.aoi;
@@ -351,10 +351,10 @@ export default function Dashboard() {
 
     // 1) initial load
     loadAnalysis(true);
-    // 2) TA refresh every 15 min (picks up a new H4 bar soon after it closes) — the signature
+    // 2) TA refresh every 5 min (picks up a new candle soon after it closes) — the signature
     // check inside loadAnalysis skips the re-render when analysis is unchanged
     //    (a past moment does not change, so a review loads once)
-    const taTimer = review ? undefined : setInterval(() => loadAnalysis(false), 15 * 60 * 1000);
+    const taTimer = review ? undefined : setInterval(() => loadAnalysis(false), 5 * 60 * 1000);
     // 3) fast live tick — updates only the forming bar via a cheap 1-candle call
     const liveTimer = review ? undefined : setInterval(() => {
       fetch(`/api/live?instrument=${pair}&granularity=${timeframe}`, {

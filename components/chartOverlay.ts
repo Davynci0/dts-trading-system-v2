@@ -410,7 +410,7 @@ class OverlayPaneView implements IPrimitivePaneView {
               // the edge against the trend is context only
               const idle = b.trend === 1 ? yBottom : b.trend === -1 ? yTop : null;
               for (const y of idle == null ? [yTop, yBottom] : [idle]) line(x0, W, y, C.breakout, 0.35, 1, [2, 4]);
-              tag("1-week range", x0 + 6, yTop + 12, C.breakout, "left", 7, { small: true, dim: true });
+              tag("30-candle range", x0 + 6, yTop + 12, C.breakout, "left", 7, { small: true, dim: true });
             }
             if (b.trend !== 0) {
               const up = b.trend === 1;
@@ -418,7 +418,7 @@ class OverlayPaneView implements IPrimitivePaneView {
               const y = Y(level);
               if (y != null) {
                 line(x0, W, y, C.breakout, 0.95, 1.5, []);
-                tag(`BREAKOUT · ${up ? "BUY above" : "SELL below"} ${fmt(level)} · 1-week ${up ? "high" : "low"}`, W - 4, y - 3, C.breakout, "right", 1);
+                tag(`BREAKOUT · ${up ? "BUY above" : "SELL below"} ${fmt(level)} · 30-candle ${up ? "high" : "low"}`, W - 4, y - 3, C.breakout, "right", 1);
               }
             }
           }

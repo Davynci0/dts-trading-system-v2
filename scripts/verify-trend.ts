@@ -32,6 +32,7 @@ const H4 = 4 * 3600;
 const D0 = Date.UTC(2025, 0, 1, 22) / 1000;
 const bar = (time: number, o: number, h: number, l: number, c: number): Candle => ({ time, open: o, high: h, low: l, close: c, volume: 1 });
 
+// (the candles below are spaced four hours apart; the rules read the bar length from the candles)
 /** `n` daily candles moving `step` a day from 3000. */
 const days = (n: number, step: number, from = 3000): Candle[] =>
   Array.from({ length: n }, (_, i) => bar(D0 + i * DAY, from + step * i, from + step * i + 6, from + step * i - 6, from + step * i));
@@ -151,7 +152,7 @@ const withBreak = [...quiet, breakUp];
 
   const setup = trendSetupsAt(buildTrendSeries(withBreak, up), withBreak.length - 1)[0];
   const lv = trendLevels(setup, 400_000);
-  check("sizing: a quarter of a percent of the account, in whole units", TREND_RISK_PCT === 0.0025 && lv.riskAmount === 1000 && lv.positionUnits === Math.floor(1000 / setup.stopDistance) && lv.stopLoss === setup.price - setup.stopDistance, `${lv.positionUnits} units, stop ${lv.stopLoss.toFixed(2)}`);
+  check("sizing: a tenth of a percent of the account, in whole units", TREND_RISK_PCT === 0.001 && lv.riskAmount === 400 && lv.positionUnits === Math.floor(400 / setup.stopDistance) && lv.stopLoss === setup.price - setup.stopDistance, `${lv.positionUnits} units, stop ${lv.stopLoss.toFixed(2)}`);
   check("sizing: a stop wider than the risk budget gives zero units (the signal says so)", trendLevels(setup, 1000).positionUnits === 0, "0 units");
 }
 

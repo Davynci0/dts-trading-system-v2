@@ -13,9 +13,9 @@ import { buildTrendSeries, trendStateAt, trendWatchAt, TREND_ADX_MAX, TREND_STOP
 export const maxDuration = 60;
 
 /**
- * GET /api/analysis?instrument=XAU_USD&granularity=H4&count=500[&to=<ISO time>]
- * Everything the chart draws, from the same engine the scanner uses. Chart TA
- * is always H4; weekly and daily are context. `to` returns the analysis as
+ * GET /api/analysis?instrument=XAU_USD&count=500[&to=<ISO time>]
+ * Everything the chart draws, from the same engine the scanner uses, on the
+ * system's one chart timeframe (EXECUTION_TIMEFRAME); weekly and daily are context. `to` returns the analysis as
  * it stood at that moment, for reviewing a past setup.
  */
 export async function GET(req: NextRequest) {
@@ -35,14 +35,14 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const [candles, weekly, daily, h1] = await Promise.all([
+    const [candles, weekly, daily, h1, h4] = await Promise.all([
       fetchCandles({ instrument, granularity: EXECUTION_TIMEFRAME, count, to }),
       fetchCandles({ instrument, granularity: "W", count: 52, to }),
       // closed days: the key levels read all of them, the 100-day trend the last 100, top-down the last 90
       fetchCandles({ instrument, granularity: EXECUTION_HTF, count: HTF_CANDLES, to }),
       fetchCandles({ instrument, granularity: "H1", count: 120, to }),
+      fetchCandles({ instrument, granularity: "H4", count: 120, to }),
     ]);
-    const h4 = candles.slice(-120);
     const analysis = analyzeExecution(candles, instrument);
     if (!analysis) {
       return NextResponse.json({ candles, zones: [], fib: null, aoi: null, topDown: null, structure: [], breakout: null, gate: null });
@@ -75,7 +75,7 @@ export async function GET(req: NextRequest) {
       }));
 
     // Fibonacci: draw the swing the SCANNER would trade (analysis.fib — an
-    // intact leg, chosen with the H4 structure) so the chart and the engine
+    // intact leg, chosen with the chart's structure) so the chart and the engine
     // can never show different retracements. Only when the engine has no
     // setup does the chart fall back to the most recent intact swing, marked
     // as a reference rather than a trade zone.

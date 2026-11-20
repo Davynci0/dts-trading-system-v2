@@ -16,6 +16,7 @@ import { scoreSetup, type ScoringContext } from "../lib/analysis/scoring";
 import { runBacktest } from "../lib/backtest/engine";
 import { setupDisposition, signalPairs, signalStrategies } from "../lib/engine/scanner";
 import { closeTimeOf, detectBreakout, dailyTrend, BREAKOUT_TARGET_R, CHANNEL_BARS, CHANNEL_STOP_ATR } from "../lib/analysis/breakout";
+import { EXECUTION_BAR_SECONDS } from "../lib/analysis/execution";
 import { computeRiskLevels } from "../lib/analysis/risk";
 import { backingLevel, detectKeyLevels, detectLevelRetest, nearestLevels } from "../lib/analysis/levels";
 import { KEY_LEVEL_CHECK } from "../lib/analysis/scoring";
@@ -553,7 +554,7 @@ if (sf) {
 // ============ Trading session gate ============
 {
   const utc = (h: number, m = 0) => Date.UTC(2026, 10, 18, h, m) / 1000;
-  check("session: by default every H4 close is tradeable", tradingHoursUtc(undefined).join("-") === "0-24" && inTradingSession(utc(3)) && inTradingSession(utc(22)), tradingHoursUtc(undefined).join("-"));
+  check("session: by default every candle close is tradeable", tradingHoursUtc(undefined).join("-") === "0-24" && inTradingSession(utc(3)) && inTradingSession(utc(22)), tradingHoursUtc(undefined).join("-"));
   check("session: New York hours are tradeable", inTradingSession(utc(12), [12, 21]) && inTradingSession(utc(20, 45), [12, 21]), "12:00, 20:45");
   check("session: Asia and rollover are not", !inTradingSession(utc(3), [12, 21]) && !inTradingSession(utc(21), [12, 21]), "03:00, 21:00");
   check("session: override parses, garbage falls back", tradingHoursUtc("6-21").join("-") === "6-21" && tradingHoursUtc("soon").join("-") === "0-24", "6-21 / default");
@@ -585,7 +586,7 @@ if (sf) {
   check("gate: below the confirmation minimum is held", !passesSendGate(cand("long"), 5), sendGateBlock(cand("long"), 5) ?? "");
   check("gate: outside the session is held", /session/.test(sendGateBlock(cand("long", { inSession: false }), 4) ?? ""), sendGateBlock(cand("long", { inSession: false }), 4) ?? "");
   check("gate: against the trend is held", /against the trend/.test(sendGateBlock(cand("long", { topDownAligned: false }), 4) ?? ""), sendGateBlock(cand("long", { topDownAligned: false }), 4) ?? "");
-  check("gate: H4 structure is context, not a gate", passesSendGate(cand("long", { structureAligned: false }), 4), "sent");
+  check("gate: chart structure is context, not a gate", passesSendGate(cand("long", { structureAligned: false }), 4), "sent");
   check("gate: failed risk reports the risk reason", sendGateBlock(cand("long", {}, false), 4) === "structure only pays 1.20R", "risk reason");
   const both = selectSignal([cand("long"), cand("short")]);
   check("select: opposite setups never merge into one trade", both != null && both.winners.length === 1 && both.arbitrationNote != null, both ? `${both.side}, ${both.arbitrationNote}` : "none");
@@ -604,20 +605,20 @@ if (sf) {
   const down = days(-2);
   check("breakout: daily trend follows the 50-day average", dailyTrend(up) === 1 && dailyTrend(down) === -1 && dailyTrend(up.slice(0, 30)) === 0, `${dailyTrend(up)} ${dailyTrend(down)} ${dailyTrend(up.slice(0, 30))}`);
 
-  // One-week channel on H4: CHANNEL_BARS flat bars capped at 4002 / floored at 3998, then a close through it.
-  const H4 = 4 * 3600;
+  // The channel: CHANNEL_BARS flat bars capped at 4002 / floored at 3998, then a close through it.
+  const H4 = EXECUTION_BAR_SECONDS; // one candle of the chart timeframe
   const end = Date.UTC(2026, 10, 18, 14, 0) / 1000;
   const flat: Candle[] = Array.from({ length: CHANNEL_BARS + 5 }, (_, i) => bar(end - (CHANNEL_BARS + 5 - i) * H4, 4000, 4002, 3998, 4000));
   const week = [...flat, bar(end, 4000, 4006, 3999, 4005)];
   check("breakout: nothing while price is inside the channel", detectBreakout(flat, up, 2) === null, "inside");
   const channel = detectBreakout(week, up, 2);
-  check("breakout: close above the 1-week high with the trend is a long", channel?.kind === "channel" && channel.direction === "long" && channel.level === 4002 && channel.stop === 4005 - CHANNEL_STOP_ATR * 2, channel ? `${channel.kind} stop ${channel.stop}` : "none");
+  check("breakout: close above the channel high with the trend is a long", channel?.kind === "channel" && channel.direction === "long" && channel.level === 4002 && channel.stop === 4005 - CHANNEL_STOP_ATR * 2, channel ? `${channel.kind} stop ${channel.stop}` : "none");
   check("breakout: a channel break against the trend is no trade", detectBreakout(week, down, 2) === null, "counter-trend");
   const short = detectBreakout([...flat, bar(end, 4000, 4001, 3994, 3995)], down, 2);
-  check("breakout: close below the 1-week low in a downtrend is a short", short?.direction === "short" && short.level === 3998 && short.stop === 3995 + CHANNEL_STOP_ATR * 2, short ? `${short.direction} stop ${short.stop}` : "none");
+  check("breakout: close below the channel low in a downtrend is a short", short?.direction === "short" && short.level === 3998 && short.stop === 3995 + CHANNEL_STOP_ATR * 2, short ? `${short.direction} stop ${short.stop}` : "none");
   const held = [...week, bar(end + H4, 4005, 4008, 4004, 4007)];
   check("breakout: a second close beyond the channel is not a new break", detectBreakout(held, up, 2) === null, "already broken");
-  check("breakout: the signal is entered when the H4 candle closes", closeTimeOf(week) === end + H4, new Date(closeTimeOf(week) * 1000).toISOString());
+  check("breakout: the signal is entered when the candle closes", closeTimeOf(week) === end + H4, new Date(closeTimeOf(week) * 1000).toISOString());
 
   // Levels: the setup's own stop, a fixed-R target, and the cost cap.
   const risk = (stop: number, entry = 4005) =>

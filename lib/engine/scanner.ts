@@ -6,6 +6,7 @@ import {
   computeRiskLevels,
   analyzeExecution,
   closeTimeOf,
+  EXECUTION_BAR_SECONDS,
   EXECUTION_CANDLES,
   EXECUTION_HTF,
   EXECUTION_TIMEFRAME,
@@ -386,7 +387,7 @@ function triggerDescription(scored: ScoreResult): string {
   }
   if (scored.strategy === "breakout" && scored.trigger?.breakout) {
     const b = scored.trigger.breakout;
-    return `closed ${b.direction === "long" ? "above" : "below"} the 1-week channel at ${b.level.toFixed(2)} with the daily trend`;
+    return `closed ${b.direction === "long" ? "above" : "below"} the 30-candle channel at ${b.level.toFixed(2)} with the daily trend`;
   }
   if (scored.strategy === "fibonacci" && scored.trigger?.fib) {
     const f = scored.trigger.fib;
@@ -479,10 +480,10 @@ export function minConfidenceFor(_pair: string, strategy: StrategyId): number {
 /** Allow the same setup to fire more than once (no permanent signaled dedup).
  *  Useful for scalping/re-entry styles. Default false. */
 const ALLOW_REPEAT_SIGNALS = (process.env.ALLOW_REPEAT_SIGNALS ?? "false") === "true";
-/** A signal may only be sent this many minutes after its candle closed. With a
- *  scan every 15 minutes that is four chances; later than that the entry price
- *  has moved on. Override with MAX_ENTRY_AGE_MIN. */
-const MAX_ENTRY_AGE_MIN = Math.max(5, Number(process.env.MAX_ENTRY_AGE_MIN ?? 60));
+/** A signal may only be sent this many minutes after its candle closed — by
+ *  default two thirds of a candle, at most an hour; later than that the entry
+ *  price has moved on. Override with MAX_ENTRY_AGE_MIN. */
+const MAX_ENTRY_AGE_MIN = Math.max(5, Number(process.env.MAX_ENTRY_AGE_MIN ?? Math.min(60, Math.round((EXECUTION_BAR_SECONDS / 60) * (2 / 3)))));
 /** Minimum minutes between repeat signals for the same setup. Default 60. */
 const REPEAT_SIGNAL_COOLDOWN_MIN = Math.max(0, Number(process.env.REPEAT_SIGNAL_COOLDOWN_MIN ?? 60));
 /** Whether to run the AI vision read on a signal's chart. Default true. */

@@ -4,7 +4,7 @@ import { WebSocket } from "ws";
 /**
  * Multi-year backtest of the live rules — the trend system
  * (lib/analysis/trend.ts) with the scanner's own detection: signal on a closed
- * H4 candle, fill at the next candle's open plus the full spread + slippage,
+ * candle of the chart timeframe, fill at the next candle's open plus the full spread + slippage,
  * one position per entry type, a fixed-distance trailing stop and no target.
  * Prints the whole window next to each of its years; a second pass doubles
  * the costs.
@@ -12,15 +12,14 @@ import { WebSocket } from "ws";
  * Positions overlap and point the same way, so trades are not independent:
  * read the WEEKLY t (the last column of the summary) rather than a per-trade one.
  *
- * Usage: npx tsx --env-file=.env.local scripts/backtest.ts [--years=15] [--m15] [--save]
+ * Usage: npx tsx --env-file=.env.local scripts/backtest.ts [--years=15] [--save]
  *   --years=N  history length (default 15, 1–15)
- *   --m15      follow the trailing stop on M15 candles instead of H4 (slower to
- *              download; the result is nearly the same)
  *   --save     store the run in Supabase so it appears on the Backtests page
+ * The chart candles are built from cached M15 history (the first run of a day downloads it).
  */
 import { computeMetrics, type BacktestTrade, type ScopedMetrics } from "@/lib/backtest/engine";
 import { maxOpenPositions, runTrendBacktest, type TrendTrade } from "@/lib/backtest/trend";
-import { EXECUTION_TIMEFRAME } from "@/lib/analysis";
+import { EXECUTION_BAR_SECONDS, EXECUTION_TIMEFRAME } from "@/lib/analysis";
 import { TREND_ADX_MAX, TREND_ENTRIES, TREND_FAST_DAYS, TREND_SLOW_DAYS, TREND_STOP_ATR, TREND_TRAIL_ATR } from "@/lib/analysis/trend";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -31,7 +30,6 @@ const args = process.argv.slice(2);
 const flag = (name: string) => args.find((a) => a.startsWith(`--${name}`));
 const YEARS = Math.max(1, Math.min(15, Number(flag("years")?.split("=")[1] ?? 15)));
 const SAVE = flag("save") != null;
-const M15 = flag("m15") != null;
 const PAIR = "XAU_USD";
 
 const END = windowEnd() / 1000;
@@ -57,7 +55,7 @@ function line(name: string, trades: TrendTrade[], from = START, to = END): strin
   const m = metrics(trades);
   if (m.trades === 0) return `${name.padEnd(26)}    0`;
   const weeks = (to - from) / (7 * 86400);
-  return `${name.padEnd(26)} ${String(m.trades).padStart(4)} trades ${(m.trades / weeks).toFixed(1)}/wk  win ${(m.winRate * 100).toFixed(0).padStart(2)}%  pf ${m.profitFactor.toFixed(2)}  avgR ${m.avgR.toFixed(3).padStart(6)}  total ${m.totalR.toFixed(0).padStart(5)}R  maxDD ${m.maxDrawdownR.toFixed(0).padStart(3)}R  weekly t ${weeklyT(trades, from, to).toFixed(1)}`;
+  return `${name.padEnd(26)} ${String(m.trades).padStart(5)} trades ${(m.trades / (weeks * 5)).toFixed(1)}/day  win ${(m.winRate * 100).toFixed(0).padStart(2)}%  pf ${m.profitFactor.toFixed(2)}  avgR ${m.avgR.toFixed(3).padStart(6)}  total ${m.totalR.toFixed(0).padStart(5)}R  maxDD ${m.maxDrawdownR.toFixed(0).padStart(3)}R  weekly t ${weeklyT(trades, from, to).toFixed(1)}`;
 }
 
 function scoped(trades: TrendTrade[]): ScopedMetrics {
@@ -98,7 +96,7 @@ async function save(trades: TrendTrade[]): Promise<void> {
         filters: { fastDays: TREND_FAST_DAYS, slowDays: TREND_SLOW_DAYS, adxMax: TREND_ADX_MAX },
         stopAtr: TREND_STOP_ATR,
         trailAtr: TREND_TRAIL_ATR,
-        trailFollowedOn: M15 ? "M15" : EXECUTION_TIMEFRAME,
+        trailFollowedOn: EXECUTION_TIMEFRAME,
         costs: "full spread + slippage per trade",
         mostOpenAtOnce: maxOpenPositions(trades),
       },
@@ -113,16 +111,31 @@ async function save(trades: TrendTrade[]): Promise<void> {
   console.log(`\nSaved run ${run.id} (${Object.keys(scopes).length} scopes) — open the Backtests page.`);
 }
 
+/** Build candles of `seconds` length from finer ones (aligned to the clock, as OANDA's are). */
+function aggregate(fine: Candle[], seconds: number): Candle[] {
+  const out: Candle[] = [];
+  for (const b of fine) {
+    const t = Math.floor(b.time / seconds) * seconds;
+    const last = out[out.length - 1];
+    if (last && last.time === t) {
+      last.high = Math.max(last.high, b.high);
+      last.low = Math.min(last.low, b.low);
+      last.close = b.close;
+      last.volume += b.volume;
+    } else out.push({ ...b, time: t });
+  }
+  return out;
+}
+
 async function main() {
-  const data = await loadPairData(PAIR, 15 * 365, M15);
-  // history before the window for the indicators (240-candle channels, EMAs)
-  const candles = (data.h4 as Candle[]).filter((c) => c.time >= START - 400 * 86400);
-  const run = (costMultiplier: number) =>
-    runTrendBacktest({ pair: PAIR, candles, daily: data.daily as Candle[], fine: M15 ? (data.m15 as Candle[]) : undefined, from: START, costMultiplier });
+  const data = await loadPairData(PAIR, 15 * 365, true);
+  // chart candles built from M15, with history before the window for the indicators (240-candle channels, EMAs)
+  const candles = aggregate(data.m15 as Candle[], EXECUTION_BAR_SECONDS).filter((c) => c.time >= START - 60 * 86400);
+  const run = (costMultiplier: number) => runTrendBacktest({ pair: PAIR, candles, daily: data.daily as Candle[], from: START, costMultiplier });
   const base = run(1);
   const stressed = run(2);
 
-  console.log(`\nTrend system on ${EXECUTION_TIMEFRAME}, ${YEARS} year${YEARS > 1 ? "s" : ""} to ${new Date(END * 1000).toISOString().slice(0, 10)}, R multiples after full spread + slippage (trailing stop followed on ${M15 ? "M15" : "H4"} candles)`);
+  console.log(`\nTrend system on ${EXECUTION_TIMEFRAME}, ${YEARS} year${YEARS > 1 ? "s" : ""} to ${new Date(END * 1000).toISOString().slice(0, 10)}, R multiples after full spread + slippage`);
   console.log(line("ALL", base));
   console.log(line("COSTS ×2", stressed));
   console.log(`most positions open at once: ${maxOpenPositions(base)}`);

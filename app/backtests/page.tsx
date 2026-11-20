@@ -134,7 +134,7 @@ export default function BacktestsPage() {
         <div>
           <h1 className="text-lg font-semibold text-neutral-100">Backtest Results</h1>
           <p className="mt-1 max-w-3xl text-xs text-neutral-500">
-            The trend system replayed on history with the scanner&apos;s own detection: a signal on a closed 4-hour
+            The trend system replayed on history with the scanner&apos;s own detection: a signal on a closed
             candle fills at the next candle&apos;s open plus the full spread + slippage, each entry type holds one
             position, and every trade is closed by its trailing stop (there is no target). Positions overlap and
             point the same way, so read the total and the drawdown rather than any single row. Older runs in the
@@ -146,7 +146,7 @@ export default function BacktestsPage() {
           disabled={running}
           className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
         >
-          {running ? "Running…" : "Quick run (last ~3 years)"}
+          {running ? "Running…" : "Quick run (last ~5 months)"}
         </button>
       </div>
 

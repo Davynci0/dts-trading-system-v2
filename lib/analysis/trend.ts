@@ -2,13 +2,13 @@ import type { Candle, SignalDirection } from "@/lib/types";
 import { tradeCost } from "./instruments";
 
 /**
- * The trend system: eleven ways of joining a gold trend on 4-hour candles,
+ * The trend system: eleven ways of joining a gold trend on the chart timeframe,
  * all managed the same way.
  *
  *  - A trade is only taken WITH the daily trend, and only when the 50-day and
  *    the 100-day trend agree (the last closed daily close is on the same side
  *    of both averages).
- *  - It is not taken when the move is already stretched: the H4 ADX must be
+ *  - It is not taken when the move is already stretched: the chart's ADX must be
  *    below TREND_ADX_MAX.
  *  - There is no target. The stop starts TREND_STOP_ATR × ATR from the entry
  *    and then trails TREND_TRAIL_ATR × that same ATR behind the best price —
@@ -23,7 +23,7 @@ import { tradeCost } from "./instruments";
  * the design years and afterwards — hence the two filters.
  *
  * Everything here is pure and shared by the scanner, the backtest and the
- * chart. `candles` are closed H4 bars, `daily` closed daily bars.
+ * chart. `candles` are closed bars of the chart timeframe, `daily` closed daily bars.
  */
 
 export const TREND_STOP_ATR = 3;
@@ -31,7 +31,7 @@ export const TREND_TRAIL_ATR = 3;
 export const TREND_ADX_MAX = 27;
 export const TREND_FAST_DAYS = 50;
 export const TREND_SLOW_DAYS = 100;
-/** A position still open after this many H4 bars (60 trading days) is closed at market. */
+/** A position still open after this many candles is closed at market. */
 export const TREND_MAX_HOLD_BARS = 360;
 /** A trade is refused when spread + slippage exceed this share of its risk. */
 const MAX_COST_SHARE = 0.1;
@@ -44,16 +44,16 @@ export interface TrendEntryDef {
   label: string;
   /** what has to happen, in plain words */
   rule: string;
-  /** channel length in H4 bars, or EMA period */
+  /** channel length in candles, or EMA period */
   period?: number;
 }
 
 export const TREND_ENTRIES: TrendEntryDef[] = [
-  { id: "don20", family: "channel", period: 20, label: "20-candle breakout", rule: "close beyond the high/low of the last 20 H4 candles" },
-  { id: "don30", family: "channel", period: 30, label: "1-week breakout", rule: "close beyond the high/low of the last 30 H4 candles" },
-  { id: "don60", family: "channel", period: 60, label: "2-week breakout", rule: "close beyond the high/low of the last 60 H4 candles" },
-  { id: "don120", family: "channel", period: 120, label: "1-month breakout", rule: "close beyond the high/low of the last 120 H4 candles" },
-  { id: "don240", family: "channel", period: 240, label: "2-month breakout", rule: "close beyond the high/low of the last 240 H4 candles" },
+  { id: "don20", family: "channel", period: 20, label: "20-candle breakout", rule: "close beyond the high/low of the last 20 candles" },
+  { id: "don30", family: "channel", period: 30, label: "30-candle breakout", rule: "close beyond the high/low of the last 30 candles" },
+  { id: "don60", family: "channel", period: 60, label: "60-candle breakout", rule: "close beyond the high/low of the last 60 candles" },
+  { id: "don120", family: "channel", period: 120, label: "120-candle breakout", rule: "close beyond the high/low of the last 120 candles" },
+  { id: "don240", family: "channel", period: 240, label: "240-candle breakout", rule: "close beyond the high/low of the last 240 candles" },
   { id: "ema20pb", family: "pullback", period: 20, label: "Pullback to the 20 EMA", rule: "dip to the 20 EMA and close back beyond it, in the candle's own direction" },
   { id: "ema50pb", family: "pullback", period: 50, label: "Pullback to the 50 EMA", rule: "dip to the 50 EMA and close back beyond it, in the candle's own direction" },
   { id: "emax2050", family: "cross", label: "20/50 EMA cross", rule: "the 20 EMA crosses the 50 EMA" },
@@ -160,6 +160,8 @@ function priorLowest(v: number[], p: number): number[] {
 
 export interface TrendSeries {
   n: number;
+  /** length of one candle in seconds (read from the candles) */
+  bar: number;
   t: number[];
   o: number[];
   h: number[];
@@ -174,14 +176,22 @@ export interface TrendSeries {
   /** +1 / −1 when the last closed daily close is above / below the average, 0 when unknown */
   fast: number[];
   slow: number[];
-  /** index of the last daily bar that had CLOSED when H4 bar i closed (−1 if none) */
+  /** index of the last daily bar that had CLOSED when candle i closed (−1 if none) */
   day: number[];
   dayHigh: number[];
   dayLow: number[];
 }
 
-const H4_SECONDS = 4 * 3600;
 const DAY_SECONDS = 86400;
+
+/** The candles' own bar length: the median spacing (ignores weekend gaps). 4 hours when it cannot be read. */
+function barSeconds(candles: Candle[]): number {
+  const diffs: number[] = [];
+  for (let i = Math.max(1, candles.length - 120); i < candles.length; i++) diffs.push(candles[i].time - candles[i - 1].time);
+  if (diffs.length === 0) return 4 * 3600;
+  diffs.sort((a, b) => a - b);
+  return diffs[Math.floor(diffs.length / 2)];
+}
 
 export function buildTrendSeries(candles: Candle[], daily: Candle[]): TrendSeries {
   const t = candles.map((x) => x.time);
@@ -194,10 +204,11 @@ export function buildTrendSeries(candles: Candle[], daily: Candle[]): TrendSerie
   const s100 = sma(dc, TREND_SLOW_DAYS);
   const sign = (k: number, avg: number[], p: number) => (k < p || !Number.isFinite(avg[k]) ? 0 : dc[k] > avg[k] ? 1 : dc[k] < avg[k] ? -1 : 0);
 
+  const bar = barSeconds(candles);
   const day = new Array<number>(candles.length).fill(-1);
   let k = 0;
   for (let i = 0; i < candles.length; i++) {
-    const close = t[i] + H4_SECONDS;
+    const close = t[i] + bar;
     while (k < daily.length && daily[k].time + DAY_SECONDS <= close) k++;
     day[i] = k - 1;
   }
@@ -212,6 +223,7 @@ export function buildTrendSeries(candles: Candle[], daily: Candle[]): TrendSerie
 
   return {
     n: candles.length,
+    bar,
     t,
     o,
     h,
@@ -244,7 +256,7 @@ export interface TrendState {
   blocked: string | null;
 }
 
-/** What the filters allow when H4 bar `i` closes. */
+/** What the filters allow when candle `i` closes. */
 export function trendStateAt(s: TrendSeries, i: number): TrendState {
   const fast = s.fast[i];
   const slow = s.slow[i];
@@ -313,7 +325,7 @@ export interface TrendSetup {
   trailDistance: number;
 }
 
-/** Every entry that fires when H4 bar `i` closes, after the filters and the cost cap. */
+/** Every entry that fires when candle `i` closes, after the filters and the cost cap. */
 export function trendSetupsAt(s: TrendSeries, i: number, instrument = "XAU_USD"): TrendSetup[] {
   const state = trendStateAt(s, i);
   if (!state.side) return [];

@@ -14,17 +14,18 @@ import { typicalSpread } from "./instruments";
  *  can't do this job — 0.0003 is 3 pips on EUR/USD but nothing on JPY or gold.) */
 export const MIN_ATR_SPREADS = 2.5;
 
-/** Live TA and signals run on 4-hour candles only; daily candles are the
- *  higher timeframe (key levels, the daily trend). */
-export const EXECUTION_TIMEFRAME = "H4" as const;
+/** Live TA and signals run on 30-minute candles only; daily candles are the
+ *  higher timeframe (key levels, the daily trend). To move the whole system to
+ *  another chart, change these three lines and TRADE_TIMEFRAMES in lib/types.ts. */
+export const EXECUTION_TIMEFRAME = "M30" as const;
 export const EXECUTION_HTF = "D" as const;
 /** Length of one execution bar. */
-export const EXECUTION_BAR_SECONDS = 4 * 3600;
+export const EXECUTION_BAR_SECONDS = 30 * 60;
 /** Candles of each series the scanner, the chart and the backtest analyse. */
 export const EXECUTION_CANDLES = 500;
 export const HTF_CANDLES = 300;
 
-/** 5-bar fractal on H4 = 20h each side — swings that took about a day to form. */
+/** 5-bar fractal: a swing needs five candles on each side. */
 export const PIVOT_K = 5;
 export const SWING_ATR = 0.75;
 export const TRENDLINE_LOOKBACK = 200;
@@ -46,7 +47,7 @@ export interface ExecutionAnalysis {
 }
 
 /**
- * Full execution-timeframe (H4) read of one instrument. `instrument` enables the spread-relative
+ * Full execution-timeframe read of one instrument. `instrument` enables the spread-relative
  * volatility floor; without it only a zero/unknown ATR is rejected.
  */
 export function analyzeExecution(candles: Candle[], instrument?: string): ExecutionAnalysis | null {

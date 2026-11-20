@@ -1,6 +1,7 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { fetchCandles } from "@/lib/oanda";
 import { trailThrough, TREND_MAX_HOLD_BARS } from "@/lib/analysis/trend";
+import { EXECUTION_BAR_SECONDS } from "@/lib/analysis/execution";
 
 export interface SettleInput {
   direction: "long" | "short";
@@ -19,11 +20,10 @@ export interface Settlement {
   hitPrice: number | null;
 }
 
-/** A 4-hour trade that has reached neither level after six weeks (30 trading
- *  days — the backtest's MAX_HOLD_CANDLES) is closed as expired. */
+/** A pattern trade that has reached neither level after six weeks is closed as expired. */
 const EXPIRY_MS = 42 * 24 * 3600 * 1000;
 /** Signals are settled on M15 candles, whatever timeframe produced them: the
- *  finer bar says which level was touched first far more often than an H4 bar
+ *  finer bar says which level was touched first more often than a larger one
  *  can. M15 candle duration. `candle.time` is the bar OPEN — the bar is tradeable
  *  from its open; a bar only predates the signal when it CLOSED before it. */
 const CANDLE_MS = 15 * 60 * 1000;
@@ -67,8 +67,9 @@ export interface TrailInput {
   firedAt: number;
 }
 
-/** A trend trade still open after 60 trading days (TREND_MAX_HOLD_BARS H4 bars ≈ 12 weeks) is closed at market. */
-const TRAIL_EXPIRY_MS = Math.round((TREND_MAX_HOLD_BARS / 6 / 5) * 7 * 24 * 3600 * 1000);
+/** A trend trade still open after TREND_MAX_HOLD_BARS candles of trading time is closed at market
+ *  (the market trades about five days in seven, so calendar time is 7/5 of that). */
+const TRAIL_EXPIRY_MS = Math.round(TREND_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS * 1000 * (7 / 5));
 
 /**
  * Follow a trailing-stop trade through the M15 candles since it was last

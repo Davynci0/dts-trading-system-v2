@@ -40,7 +40,6 @@ export interface TrendTrade {
   units: number;
 }
 
-const H4 = 4 * 3600;
 
 export function runTrendBacktest(opts: {
   pair: string;
@@ -86,9 +85,9 @@ export function runTrendBacktest(opts: {
     const entry = s.o[e] + dir * cost;
     const risk = setup.stopDistance;
     const initialStop = entry - dir * risk;
-    const deadline = s.t[e] + TREND_MAX_HOLD_BARS * H4;
+    const deadline = s.t[e] + TREND_MAX_HOLD_BARS * s.bar;
     const bars = fine ?? candles;
-    const barLen = fine ? 900 : H4;
+    const barLen = fine ? 900 : s.bar;
 
     // first bar at or after the entry
     let lo = 0;

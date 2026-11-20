@@ -81,7 +81,7 @@ export async function sendFinalSignal(opts: {
   const checks = opts.checks ?? 6;
   const digits = opts.pair.startsWith("XAU") ? 2 : opts.pair.includes("JPY") ? 3 : 5;
   const px = (n: number) => n.toFixed(digits);
-  // H4 stops are wide: on a small account 1% of the balance can be less than
+  // A wide stop on a small account: 1% of the balance can be less than
   // one unit's risk. Say so instead of printing a size of zero.
   const unitRisk = Math.abs(opts.entry - opts.stopLoss);
   const sizeLine =
@@ -120,7 +120,7 @@ export async function sendFinalSignal(opts: {
 export async function sendTrendSignal(opts: {
   pair: string;
   direction: "long" | "short";
-  /** the entry type, e.g. "1-week breakout" */
+  /** the entry type, e.g. "30-candle breakout" */
   label: string;
   rule: string;
   entry: number;

@@ -4,16 +4,17 @@ import { computeMetrics, type BacktestTrade } from "@/lib/backtest/engine";
 import { maxOpenPositions, runTrendBacktest, type TrendTrade } from "@/lib/backtest/trend";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAuthorizedMutation } from "@/lib/apiGuard";
-import { EXECUTION_HTF, EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
+import { EXECUTION_BAR_SECONDS, EXECUTION_HTF, EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
 import { TREND_ENTRIES } from "@/lib/analysis/trend";
 
 export const maxDuration = 300;
 
 /**
- * POST /api/backtest/run   Body: { count?: number }   (H4 candles, 1000–5000; default 5000 ≈ 3 years)
+ * POST /api/backtest/run   Body: { count?: number }   (chart candles, 1000–5000; default 5000)
  *
- * Quick backtest of the trend system on the most recent H4 candles, with the
- * scanner's own detection and the trailing stop followed on the H4 candles.
+ * Quick backtest of the trend system on the most recent candles of the chart
+ * timeframe, with the scanner's own detection and the trailing stop followed
+ * on those same candles.
  * The first 400 candles only warm up the indicators. Stored for the Backtests
  * page. The multi-year run lives in scripts/backtest.ts.
  */
@@ -33,11 +34,11 @@ export async function POST(req: NextRequest) {
     const [candles, daily] = await Promise.all([
       fetchCandles({ instrument: pair, granularity: EXECUTION_TIMEFRAME, count }),
       // the 100-day trend needs history before the first traded candle
-      fetchCandles({ instrument: pair, granularity: EXECUTION_HTF, count: Math.min(5000, Math.ceil(count / 6) + 200) }),
+      fetchCandles({ instrument: pair, granularity: EXECUTION_HTF, count: Math.min(5000, Math.ceil((count * EXECUTION_BAR_SECONDS) / 86400) + 200) }),
     ]);
     if (candles.length <= WARMUP + 10) throw new Error("not enough candles returned");
     from = candles[WARMUP].time;
-    to = candles[candles.length - 1].time + 4 * 3600;
+    to = candles[candles.length - 1].time + EXECUTION_BAR_SECONDS;
     trades = runTrendBacktest({ pair, candles, daily, from });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });

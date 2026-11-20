@@ -1,11 +1,12 @@
 import type { Candle, SignalDirection } from "@/lib/types";
 import { inTradingSession } from "./session";
+import { EXECUTION_BAR_SECONDS } from "./execution";
 
 /**
- * Trend breakout on 4-hour candles. Gold tends to keep going when it breaks a
- * level in the direction of its daily trend, so the strategy enters on the H4
- * candle that first CLOSES beyond the one-week channel — the highest high /
- * lowest low of the previous 30 H4 bars (five trading days).
+ * Range breakout (a pattern strategy, context only). Gold tends to keep going
+ * when it breaks a level in the direction of its daily trend, so the strategy
+ * enters on the candle that first CLOSES beyond the 30-candle channel — the
+ * highest high / lowest low of the previous 30 candles.
  *
  * The daily trend is the last closed daily close against the average of the
  * last 50: above it only upside breaks are taken, below it only downside ones.
@@ -19,7 +20,7 @@ import { inTradingSession } from "./session";
  * The same definitions are used by the scanner, the backtest and the chart.
  */
 
-/** One trading week of H4 bars. Research override: BREAKOUT_CHANNEL_BARS. */
+/** Channel length in candles. Research override: BREAKOUT_CHANNEL_BARS. */
 export const CHANNEL_BARS = (() => {
   const raw = Number(process.env.BREAKOUT_CHANNEL_BARS);
   return Number.isInteger(raw) && raw >= 5 && raw <= 2000 ? raw : 30;
@@ -58,7 +59,7 @@ export function closeTimeOf(candles: Candle[]): number {
   const last = candles[n - 1];
   const step = n > 1 ? last.time - candles[n - 2].time : 0;
   // a weekend/holiday gap before the last bar is not the bar length
-  return last.time + (step > 0 && step <= 4 * 3600 ? step : 4 * 3600);
+  return last.time + (step > 0 && step <= EXECUTION_BAR_SECONDS ? step : EXECUTION_BAR_SECONDS);
 }
 
 /**

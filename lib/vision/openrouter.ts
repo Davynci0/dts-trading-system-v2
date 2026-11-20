@@ -123,10 +123,10 @@ export async function validateSetupVision(args: {
   const met = args.confirmationsMet.length > 0 ? args.confirmationsMet.join("; ") : "none listed";
   const trendDesc = [
     args.trendMode.htf ? "HTF trend required" : null,
-    args.trendMode.chart ? "H4 trend required" : null,
+    args.trendMode.chart ? "chart trend required" : null,
   ].filter(Boolean).join(" + ") || "no trend gate";
 
-  const prompt = `You are a senior price-action trader validating a ${args.direction.toUpperCase()} trade setup on ${args.instrument} (H4) from a deterministic "${args.strategy}" strategy engine.
+  const prompt = `You are a senior price-action trader validating a ${args.direction.toUpperCase()} trade setup on ${args.instrument} (M30) from a deterministic "${args.strategy}" strategy engine.
 
 The engine has already passed ALL deterministic confirmations. Your job is a second set of eyes: you can only REJECT or APPROVE. Never create a setup.
 
@@ -136,7 +136,7 @@ Trend gate: ${trendDesc}.
 
 Look at the chart: candles, drawn supply/demand zones, fib golden zone, dashed stop/target lines. Analyze in this exact order and be specific:
 
-1. STRUCTURE — one sentence: is the daily and H4 structure supportive? Price at a real support/resistance level?
+1. STRUCTURE — one sentence: is the daily and 30-minute structure supportive? Price at a real support/resistance level?
 2. CONFLUENCE — one sentence: does this setup sit at a real zone/fib/structure confluence, or mid-range?
 3. RED FLAGS — short list of any visual red flags opposing the trade (or "none")
 4. CONFIDENCE — a number 1–10 (10 = would take this trade without hesitation)

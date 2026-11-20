@@ -14,13 +14,14 @@ import { closeTimeOf } from "@/lib/analysis/breakout";
 import { sendTrendSignal } from "@/lib/telegram";
 
 /**
- * Risk per trend trade as a share of the account. Several trend positions are
- * open at once and all in the same direction, so each one risks a quarter of
- * a percent by default. Override with TREND_RISK_PCT (e.g. 0.005 for 0.5%).
+ * Risk per trend trade as a share of the account. Up to eleven trend positions
+ * are open at once, all in the same direction, and on 30-minute candles the
+ * backtest's worst drawdown was about 270R — so each trade risks a tenth of a
+ * percent by default. Override with TREND_RISK_PCT (e.g. 0.0025 for 0.25%).
  */
 export const TREND_RISK_PCT = (() => {
   const raw = Number(process.env.TREND_RISK_PCT);
-  return Number.isFinite(raw) && raw > 0 && raw <= 0.05 ? raw : 0.0025;
+  return Number.isFinite(raw) && raw > 0 && raw <= 0.05 ? raw : 0.001;
 })();
 
 export interface TrendScanEvent {
@@ -41,7 +42,7 @@ interface OpenTrendRow {
  */
 export async function scanTrend(opts: {
   pair: string;
-  /** closed H4 candles, newest last */
+  /** closed candles of the chart timeframe, newest last */
   candles: Candle[];
   /** closed daily candles */
   daily: Candle[];

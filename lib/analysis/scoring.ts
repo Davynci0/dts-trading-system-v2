@@ -25,7 +25,7 @@ export interface ScoringContext {
   candles: Candle[];
   htfCandles: Candle[];
   pivots: Pivot[];
-  /** Zigzag-filtered swings (analyzeExecution.structuralPivots). The H4 trend and
+  /** Zigzag-filtered swings (analyzeExecution.structuralPivots). The chart's trend and
    *  prior-level checks read these so scoring sees the same structure the
    *  setups were built from; falls back to `pivots` for legacy callers. */
   structuralPivots?: Pivot[];
@@ -55,7 +55,7 @@ export interface ScoreResult {
    *  pullback strategies that is "daily trend agrees and the weekly structure
    *  does not oppose"; a breakout only exists when its own trend rule holds. */
   topDownAligned: boolean;
-  /** Whether the H4 swing structure agrees — shown on the checklist, not a gate. */
+  /** Whether the chart's swing structure agrees — shown on the checklist, not a gate. */
   structureAligned: boolean;
   /** False when the entry would fall outside the trading session. */
   inSession: boolean;
@@ -81,7 +81,7 @@ export const KEY_LEVEL_CHECK = "Key level behind the entry";
 /** Checks met at which the tracker treats a pullback setup as well confirmed. Not a send gate. */
 export const SIGNAL_THRESHOLD = 3;
 
-/** Execution-timeframe (H4) trend alignment. */
+/** Execution-timeframe trend alignment. */
 export function structureAgrees(structureState: StructureState, direction: SignalDirection): boolean {
   return (
     (structureState === "uptrend" && direction === "long") ||
@@ -104,7 +104,7 @@ function trendPermits(ctx: ScoringContext, direction: SignalDirection): boolean 
 /** The moment the latest candle closed — when a signal from it would be entered. */
 const entryTime = closeTimeOf;
 
-/** H4 trend = the H4 swing structure (HH+HL / LH+LL on the zigzag-filtered
+/** Chart trend = the chart's swing structure (HH+HL / LH+LL on the zigzag-filtered
  *  swings the setups are built from). */
 function structureTrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolean {
   return structureAgrees(classifyStructure(ctx.structuralPivots ?? ctx.pivots), direction);
@@ -139,7 +139,7 @@ export function scoreSetup(
     if (!setup) return noTrigger(strategy);
     const keyLevel = backingLevel(candles, ctx.htfCandles, setup.direction);
     const confirmations = {
-      "Closed beyond the 1-week channel": true,
+      "Closed beyond the 30-candle channel": true,
       "Daily trend agrees": true,
       "Inside the entry window": true,
       [KEY_LEVEL_CHECK]: keyLevel != null,
@@ -198,7 +198,7 @@ export function scoreSetup(
     confirmations["Zone fresh (≤1 touch)"] = zoneIsVeryFresh(entry.zone.touches);
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
-    confirmations["H4 trend agrees"] = structureTrendAgrees(ctx, direction);
+    confirmations["Chart trend agrees"] = structureTrendAgrees(ctx, direction);
   } else if (strategy === "setforget") {
     const entry = setForgetEntry(candles, ctx.setForget ?? null);
     if (!entry) {
@@ -227,7 +227,7 @@ export function scoreSetup(
       );
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
-    confirmations["H4 trend agrees"] = structureTrendAgrees(ctx, direction);
+    confirmations["Chart trend agrees"] = structureTrendAgrees(ctx, direction);
   } else {
     const fib = ctx.fib;
     if (!fib || !inGoldenZone(candles, fib)) {
@@ -247,7 +247,7 @@ export function scoreSetup(
     });
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
-    confirmations["H4 trend agrees"] = structureTrendAgrees(ctx, direction);
+    confirmations["Chart trend agrees"] = structureTrendAgrees(ctx, direction);
   }
 
   const keyLevel = backingLevel(candles, ctx.htfCandles, direction);
