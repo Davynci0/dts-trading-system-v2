@@ -17,15 +17,16 @@
  * the 6-point checklist is context for the trader, not a gate.
  */
 
-/** Days in the pullback strategies' daily-trend average. */
-export const PULLBACK_TREND_DAYS = 100;
-
 const envNumber = (name: string, fallback: number, min: number, max: number) => {
   const raw = Number(process.env[name]);
   return Number.isFinite(raw) && raw >= min && raw <= max ? raw : fallback;
 };
 
+/** Days in the pullback strategies' daily-trend average. Research override: PULLBACK_TREND_DAYS. */
+export const PULLBACK_TREND_DAYS = envNumber("PULLBACK_TREND_DAYS", 100, 10, 300);
+
 /** Stop distance in ATR. Override with PULLBACK_STOP_ATR. */
 export const PULLBACK_STOP_ATR = envNumber("PULLBACK_STOP_ATR", 3, 1, 6);
-/** Target as a multiple of the risk. Override with PULLBACK_TARGET_R. */
-export const PULLBACK_TARGET_R = envNumber("PULLBACK_TARGET_R", 2, 0.5, 5);
+/** Target as a multiple of the risk — 3R wins about 3 trades in 10; anything
+ *  smaller lost money outside gold's strongest years. Override with PULLBACK_TARGET_R. */
+export const PULLBACK_TARGET_R = envNumber("PULLBACK_TARGET_R", 3, 0.5, 5);

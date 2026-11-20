@@ -14,11 +14,11 @@ import { WebSocket } from "ws";
  * is not distinguishable from zero.
  *
  * Usage: npx tsx --env-file=.env.local scripts/backtest.ts [--years=3] [--save] [PAIR ...]
- *   --years=N  history length (default 3)
+ *   --years=N  history length (default 3, up to 15 — judge the rules on the long run)
  *   --save     store the run in Supabase so it appears on the Backtests page
  *   PAIR ...   instruments (default: PAIRS, i.e. XAU_USD)
  * Settings come from the environment, exactly as in production, e.g.
- *   SIGNAL_STRATEGIES=breakout,setforget BREAKOUT_TARGET_R=0.5 npx tsx ...
+ *   SIGNAL_STRATEGIES=breakout,setforget BREAKOUT_TARGET_R=1 npx tsx ...
  */
 import { computeMetrics, runBacktest, type BacktestTrade, type ScopedMetrics } from "@/lib/backtest/engine";
 import { BREAKOUT_TARGET_R, KEY_LEVEL_CHECK, PULLBACK_STOP_ATR, PULLBACK_TARGET_R, PULLBACK_TREND_DAYS } from "@/lib/analysis";
@@ -32,7 +32,7 @@ import { loadPairData, windowEnd, type PairData } from "./research-data";
 
 const args = process.argv.slice(2);
 const flag = (name: string) => args.find((a) => a.startsWith(`--${name}`));
-const YEARS = Math.max(1, Math.min(5, Number(flag("years")?.split("=")[1] ?? 3)));
+const YEARS = Math.max(1, Math.min(15, Number(flag("years")?.split("=")[1] ?? 3)));
 const SAVE = flag("save") != null;
 const pairs = args.filter((a) => !a.startsWith("--")).length ? args.filter((a) => !a.startsWith("--")) : [...PAIRS];
 
@@ -101,7 +101,8 @@ async function save(trades: Trade[]): Promise<void> {
   const month = (s: number) => new Date(s * 1000).toISOString().slice(0, 7);
   const scopes: Record<string, ScopedMetrics> = { combined: scoped(trades) };
   for (let k = 0; k < YEARS; k++) {
-    scopes[`year:${k + 1} · ${month(START + k * YEAR_S)} → ${month(START + (k + 1) * YEAR_S)}`] = scoped(trades.filter(inYear(k)));
+    // zero-padded so ten or more years still sort in order on the Backtests page
+    scopes[`year:${String(k + 1).padStart(2, "0")} · ${month(START + k * YEAR_S)} → ${month(START + (k + 1) * YEAR_S)}`] = scoped(trades.filter(inYear(k)));
   }
   for (const s of STRATEGIES) if (strategies.includes(s.id)) scopes[`strategy:${s.id}`] = scoped(trades.filter((t) => t.strategy === s.id));
   scopes["grade:A · key level behind the entry"] = scoped(trades.filter(gradeA));

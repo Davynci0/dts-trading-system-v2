@@ -5,6 +5,7 @@
  */
 import { atr } from "../lib/analysis/indicators";
 import { computeRiskLevels, MIN_RR } from "../lib/analysis/risk";
+import { PULLBACK_TARGET_R } from "../lib/analysis/pullback";
 import type { Candle } from "../lib/types";
 import type { Pivot } from "../lib/analysis/pivots";
 
@@ -188,17 +189,17 @@ check("K: stop anchors on real swing, not the 0.3-pip wiggle", rK.ok && Math.abs
   }
 }
 
-// ---- N: a pullback setup trades a fixed rule — 3 ATR stop, 2R target ----
+// ---- N: a pullback setup trades a fixed rule — 3 ATR stop, PULLBACK_TARGET_R target ----
 {
   const zone = { kind: "demand" as const, top: 1.0995, bottom: 1.097 };
   const rN = run({ direction: "long", entry: 1.099, pivots: [p(20, "low", 1.0978), p(40, "high", 1.115)], trigger: { zone } });
   check("N: long pullback stops 3 ATR below the entry", rN.ok && Math.abs(rN.levels.stopLoss - (1.099 - 3 * A)) < 1e-9, rN.ok ? rN.levels.stopLoss.toFixed(5) : rN.reason);
-  check("N: target is twice the risk", rN.ok && Math.abs(rN.levels.takeProfit - (1.099 + 6 * A)) < 1e-9 && rN.levels.rMultiple === 2 && rN.levels.tpSource === "fixed_r", rN.ok ? `${rN.levels.takeProfit.toFixed(5)} ${rN.levels.rMultiple}R` : rN.reason);
-  check("N: basis states the rule", rN.ok && rN.levels.stopBasis === "3 ATR below the entry" && rN.levels.targetBasis === "2× the risk", rN.ok ? `${rN.levels.stopBasis} / ${rN.levels.targetBasis}` : "");
+  check("N: target is the fixed multiple of the risk", rN.ok && Math.abs(rN.levels.takeProfit - (1.099 + 3 * PULLBACK_TARGET_R * A)) < 1e-9 && rN.levels.rMultiple === PULLBACK_TARGET_R && rN.levels.tpSource === "fixed_r", rN.ok ? `${rN.levels.takeProfit.toFixed(5)} ${rN.levels.rMultiple}R` : rN.reason);
+  check("N: basis states the rule", rN.ok && rN.levels.stopBasis === "3 ATR below the entry" && rN.levels.targetBasis === `${PULLBACK_TARGET_R}× the risk`, rN.ok ? `${rN.levels.stopBasis} / ${rN.levels.targetBasis}` : "");
 
   const fib = { direction: "short" as const, swingLow: { price: 1.09 }, swingHigh: { price: 1.11 }, goldenBottom: 1.10236, goldenTop: 1.10572 };
   const rN2 = run({ direction: "short", entry: 1.103, pivots: [], trigger: { fib } });
-  check("N: short pullback mirrors it, with no swing needed", rN2.ok && Math.abs(rN2.levels.stopLoss - (1.103 + 3 * A)) < 1e-9 && Math.abs(rN2.levels.takeProfit - (1.103 - 6 * A)) < 1e-9, rN2.ok ? `SL ${rN2.levels.stopLoss.toFixed(5)} TP ${rN2.levels.takeProfit.toFixed(5)}` : rN2.reason);
+  check("N: short pullback mirrors it, with no swing needed", rN2.ok && Math.abs(rN2.levels.stopLoss - (1.103 + 3 * A)) < 1e-9 && Math.abs(rN2.levels.takeProfit - (1.103 - 3 * PULLBACK_TARGET_R * A)) < 1e-9, rN2.ok ? `SL ${rN2.levels.stopLoss.toFixed(5)} TP ${rN2.levels.takeProfit.toFixed(5)}` : rN2.reason);
 
   const rN3 = run({ direction: "long", entry: 1.099, pivots: [p(20, "low", 1.0955), p(40, "high", 1.115)] });
   check("N: without a setup the levels still come from structure", rN3.ok && rN3.levels.tpSource === "swing" && rN3.levels.stopBasis.includes("swing low"), rN3.ok ? `${rN3.levels.tpSource} / ${rN3.levels.stopBasis}` : rN3.reason);

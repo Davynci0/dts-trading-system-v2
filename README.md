@@ -32,14 +32,15 @@ strategy (`lib/analysis/breakout.ts`) enters on the M15 candle that first **clos
 | Level | high/low of 22:00–07:00 UTC | highest high / lowest low of the previous 480 M15 bars |
 | Entry window | 07:00–11:00 UTC, first break of the day only | 07:00–20:00 UTC |
 | Stop | middle of the Asian range | 3 ATR from the close |
-| Target | 0.75 × the risk (`BREAKOUT_TARGET_R`) | 0.75 × the risk |
+| Target | 2 × the risk (`BREAKOUT_TARGET_R`) | 2 × the risk |
 
 Both require the **daily trend** to agree: the last closed daily close above the average of the
 last 50 means buys only, below means sells only. A trade is refused when spread + slippage
 would exceed 10% of its risk (`MAX_COST_SHARE`). One trade at a time.
 
-The modest target against a wide stop is deliberate — it is where the high win rate comes
-from. `BREAKOUT_TARGET_R=0.5` wins more often for a little less profit; `1` does the opposite.
+The 2R target is deliberate. A small target wins often and earns nothing: over ten years a
+0.5R target won 70% of its trades and finished flat, and each step wider (0.75, 1, 1.5, 2)
+did better. At 2R the breakout wins about 4 trades in 10.
 
 ## The trend pullbacks
 
@@ -53,7 +54,7 @@ setup becomes a trade under one shared rule (`lib/analysis/pullback.ts`):
 | Weekly structure | must not oppose the trade | — |
 | Session | entry between 07:00 and 20:00 UTC | `TRADING_HOURS_UTC` |
 | Stop | 3 ATR from the entry | `PULLBACK_STOP_ATR` |
-| Target | 2 × the risk | `PULLBACK_TARGET_R` |
+| Target | 3 × the risk | `PULLBACK_TARGET_R` |
 | Costs | spread + slippage ≤ 10% of the risk | `MAX_COST_SHARE` |
 
 Each setup is traded once, on the first candle where the rule holds. The 6-point checklist
@@ -69,12 +70,13 @@ that has been both a ceiling and a floor is **flipped**. The chart draws the thr
 levels on each side of price (flipped ones solid), and the engine uses them two ways:
 
 - **Signal grade.** A signal with a flipped level just behind its entry (under a long, above a
-  short, within one H1 ATR) is **grade A**; the rest are grade B. It is the one checklist item
-  that separated better trades in testing — it grades a signal, it does not block one.
+  short, within one H1 ATR) is **grade A**; the rest are grade B. It grades a signal, it does
+  not block one — and treat it as context only: grade A looked better on three years of data
+  but not on fifteen (+0.03R a trade against +0.07R for grade B).
 - **Retest strategy** (`sr`). Old resistance holding as support (or the reverse), with the
-  daily trend, under the pullback rule. It is profitable on its own but adds nothing once
-  combined with the other four — it finds the same pullbacks — so it is tracked, not sent.
-  Add `sr` to `SIGNAL_STRATEGIES` to send it.
+  daily trend, under the pullback rule. It finds the same pullbacks as the other strategies
+  and lost money before 2021, so it is tracked, not sent. Add `sr` to `SIGNAL_STRATEGIES` to
+  send it.
 
 ## One trade at a time
 
@@ -107,34 +109,45 @@ slippage on every trade, and a loss whenever one candle touches both stop and ta
 ```bash
 npx tsx --env-file=.env.local scripts/backtest.ts                # XAU/USD, 3 years, printed year by year
 npx tsx --env-file=.env.local scripts/backtest.ts --save         # …and stored for the Backtests page
-npx tsx --env-file=.env.local scripts/backtest.ts --years=1      # a shorter window
+npx tsx --env-file=.env.local scripts/backtest.ts --years=15     # the long run — judge the rules on this
 ```
 
 Settings come from the environment, so prefix any override to test it
-(`BREAKOUT_TARGET_R=0.5 npx tsx …`). Candles are cached in `.cache/`; the first run downloads them.
+(`BREAKOUT_TARGET_R=1 npx tsx …`). Candles are cached in `.cache/`; the first run downloads them.
 The `/backtests` page shows stored runs — whole run, per year, per strategy — and its
 **Quick run** button backtests the last ~7 weeks on the server.
 
 Read the **t** column before the profit factor: inside ±2 an average is not distinguishable
 from zero.
 
-XAU/USD, 3 years to 2026-11-20, all four strategies, one trade at a time:
+XAU/USD, 15 years to 2026-11-20, all four strategies, one trade at a time:
 
-| | Trades | Win rate | Profit factor | Avg R | Total R |
-| --- | --- | --- | --- | --- | --- |
-| All four | 958 (1.2 a day) | 49% | 1.26 | +0.134 | +128 |
-| — breakout | 334 | 69% | 1.56 | +0.175 | +58 |
-| — fibonacci | 441 | 37% | 1.14 | +0.086 | +38 |
-| — zones | 109 | 39% | 1.25 | +0.153 | +17 |
-| — set & forget | 74 | 39% | 1.35 | +0.210 | +16 |
+| Period | Trades | Win rate | Total R |
+| --- | --- | --- | --- |
+| 2011-11 → 2016-11 | 968 | 29% | −10 |
+| 2016-11 → 2021-11 | 826 | 31% | +15 |
+| 2021-11 → 2023-11 | 442 | 30% | +17 |
+| 2023-11 → 2026-11 | 663 | 35% | +136 |
+| **All 15 years** | **2899 (0.7 a day)** | **31%** | **+158** |
 
-Each year is positive (+0.15R, +0.14R, +0.12R per trade), t = 3.3, and the profit factor is
-1.21 with costs doubled. Grade A signals (314 trades) averaged +0.21R against +0.10R for
-grade B (644 trades), and were ahead in two of the three years. The breakout alone (`SIGNAL_STRATEGIES=breakout`) makes fewer trades
-at a higher win rate: 458 trades, 67% wins, +61R. These are past results on one instrument,
-found by searching, in three years when gold trended strongly — a trend-following system like
-this gives back in a sideways market. Treat it as a hypothesis to confirm on a practice
-account, not a promise.
+By strategy over the 15 years: breakout 916 trades +82R, Fibonacci 1248 trades +60R, zones
+452 trades +28R, set & forget 283 trades −11R.
+
+**Read this before trusting the system.** Almost all the profit comes from the last three
+years, when gold rose from about $2,000 to over $3,500 — and those are the years the rules
+were first tuned on. Over the twelve years before that the system made +22R on 2,236 trades,
+which is not distinguishable from zero (t = 0.3). With costs doubled the 15-year total falls
+to +22R. The worst drawdown was 94R, the longest losing streak 23 trades, and equity once
+spent more than ten years below an earlier high. This is a trend-following system: it earns
+in a strong gold trend and roughly breaks even otherwise, and nothing tested here predicts
+which kind of year is coming. Run it on a practice account, and if you risk money, risk a
+small fraction of a percent per trade.
+
+The targets (breakout 2R, pullbacks 3R) were chosen on this long history. The earlier,
+smaller targets (0.75R and 2R) made the same in 2023–2026 but lost 67R over the twelve years
+before, at a higher win rate (44%). About forty variants were tested — targets, stop widths,
+trend lengths, breakout type, grade A only, each strategy alone, and the pullbacks on 4-hour
+candles; none showed a reliable edge before 2023.
 
 `scripts/research-strategies.ts` is a faster lab for new ideas: it tests entry rules on three
 years of M15 data (first two years to design, last year held out) before anything is built

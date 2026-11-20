@@ -12,9 +12,11 @@ import type { Candle, SignalDirection } from "@/lib/types";
  *    bars), broken between 07:00 and 20:00 UTC.
  *
  * The daily trend is the last closed daily close against the average of the
- * last 50. Both rules take a modest target (BREAKOUT_TARGET_R × the risk)
- * against a wide stop — the middle of the Asian range, or 3 ATR below a
- * channel break — which is what produces the high win rate.
+ * last 50. Both rules use a wide stop — the middle of the Asian range, or
+ * 3 ATR below a channel break — and a target of BREAKOUT_TARGET_R × the risk.
+ * The target is 2R: on fifteen years of gold a small target won often but
+ * made nothing (0.5R: 70% wins, flat), and every step wider did better. A
+ * 2R target wins about 4 trades in 10.
  *
  * Every number here is a rule of the strategy, not a tuning knob: the same
  * definitions are used by the scanner, the backtest and the chart.
@@ -32,13 +34,18 @@ export const CHANNEL_ENTRY_END_HOUR = 20;
 export const CHANNEL_BARS = 480;
 /** Stop distance for a channel break, in ATR. */
 export const CHANNEL_STOP_ATR = 3;
-/** Days in the daily-trend average. */
-export const TREND_DAYS = 50;
-/** Target as a multiple of the risk. Override with BREAKOUT_TARGET_R: 0.5 wins
- *  more often for a little less profit, 1 does the opposite. */
+/** Days in the daily-trend average. Research override: BREAKOUT_TREND_DAYS. */
+export const TREND_DAYS = (() => {
+  const raw = Number(process.env.BREAKOUT_TREND_DAYS);
+  return Number.isInteger(raw) && raw >= 10 && raw <= 300 ? raw : 50;
+})();
+/** Which breakouts are taken. Research override: BREAKOUT_KINDS=asian or =channel. */
+const KINDS = new Set((process.env.BREAKOUT_KINDS ?? "asian,channel").split(",").map((x) => x.trim()));
+/** Target as a multiple of the risk. Override with BREAKOUT_TARGET_R: a smaller
+ *  target wins more often and earns less. */
 export const BREAKOUT_TARGET_R = (() => {
   const raw = Number(process.env.BREAKOUT_TARGET_R);
-  return Number.isFinite(raw) && raw >= 0.25 && raw <= 3 ? raw : 0.75;
+  return Number.isFinite(raw) && raw >= 0.25 && raw <= 5 ? raw : 2;
 })();
 
 export interface BreakoutSetup {
@@ -135,7 +142,7 @@ export function detectBreakout(candles: Candle[], daily: Candle[], atrValue: num
   const direction: SignalDirection = trend === 1 ? "long" : "short";
 
   // --- Asian range: the first close beyond it during the London morning ---
-  if (hour >= ASIAN_END_HOUR && hour < ASIAN_ENTRY_END_HOUR) {
+  if (KINDS.has("asian") && hour >= ASIAN_END_HOUR && hour < ASIAN_ENTRY_END_HOUR) {
     const range = asianRange(candles);
     if (range) {
       const side = (c: Candle) => (c.close > range.high ? 1 : c.close < range.low ? -1 : 0);
@@ -164,7 +171,7 @@ export function detectBreakout(candles: Candle[], daily: Candle[], atrValue: num
   }
 
   // --- one-week channel: a close through it that the previous candle had not made ---
-  if (hour >= CHANNEL_ENTRY_START_HOUR && hour < CHANNEL_ENTRY_END_HOUR && atrValue > 0) {
+  if (KINDS.has("channel") && hour >= CHANNEL_ENTRY_START_HOUR && hour < CHANNEL_ENTRY_END_HOUR && atrValue > 0) {
     const now = channelBefore(candles, n - 1);
     const before = channelBefore(candles, n - 2);
     if (now && before) {
