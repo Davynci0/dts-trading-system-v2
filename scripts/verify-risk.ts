@@ -171,7 +171,8 @@ check("K: stop anchors on real swing, not the 0.3-pip wiggle", rK.ok && Math.abs
   }
   const ap = piv(aud);
   const audAtr = atr(aud)!;
-  const swingLow = 1.95 - 0.0006 - 0.25 * audAtr; // stop lands ~1×ATR away
+  // far enough that GBP/AUD's entry cost (2.25 pips) stays under 10% of the risk
+  const swingLow = 1.95 - 0.0024 - 0.25 * audAtr;
   const rM = computeRiskLevels({
     instrument: "GBP_AUD",
     direction: "long",
@@ -186,6 +187,53 @@ check("K: stop anchors on real swing, not the 0.3-pip wiggle", rK.ok && Math.abs
     const expected = Math.floor(100 / (rM.levels.stopDistance * 0.65));
     check("M: units × AUD/USD = $100 risk", rM.levels.positionUnits === expected, `${rM.levels.positionUnits}u vs ${expected}u`);
   }
+}
+
+// ---- N: stop anchored to the setup's own invalidation level ----
+{
+  const zone = { kind: "demand" as const, top: 1.0995, bottom: 1.097 };
+  const rN = run({
+    direction: "long",
+    entry: 1.099,
+    // a minor swing low sits INSIDE the zone — the old rule put the stop there
+    pivots: [p(20, "low", 1.0978), p(40, "high", 1.115)],
+    trigger: { zone },
+  });
+  check("N: stop sits beyond the zone's far edge, not inside it", rN.ok && Math.abs(rN.levels.stopLoss - (zone.bottom - buf)) < 1e-9, rN.ok ? rN.levels.stopLoss.toFixed(5) : rN.reason);
+  check("N: basis names the zone", rN.ok && rN.levels.stopBasis.includes("demand zone low"), rN.ok ? rN.levels.stopBasis : "");
+
+  const rN2 = run({ direction: "long", entry: 1.0965, pivots: [p(20, "low", 1.09), p(40, "high", 1.115)], trigger: { zone } });
+  check("N: price already through the invalidation is rejected", !rN2.ok && rN2.reason.includes("invalidation"), !rN2.ok ? rN2.reason : "unexpectedly ok");
+
+  const fib = { direction: "short" as const, swingLow: { price: 1.09 }, swingHigh: { price: 1.11 }, goldenBottom: 1.10236, goldenTop: 1.10572 };
+  const rN3 = run({ direction: "short", entry: 1.103, pivots: [p(20, "high", 1.11), p(40, "low", 1.09)], trigger: { fib } });
+  check("N: fib short stops above the 78.6% edge", rN3.ok && Math.abs(rN3.levels.stopLoss - (fib.goldenTop + buf)) < 1e-9, rN3.ok ? rN3.levels.stopLoss.toFixed(5) : rN3.reason);
+}
+
+// ---- O: entry costs may not eat more than 10% of the risk ----
+{
+  const nzd: Candle[] = [];
+  for (let i = 0; i < 60; i++) {
+    const c = i % 2 === 0 ? 2.25 : 2.2506;
+    nzd.push({ time: 1_700_000_000 + i * 900, open: c, high: c + 0.0006, low: c - 0.0006, close: c, volume: 1 });
+  }
+  const np = piv(nzd);
+  // a tight zone right under price: the thesis stop would be ~6 pips away,
+  // but GBP/NZD costs 2.75 pips to enter — nearly half the risk
+  const rO = computeRiskLevels({
+    instrument: "GBP_NZD",
+    direction: "long",
+    entry: 2.25,
+    candles: nzd,
+    pivots: [np(20, "low", 2.24), np(40, "high", 2.262)],
+    trigger: { zone: { kind: "demand", top: 2.2502, bottom: 2.2497 } },
+    accountBalance: 10000,
+    quoteUsdRate: 0.58,
+  });
+  const cost = 0.000275;
+  check("O: a too-tight stop is widened to the cost floor", rO.levels != null && Math.abs(rO.levels.stopDistance - cost / 0.1) < 1e-9, rO.levels ? `${(rO.levels.stopDistance * 1e4).toFixed(1)} pips` : "no levels");
+  check("O: the basis says why it was widened", !!rO.levels?.stopBasis.includes("widened so costs"), rO.levels?.stopBasis ?? "");
+  check("O: costs end at ≤10% of the risk", rO.levels != null && cost / rO.levels.stopDistance <= 0.1 + 1e-9, rO.levels ? `${((cost / rO.levels.stopDistance) * 100).toFixed(1)}%` : "");
 }
 
 console.log(failures === 0 ? "\nALL TESTS PASSED" : `\n${failures} TEST(S) FAILED`);

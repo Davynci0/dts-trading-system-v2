@@ -21,7 +21,7 @@ export interface Signal {
   stop_loss: number;
   take_profit: number;
   r_multiple: number | null;
-  /** 3 = standard confidence, 4-5 = high confidence */
+  /** confirmations met out of 6; 5+ = high confidence */
   confidence: number;
   confirmations: Record<string, boolean>;
   vision_note: string | null;

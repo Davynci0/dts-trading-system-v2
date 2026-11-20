@@ -119,8 +119,8 @@ export default function SignalFeed() {
                 </span>
               </span>
               <span className="text-neutral-500">
-                {fmtTime(s.created_at)} · {s.strategy} · {s.confidence}/5
-                {s.confidence >= 4 ? " ★" : ""}
+                {fmtTime(s.created_at)} · {s.strategy} · {s.confidence}/6
+                {s.confidence >= 5 ? " ★" : ""}
                 {s.status === "skipped" ? " · SKIPPED" : ""}
               </span>
             </div>

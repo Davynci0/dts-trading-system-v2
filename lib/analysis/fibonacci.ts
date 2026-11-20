@@ -1,5 +1,6 @@
 import type { Candle } from "@/lib/types";
 import type { Pivot } from "./pivots";
+import { legIsIntact } from "./swing";
 
 export interface FibSetup {
   /** long = retracement of an up-swing (buy the dip), short = retracement of a down-swing */
@@ -22,9 +23,10 @@ const DEFAULT_FIB_LOOKBACK = 150;
 
 /**
  * Fibonacci retracement on the most recent significant swing (Section 2.3).
- * Finds the latest pivot leg (low→high for longs, high→low for shorts) whose
- * range is meaningful vs ATR, and computes the 61.8%–78.6% golden zone box.
- * The setup stays valid until price closes beyond the swing origin.
+ * Finds the latest intact pivot leg (low→high for longs, high→low for shorts)
+ * whose range is meaningful vs ATR, and computes the 61.8%–78.6% golden zone
+ * box. The setup stays valid until price closes beyond the swing origin or
+ * trades beyond the swing end (see legIsIntact).
  *
  * `preferredDirection` biases selection toward the current market structure,
  * but a strong opposite-direction setup is still returned if no aligned one
@@ -67,6 +69,9 @@ export function findFibSetup(
       const high = a.kind === "high" ? a : b;
       const range = high.price - low.price;
       if (range < MIN_SWING_ATR * atrValue) continue;
+      // a real, standing leg — not two unrelated pivots, not already extended
+      // past its end or closed through its origin
+      if (!legIsIntact(candles, low, high)) continue;
 
       let setup: FibSetup;
       if (low.index < high.index) {
@@ -113,7 +118,6 @@ export function findRecentSwing(
   lookbackCandles = DEFAULT_FIB_LOOKBACK
 ): FibSetup | null {
   if (candles.length === 0) return null;
-  const last = candles[candles.length - 1];
   const minIndex = Math.max(0, candles.length - lookbackCandles);
   const recent = pivots.filter((p) => p.index >= minIndex);
 
@@ -129,6 +133,9 @@ export function findRecentSwing(
       const high = a.kind === "high" ? a : b;
       const range = high.price - low.price;
       if (range < MIN_SWING_ATR * atrValue) continue;
+      // a real, standing leg — not two unrelated pivots, not already extended
+      // past its end or closed through its origin
+      if (!legIsIntact(candles, low, high)) continue;
 
       let setup: FibSetup;
       if (low.index < high.index) {

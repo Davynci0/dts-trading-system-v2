@@ -4,27 +4,21 @@ import {
   analyzeM15,
   scoreSetup,
   computeRiskLevels,
+  trendModeFor,
   type ScoringContext,
+  type ScoreResult,
+  type RiskLevels,
 } from "@/lib/analysis";
-import { pipSize } from "@/lib/analysis/confirmations";
-import { analyzeTopDown, type TopDownCandles } from "@/lib/analysis/topDown";
+import { entryCost, SPREAD_PIPS, SLIPPAGE_PIPS } from "@/lib/analysis/instruments";
+import { analyzeTopDown, type TopDownAnalysis, type TopDownCandles } from "@/lib/analysis/topDown";
+import { passesSendGate, selectSignal, type SignalCandidate } from "@/lib/engine/select";
 
-/** Typical spread per instrument, in pips (Section 7: realistic conditions). */
-export const SPREAD_PIPS: Record<string, number> = {
-  XAU_USD: 3.0,
-  EUR_USD: 1.0,
-  GBP_USD: 1.2,
-  USD_JPY: 1.0,
-  GBP_JPY: 2.5,
-  EUR_JPY: 1.4,
-  AUD_JPY: 1.6,
-  GBP_AUD: 3.5,
-  GBP_NZD: 4.5,
-};
-export const SLIPPAGE_PIPS = 0.5; // per side
+export { SPREAD_PIPS, SLIPPAGE_PIPS };
 const WINDOW = 500; // rolling analysis window per step
 const WARMUP = 80;
-const MAX_HOLD_CANDLES = 100;
+/** Live signals stay open until TP/SL or the 7-day expiry (lib/engine/outcomes.ts);
+ *  5 trading days of M15 bars mirrors that. Override per run with maxHoldCandles. */
+const MAX_HOLD_CANDLES = 480;
 const OUT_OF_SAMPLE_FRACTION = 0.3; // last 30% = walk-forward segment
 
 /** Standard lot sizes in units. 0.1 lot = 10,000 units for most brokers. */
@@ -53,6 +47,41 @@ export interface BacktestTrade {
   inSample: boolean;
   /** position size in units used for P&L (risk-based or fixed) */
   units: number;
+  /** reward-to-risk the structure offered at the signal candle's close */
+  plannedR: number;
+  /** every strategy that agreed on this trade (primary first) */
+  confluence: StrategyId[];
+  /** stop distance in ATR, and the round-trip cost as a fraction of the risk —
+   *  a tight stop on a wide-spread pair pays a large share of 1R in costs */
+  stopAtr: number;
+  costR: number;
+  /** research-only annotations from the `annotate` hook */
+  features?: Record<string, unknown>;
+}
+
+/** Median spacing between bar opens = the series' nominal bar length. The
+ *  median ignores weekend gaps and the 23h/25h daily bars around DST changes. */
+function barSeconds(candles: Candle[], fallback: number): number {
+  const diffs: number[] = [];
+  for (let i = 1; i < candles.length && diffs.length < 200; i++) diffs.push(candles[i].time - candles[i - 1].time);
+  if (diffs.length === 0) return fallback;
+  diffs.sort((a, b) => a - b);
+  return diffs[Math.floor(diffs.length / 2)];
+}
+
+/**
+ * Forward-only cursor over a higher-timeframe series: how many of its bars had
+ * fully CLOSED by time `t`. `Candle.time` is the bar's OPEN, so filtering on
+ * `time <= t` would hand the strategy a bar that is still forming — up to a
+ * week of future price on the weekly series.
+ */
+export function closedBarCursor(candles: Candle[], fallbackSeconds: number): (t: number) => number {
+  const span = barSeconds(candles, fallbackSeconds);
+  let end = 0;
+  return (t: number) => {
+    while (end < candles.length && candles[end].time + span <= t) end++;
+    return end;
+  };
 }
 
 export interface MetricsCore {
@@ -162,6 +191,23 @@ export function runBacktest(opts: {
   /** USD value of 1 unit of the quote currency — sizes USD risks correctly on
    *  JPY pairs and crosses (GBP_JPY, GBP_AUD, ...). Defaults to 1 (USD-quoted). */
   quoteUsdRate?: number;
+  /** Apply the scanner's send gate: HTF bias and M15 trend must both agree
+   *  (each honours the pair's trend mode). Default true — set false only to
+   *  research raw setups the live system would never send. */
+  requireTrendAlignment?: boolean;
+  /** Bars a trade may stay open before it is closed at market. */
+  maxHoldCandles?: number;
+  /** Scales spread + slippage: 0 isolates the raw entry edge from trading
+   *  costs, 2 stress-tests wider real-world spreads. Default 1. */
+  costMultiplier?: number;
+  /** Research hook: called at each entry with the full decision context; the
+   *  returned object is stored on the trade as `features`. */
+  annotate?: (entry: {
+    ctx: ScoringContext;
+    scored: ScoreResult;
+    levels: RiskLevels;
+    topDown?: TopDownAnalysis;
+  }) => Record<string, unknown>;
 }): BacktestReport {
   const {
     pair,
@@ -177,20 +223,35 @@ export function runBacktest(opts: {
     requireChecks = [],
     excludeChecks = [],
     quoteUsdRate = 1,
+    requireTrendAlignment = true,
+    maxHoldCandles = MAX_HOLD_CANDLES,
+    costMultiplier = 1,
+    annotate,
   } = opts;
   const minFor = (s: StrategyId): number => {
     if (typeof minConfidence === "number") return minConfidence;
     return minConfidence[s] ?? 3;
   };
-  const pip = pipSize(pair);
-  const spread = (SPREAD_PIPS[pair] ?? 1.5) * pip;
-  const slip = SLIPPAGE_PIPS * pip;
-  const cost = spread / 2 + slip;
+  const cost = entryCost(pair) * Math.max(0, costMultiplier);
 
   const trades: BacktestTrade[] = [];
   const open: Partial<Record<StrategyId, BacktestTrade>> = {};
   const traded = new Set<string>();
   const oosStart = Math.floor(candles.length * (1 - OUT_OF_SAMPLE_FRACTION));
+
+  const stepSeconds = barSeconds(candles, 900);
+  const trendMode = trendModeFor(pair);
+  const htfClosed = closedBarCursor(htfCandles, 3600);
+  const tdClosed = topDownCandles
+    ? {
+        weekly: closedBarCursor(topDownCandles.weekly, 7 * 86400),
+        daily: closedBarCursor(topDownCandles.daily, 86400),
+        h4: closedBarCursor(topDownCandles.h4, 4 * 3600),
+        h1: closedBarCursor(topDownCandles.h1, 3600),
+      }
+    : null;
+  let topDownKey = "";
+  let topDownCached: TopDownAnalysis | undefined;
 
   for (let i = WARMUP; i < candles.length - 1; i++) {
     // 1) manage open trades on this candle (SL/TP/timeout)
@@ -200,7 +261,7 @@ export function runBacktest(opts: {
       const hitSl = t.direction === "long" ? c.low <= t.stopLoss : c.high >= t.stopLoss;
       const hitTp = t.direction === "long" ? c.high >= t.takeProfit : c.low <= t.takeProfit;
 
-      if (hitSl || hitTp || i - t.entryIndex >= MAX_HOLD_CANDLES) {
+      if (hitSl || hitTp || i - t.entryIndex >= maxHoldCandles) {
         let exitPrice: number;
         let outcome: BacktestTrade["outcome"];
         if (hitSl) {
@@ -225,50 +286,63 @@ export function runBacktest(opts: {
     }
 
     // 2) evaluate strategies on the closed-candle window (no lookahead)
+    if (oneTradePerPair && Object.keys(open).length > 0) continue; // live parity: one trade per pair
     const windowCandles = candles.slice(Math.max(0, i - WINDOW), i + 1);
-    const m15 = analyzeM15(windowCandles);
+    const m15 = analyzeM15(windowCandles, pair);
     if (!m15) continue;
-        const { pivots, atrValue, zones, fib, setForget } = m15;
+    const { pivots, atrValue, zones, fib, setForget } = m15;
 
-    // HTF agreement uses only HTF candles closed before this candle's time
-    const cutoff = windowCandles[windowCandles.length - 1].time;
-    const htfSlice = htfCandles.filter((c) => c.time <= cutoff).slice(-300);
-    const topDown = topDownCandles
-      ? analyzeTopDown({
-          weekly: topDownCandles.weekly.filter((c) => c.time <= cutoff).slice(-52),
-          daily: topDownCandles.daily.filter((c) => c.time <= cutoff).slice(-90),
-          h4: topDownCandles.h4.filter((c) => c.time <= cutoff).slice(-120),
-          h1: topDownCandles.h1.filter((c) => c.time <= cutoff).slice(-120),
-        })
-      : undefined;
+    // Higher timeframes: only bars that had CLOSED when this candle closed.
+    const closeTime = candles[i].time + stepSeconds;
+    const htfEnd = htfClosed(closeTime);
+    const htfSlice = htfCandles.slice(Math.max(0, htfEnd - 300), htfEnd);
+    let topDown: TopDownAnalysis | undefined;
+    if (topDownCandles && tdClosed) {
+      const w = tdClosed.weekly(closeTime);
+      const d = tdClosed.daily(closeTime);
+      const h4 = tdClosed.h4(closeTime);
+      const h1 = tdClosed.h1(closeTime);
+      const key = `${w}:${d}:${h4}:${h1}`;
+      if (key !== topDownKey) {
+        topDownKey = key;
+        topDownCached = analyzeTopDown({
+          weekly: topDownCandles.weekly.slice(Math.max(0, w - 52), w),
+          daily: topDownCandles.daily.slice(Math.max(0, d - 90), d),
+          h4: topDownCandles.h4.slice(Math.max(0, h4 - 120), h4),
+          h1: topDownCandles.h1.slice(Math.max(0, h1 - 120), h1),
+        });
+      }
+      topDown = topDownCached;
+    }
 
     const ctx: ScoringContext = {
       instrument: pair,
       candles: windowCandles,
       htfCandles: htfSlice,
       pivots,
+      structuralPivots: m15.structuralPivots,
       atrValue,
       zones,
       fib,
       setForget,
       topDown,
+      trendMode,
+      headShoulders: m15.headShoulders,
     };
 
+    // Every strategy that reaches its gate on this candle, with the same
+    // one-signal-per-setup rule as the live scanner.
+    const candidates: (SignalCandidate & { setupKey: string })[] = [];
     for (const strategy of ALL_STRATEGIES) {
       if (!strategies.includes(strategy)) continue;
       if (open[strategy]) continue; // one open trade per strategy
-      if (oneTradePerPair && Object.keys(open).length > 0) continue; // live parity: one trade per pair
       const scored = scoreSetup(strategy, ctx);
       if (!scored.hasTrigger || !scored.fired) continue;
-
-      // Only enter if confidence meets the configured (per-strategy) minimum.
-      const count = Object.values(scored.confirmations).filter(Boolean).length;
-      if (count < minFor(strategy)) continue;
+      if (scored.count < minFor(strategy)) continue;
       // research filters: measure individual checks' marginal value
       if (requireChecks.some((c) => scored.confirmations[c] !== true)) continue;
       if (excludeChecks.some((c) => scored.confirmations[c] === true)) continue;
 
-      // same one-signal-per-setup rule as the live scanner
       const setupKey = buildSetupKey("bt", scored);
       if (traded.has(setupKey)) continue;
 
@@ -279,36 +353,60 @@ export function runBacktest(opts: {
         candles: windowCandles,
         pivots,
         zones,
+        trigger: scored.trigger,
         accountBalance,
         quoteUsdRate,
       });
-      if (!risk.ok) continue; // skipped-for-risk: logged in live mode, excluded here
+      const candidate = { strategy, direction: scored.direction, scored, risk, setupKey };
+      // skipped-for-risk / counter-trend: logged in live mode, excluded here
+      if (requireTrendAlignment ? !passesSendGate(candidate, minFor(strategy)) : !risk.ok) continue;
+      candidates.push(candidate);
+    }
+    if (candidates.length === 0) continue;
 
+    // Live parity: agreeing strategies collapse into ONE trade defined by the
+    // best setup. Otherwise each strategy books its own trade.
+    const selection = oneTradePerPair ? selectSignal(candidates, topDown) : null;
+    const entries = selection
+      ? [{ primary: selection.primary, group: selection.winners }]
+      : candidates.map((c) => ({ primary: c, group: [c] }));
+
+    for (const { primary, group } of entries) {
+      if (!primary.risk.ok) continue;
+      const levels = primary.risk.levels;
       // position size: fixed lots override risk-based sizing
-      const units = fixedUnits ?? risk.levels.positionUnits;
+      const units = fixedUnits ?? levels.positionUnits;
       if (!units || units <= 0) continue;
-      traded.add(setupKey);
+      for (const c of group) traded.add(c.setupKey);
 
       // fill at NEXT candle open ± costs (signal known only after close)
       const next = candles[i + 1];
-      const entry =
-        scored.direction === "long" ? next.open + cost : next.open - cost;
+      const entry = primary.direction === "long" ? next.open + cost : next.open - cost;
+      // a gap through the stop or target before the fill leaves nothing to trade
+      const stopSide = primary.direction === "long" ? entry <= levels.stopLoss : entry >= levels.stopLoss;
+      const targetSide = primary.direction === "long" ? entry >= levels.takeProfit : entry <= levels.takeProfit;
+      if (stopSide || targetSide) continue;
 
-      open[strategy] = {
-        strategy,
-        direction: scored.direction,
+      open[primary.strategy] = {
+        strategy: primary.strategy,
+        direction: primary.direction,
         entryIndex: i + 1,
         exitIndex: -1,
         entry,
-        stopLoss: risk.levels.stopLoss,
-        takeProfit: risk.levels.takeProfit,
+        stopLoss: levels.stopLoss,
+        takeProfit: levels.takeProfit,
         exitPrice: 0,
         rAchieved: 0,
-             checks: scored.confirmations,
-        confirmations: count,
+        checks: primary.scored.confirmations,
+        confirmations: primary.scored.count,
         outcome: "timeout",
         inSample: i + 1 < oosStart,
         units,
+        plannedR: levels.rMultiple,
+        confluence: group.map((c) => c.strategy),
+        stopAtr: levels.stopDistance / levels.atr,
+        costR: cost / Math.abs(entry - levels.stopLoss),
+        features: annotate?.({ ctx, scored: primary.scored, levels, topDown }),
       };
     }
   }
@@ -350,7 +448,7 @@ export function runBacktest(opts: {
     candles: candles.length,
     generatedAt: new Date().toISOString(),
     limitation:
-      "Deterministic 6-point checklist, same as the live scanner. Confidence buckets are 3, 4 and ≥5 out of 6. Costs (spread + slippage) are applied at entry; a candle touching both SL and TP settles as a loss. Confluent setups book separately per strategy unless oneTradePerPair is enabled (live parity).",
+      "Deterministic 6-point checklist and send gate, same as the live scanner; higher timeframes use closed bars only. Confidence buckets are 3, 4 and ≥5 out of 6. Costs (spread + slippage) are applied at entry; a candle touching both SL and TP settles as a loss. Confluent setups book separately per strategy unless oneTradePerPair is enabled (live parity).",
     scopes,
     trades,
   };

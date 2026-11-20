@@ -7,4 +7,4 @@
  * Consumed by the scanner (setup keys) and the dashboard tracker (filtering),
  * so it lives in a dependency-free module that is safe on both server and client.
  */
-export const ENGINE_VERSION = "tori-v4";
+export const ENGINE_VERSION = "tori-v5";

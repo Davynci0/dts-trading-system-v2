@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
 import { runBacktest, computeMetrics, LOT_SIZES, type BacktestTrade } from "@/lib/backtest/engine";
 import { createAdminClient } from "@/lib/supabase/admin";
+import { minConfidenceFor } from "@/lib/engine/scanner";
 import type { StrategyId } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -24,9 +25,11 @@ const TIMEFRAME_HOURS: Record<string, number> = {
  *   accountBalance?: number,
  *   lotSize?: "0.01" | "0.1" | "1",
  *   riskPercent?: number,
- *   minConfidence?: number,
+ *   minConfidence?: number,   // omit to use the live per-strategy gate
  *   strategies?: ("zones"|"setforget"|"fibonacci")[]
  * }
+ * Runs in live-parity mode: the scanner's send gate, one trade per pair, and
+ * (unless minConfidence is given) the same per-strategy confirmation minimums.
  */
 export async function POST(req: NextRequest) {
   const body = (await req.json().catch(() => ({}))) as {
@@ -45,7 +48,7 @@ export async function POST(req: NextRequest) {
   const accountBalance = body.accountBalance ?? 25000;
   const lotSize = body.lotSize;
   const riskPercent = body.riskPercent ?? 0.01;
-  const minConfidence = body.minConfidence ?? 4;
+  const minConfidence = body.minConfidence; // undefined → live per-strategy gate
   const fixedUnits = lotSize ? LOT_SIZES[lotSize] ?? undefined : undefined;
   const validStrategies: StrategyId[] = ["zones", "setforget", "fibonacci"];
   const strategies = body.strategies?.filter((s): s is StrategyId => validStrategies.includes(s as StrategyId)) ?? validStrategies;
@@ -71,10 +74,11 @@ export async function POST(req: NextRequest) {
           accountBalance,
           lotSize,
           riskPercent,
-          minConfidence,
+          minConfidence: minConfidence ?? "live gate",
           strategies,
           fixedUnits,
-          engine: "top-down W/D/H4, 6-point checklist (no vision), spread+slippage, conservative same-candle SL",
+          engine:
+            "live send gate (session, weekly veto, M15 structure), closed-bar HTF, one trade per pair, 6-point checklist (no vision), spread+slippage, conservative same-candle SL",
         },
         notes:
           "Vision AI excluded — cannot be queried retroactively (Section 7). Confidence buckets: 3 vs 4+ of the 6 non-AI checks.",
@@ -106,7 +110,12 @@ export async function POST(req: NextRequest) {
         accountBalance,
         fixedUnits,
         riskPercent,
-        minConfidence,
+        minConfidence: minConfidence ?? {
+          zones: minConfidenceFor(pair, "zones"),
+          setforget: minConfidenceFor(pair, "setforget"),
+          fibonacci: minConfidenceFor(pair, "fibonacci"),
+        },
+        oneTradePerPair: true,
         strategies,
       });
       for (const t of report.trades) allTrades.push({ pair, trade: t });
@@ -149,7 +158,7 @@ export async function POST(req: NextRequest) {
     accountBalance,
     lotSize,
     riskPercent,
-    minConfidence,
+    minConfidence: minConfidence ?? "live gate",
     strategies,
     summaries,
   });

@@ -102,16 +102,27 @@ export function analyzeTopDown(frames: TopDownCandles): TopDownAnalysis {
   };
 }
 
-/** A lower-timeframe setup may only count HTF agreement when the macro bias agrees. */
+const opposing = (direction: SignalDirection): StructureState => (direction === "long" ? "downtrend" : "uptrend");
+const agreeing = (direction: SignalDirection): StructureState => (direction === "long" ? "uptrend" : "downtrend");
+
+/**
+ * The one higher-timeframe fact that separated winners from losers in a year
+ * of closed-bar backtests: trades taken AGAINST the weekly swing structure
+ * lost 0.10R (in-sample) and 0.31R (out-of-sample) per trade; everything else
+ * was flat to slightly positive. Daily, H4 and H1 structure added nothing once
+ * the weekly was known — an M15 pullback entry is against H1/H4 by nature.
+ * This is the send-gate veto.
+ */
+export function topDownOpposes(analysis: TopDownAnalysis, direction: SignalDirection): boolean {
+  return analysis.weekly === opposing(direction);
+}
+
+/**
+ * Positive higher-timeframe agreement (the "HTF trend agrees" confirmation):
+ * the weekly structure points the trade's way, or the weekly is ranging and
+ * the daily does. Never true against the weekly.
+ */
 export function topDownAgrees(analysis: TopDownAnalysis, direction: SignalDirection): boolean {
-  const macroAgrees =
-    (analysis.bias === "bullish" && direction === "long") ||
-    (analysis.bias === "bearish" && direction === "short");
-  const h4Opposes =
-    (direction === "long" && analysis.h4 === "downtrend") ||
-    (direction === "short" && analysis.h4 === "uptrend");
-  const h1Opposes =
-    (direction === "long" && analysis.h1 === "downtrend") ||
-    (direction === "short" && analysis.h1 === "uptrend");
-  return macroAgrees && !h4Opposes && !h1Opposes;
+  if (analysis.weekly === agreeing(direction)) return true;
+  return analysis.weekly === "ranging" && analysis.daily === agreeing(direction);
 }

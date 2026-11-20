@@ -1,6 +1,6 @@
 import type { Candle, SignalDirection } from "@/lib/types";
 import { atr } from "./indicators";
-import { pipSize } from "./confirmations";
+import { entryCost, pipSize } from "./instruments";
 import { significantPivots, type Pivot } from "./pivots";
 
 export const STOP_BUFFER_ATR_FRACTION = 0.25; // room beyond the swing so the stop isn't on the wick
@@ -11,6 +11,13 @@ export const MAX_STOP_ATR_MULT = 3; // structure further than this × ATR away i
 export const MIN_RR = Math.max(0, Number(process.env.MIN_R_MULTIPLE ?? 2.0));
 export const RISK_PCT_PER_TRADE = 0.01; // 1% account risk per trade
 const STRUCTURE_SWING_ATR = 0.5; // only swings this many ATR in size count as structure
+// Entry costs (half-spread + slippage) may be at most this share of the risk.
+// A year of M15 backtests put the average at 13% of risk per trade — the
+// entire loss of the system — because stops sat a few pips from entry on
+// pairs with multi-pip spreads. Override with MAX_COST_SHARE (0 disables).
+export const MAX_COST_SHARE = Math.max(0, Number(process.env.MAX_COST_SHARE ?? 0.1));
+/** Fib depth past which a retracement has stopped being a pullback. */
+const DEEP_RETRACE = 0.786;
 
 export interface RiskLevels {
   direction: SignalDirection;
@@ -44,6 +51,13 @@ export interface ZoneRef {
   active: boolean;
 }
 
+/** Structural identity of the setup being traded (ScoreResult.trigger). */
+export interface SetupTrigger {
+  zone?: { kind: "demand" | "supply"; top: number; bottom: number };
+  fib?: { direction: "long" | "short"; swingLow: { price: number }; swingHigh: { price: number }; goldenTop: number; goldenBottom: number };
+  setForget?: { direction: "long" | "short"; legLow: { price: number }; legHigh: { price: number }; aoiTop: number; aoiBottom: number };
+}
+
 interface Candidate {
   price: number;
   basis: string;
@@ -51,16 +65,49 @@ interface Candidate {
 }
 
 /**
- * Stop and target come from market structure; ATR (volatility) only decides
- * whether the structure is tradeable.
+ * The price that proves the setup wrong, when the setup defines one:
+ *  - supply/demand zone → the zone's far (distal) edge,
+ *  - fib golden zone    → its deep (78.6%) edge,
+ *  - set & forget AOI   → the 78.6% retracement of the impulse leg.
+ * A stop anywhere short of this sits INSIDE the area the trade expects price
+ * to work in, and is hit by the ordinary fill of that area.
+ */
+function invalidationLevel(trigger: SetupTrigger | null | undefined, long: boolean): { price: number; label: string } | null {
+  if (!trigger) return null;
+  if (trigger.zone) {
+    return long
+      ? { price: trigger.zone.bottom, label: "demand zone low" }
+      : { price: trigger.zone.top, label: "supply zone high" };
+  }
+  if (trigger.fib) {
+    return long
+      ? { price: trigger.fib.goldenBottom, label: "78.6% retracement" }
+      : { price: trigger.fib.goldenTop, label: "78.6% retracement" };
+  }
+  if (trigger.setForget) {
+    const { legLow, legHigh } = trigger.setForget;
+    const range = legHigh.price - legLow.price;
+    return long
+      ? { price: legHigh.price - DEEP_RETRACE * range, label: "78.6% retracement of the impulse leg" }
+      : { price: legLow.price + DEEP_RETRACE * range, label: "78.6% retracement of the impulse leg" };
+  }
+  return null;
+}
+
+/**
+ * Stop and target come from market structure; ATR (volatility) and trading
+ * costs only decide whether the structure is tradeable.
  *
- * - Stop: beyond the nearest significant swing that is at least MIN_STOP_ATR
- *   away, plus a small ATR buffer.
+ * - Stop: beyond the setup's own invalidation level when the caller passes the
+ *   `trigger` (see invalidationLevel); otherwise beyond the nearest
+ *   significant swing. Either way it must clear MIN_STOP_ATR of noise and be
+ *   wide enough that entry costs stay under MAX_COST_SHARE of the risk — a
+ *   stop that is too tight is widened to that floor, never left in the noise.
  * - Target: the nearest structural level ahead — a swing extreme or an
  *   opposing supply/demand zone. With no level ahead (e.g. price at new highs)
  *   it falls back to a measured move of the last swing leg.
- * - Skipped when the structure puts the stop too far away. When MIN_RR > 0,
- *   it also requires the chosen target to pay at least MIN_RR.
+ * - Skipped when the stop ends up too far away. When MIN_RR > 0, it also
+ *   requires the chosen target to pay at least MIN_RR.
  */
 export function computeRiskLevels(opts: {
   instrument: string;
@@ -69,6 +116,8 @@ export function computeRiskLevels(opts: {
   candles: Candle[];
   pivots: Pivot[];
   zones?: ZoneRef[];
+  /** The setup that fired (zone / fib swing / AOI leg). */
+  trigger?: SetupTrigger | null;
   accountBalance: number;
   /** USD value of 1 unit of the quote currency (JPY pairs, GBP_AUD, GBP_NZD...).
    *  Defaults to 1 (USD-quoted pairs incl. XAU). 0/missing conversion refuses sizing. */
@@ -92,14 +141,35 @@ export function computeRiskLevels(opts: {
   const highs = swings.filter((p) => p.kind === "high");
   const lows = swings.filter((p) => p.kind === "low");
 
-  // --- stop: beyond the price-nearest significant swing that clears normal
-  // noise. Anchoring to the nearest swing in PRICE (not the most recent one)
-  // keeps the stop proportional to the actual structure around the entry. ---
   const buffer = STOP_BUFFER_ATR_FRACTION * atrValue;
-  const minStop = MIN_STOP_ATR * atrValue;
+  // the closest a stop may sit: clear of candle noise AND far enough that the
+  // spread + slippage paid at entry is a small share of what is being risked
+  const costFloor = MAX_COST_SHARE > 0 ? entryCost(instrument) / MAX_COST_SHARE : 0;
+  const minStop = Math.max(MIN_STOP_ATR * atrValue, costFloor);
+  const widenedNote = costFloor > MIN_STOP_ATR * atrValue ? "widened so costs stay a small share of the risk" : "widened to clear candle noise";
+
   let stopLoss: number;
   let stopBasis: string;
-  if (long) {
+  const invalidation = invalidationLevel(opts.trigger, long);
+  if (invalidation) {
+    // --- stop: beyond the level that proves this setup wrong ---
+    if (long ? entry <= invalidation.price : entry >= invalidation.price) {
+      return {
+        ok: false,
+        reason: `price has already closed through the setup's invalidation (${invalidation.label} ${fmt(invalidation.price)})`,
+        levels: null,
+      };
+    }
+    stopLoss = long ? invalidation.price - buffer : invalidation.price + buffer;
+    stopBasis = `${long ? "below" : "above"} ${invalidation.label} ${fmt(invalidation.price)}`;
+    if (Math.abs(entry - stopLoss) < minStop) {
+      stopLoss = long ? entry - minStop : entry + minStop;
+      stopBasis += ` (${widenedNote})`;
+    }
+  } else if (long) {
+    // --- stop: beyond the price-nearest significant swing that clears the
+    // minimum distance. Anchoring to the nearest swing in PRICE (not the most
+    // recent one) keeps the stop proportional to the structure around entry. ---
     const swing = lows
       .filter((p) => p.price < entry)
       .sort((a, b) => b.price - a.price) // nearest below entry first

@@ -15,7 +15,13 @@ import { findSetForgetSetup, setForgetEntry } from "../lib/analysis/setForget";
 import { scoreSetup, type ScoringContext } from "../lib/analysis/scoring";
 import { runBacktest } from "../lib/backtest/engine";
 import { setupDisposition, signalPairs } from "../lib/engine/scanner";
-import { analyzeTopDown, topDownAgrees } from "../lib/analysis/topDown";
+import { analyzeTopDown, topDownAgrees, topDownOpposes } from "../lib/analysis/topDown";
+import { detectHeadShoulders } from "../lib/analysis/headshoulders";
+import { goldenZoneHasPoi } from "../lib/analysis/confirmations";
+import { inTradingSession, tradingHoursUtc } from "../lib/analysis/session";
+import { closedBarCursor } from "../lib/backtest/engine";
+import { passesSendGate, selectSignal, sendGateBlock, type SignalCandidate } from "../lib/engine/select";
+import type { Pivot } from "../lib/analysis/pivots";
 
 function mk(i: number, o: number, h: number, l: number, c: number): Candle {
   return { time: 1_700_000_000 + i * 900, open: o, high: h, low: l, close: c, volume: 1 };
@@ -68,6 +74,11 @@ if (demand) {
     "zones: base excludes the terminating large candle",
     demandB != null && Math.abs(demandB.top - 1.1959) < 1e-9 && Math.abs(demandB.bottom - 1.1952) < 1e-9,
     demandB ? `${demandB.bottom}-${demandB.top}` : "none"
+  );
+  check(
+    "zones: box starts at the first base candle, not the large one before it",
+    demandB?.startIndex === 21 && demandB.startTime === ZB[21].time,
+    `start=${demandB?.startIndex}`
   );
 }
 
@@ -178,15 +189,26 @@ if (actionU) {
     `${actionU.origin.index}->${actionU.definitionAnchor.index}`
   );
 }
-check("top-down: blocks countertrend shorts", !topDownAgrees(topDownU, "short"), "short rejected");
-const opposingH4 = U.map((c, index) =>
+check(
+  "top-down: blocks countertrend shorts",
+  !topDownAgrees(topDownU, "short") && topDownOpposes(topDownU, "short"),
+  "short rejected"
+);
+const invertedU = U.map((c, index) =>
   mk(index, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)
 );
-const topDownOpposed = analyzeTopDown({ weekly: U, daily: U, h4: opposingH4, h1: U });
+// An M15 pullback entry is against H4/H1 by nature — only the weekly vetoes.
+const topDownH4Pullback = analyzeTopDown({ weekly: U, daily: U, h4: invertedU, h1: U });
 check(
-  "top-down: blocks a bullish setup while H4 is bearish",
-  !topDownAgrees(topDownOpposed, "long"),
-  `H4=${topDownOpposed.h4}`
+  "top-down: an H4 pullback does not veto a weekly-aligned long",
+  topDownAgrees(topDownH4Pullback, "long") && !topDownOpposes(topDownH4Pullback, "long"),
+  `weekly=${topDownH4Pullback.weekly} H4=${topDownH4Pullback.h4}`
+);
+const topDownWeeklyBear = analyzeTopDown({ weekly: invertedU, daily: U, h4: U, h1: U });
+check(
+  "top-down: an opposing weekly vetoes the long",
+  topDownOpposes(topDownWeeklyBear, "long") && !topDownAgrees(topDownWeeklyBear, "long"),
+  `weekly=${topDownWeeklyBear.weekly}`
 );
 
 // ============ Trendline origin fix: must begin from the TRUE highest high ============
@@ -308,16 +330,20 @@ const Dstale = [...D, mk(43, 1.1006, 1.1008, 1.1001, 1.1005), mk(44, 1.1005, 1.1
 check("zones: stale visit lapses (no trigger after 5 candles inside)", detectZoneEntry(Dstale, detectZones(Dstale)) === null, "candlesInside > window");
 
 // ============ Stage 5.3 + 6: fib golden zone + scoring ============
-// swing low (10,1.1000) → swing high (40,1.1100), retrace into golden zone at 55-58 with a sharp drop so RSI falls below 50, then a bullish pin bar at 59.
-const F: Candle[] = [];
-for (let i = 0; i < 60; i++) {
-  let p: number;
-  if (i <= 10) p = 1.104 - (1.104 - 1.1) * (i / 10);
-  else if (i <= 40) p = 1.1 + 0.01 * ((i - 10) / 30);
-  else if (i <= 55) p = 1.11 - 0.006 * ((i - 40) / 15); // shallow retrace
-  else p = 1.104 - 0.0015 * (i - 55); // sharper drop into the golden zone for RSI
-  F.push(mk(i, p - 0.0001, p + 0.00025, p - 0.00025, p));
-}
+// swing low (10,1.1000) → swing high (40,1.1100), retrace into the golden zone at 56-58 (RSI below 50), then a bullish pin bar at 59.
+const fibSeries = (dropPerBar: number): Candle[] => {
+  const out: Candle[] = [];
+  for (let i = 0; i < 60; i++) {
+    let p: number;
+    if (i <= 10) p = 1.104 - (1.104 - 1.1) * (i / 10);
+    else if (i <= 40) p = 1.1 + 0.01 * ((i - 10) / 30);
+    else if (i <= 55) p = 1.11 - 0.006 * ((i - 40) / 15); // shallow retrace
+    else p = 1.104 - dropPerBar * (i - 55); // final leg down into the golden zone
+    out.push(mk(i, p - 0.0001, p + 0.00025, p - 0.00025, p));
+  }
+  return out;
+};
+const F = fibSeries(0.0005);
 // golden zone: 1.11 - 0.618*0.01 = 1.10382 .. 1.11 - 0.786*0.01 = 1.10214
 // last candle: bullish pin bar inside the zone, body in direction, lower wick ≥ body, close in upper half
 F[59] = mk(59, 1.1035, 1.104, 1.102, 1.1039);
@@ -356,30 +382,42 @@ if (fib) {
   check("scoring: fires at 4/6", noVision.fired && noVision.count === 4, `count=${noVision.count}`);
 }
 
-// ============ Alex G set & forget: untested AOI first touch ============
-// pivot low(10,1.10) → swing high(20,1.11) → pullback low(28,1.106) →
-// impulse higher high(40,1.12) that BREAKS the 1.11 swing high. AOI = 50–61.8%
-// retrace of the 1.10→1.12 leg = 1.10764–1.11. Price holds above the AOI after
-// the leg until the LAST candle dips in for the first time.
-const G: Candle[] = [];
-const gPts: [number, number][] = [
-  [0, 1.105], [10, 1.1], [20, 1.11], [28, 1.106], [40, 1.12], [55, 1.118],
-];
-for (let i = 0; i <= 55; i++) {
-  let p = 1.105;
-  for (let s = 0; s < gPts.length - 1; s++) {
-    const [x0, y0] = gPts[s];
-    const [x1, y1] = gPts[s + 1];
-    if (i >= x0 && i <= x1) {
-      p = y0 + ((y1 - y0) / (x1 - x0)) * (i - x0);
-      break;
-    }
-  }
-  if (i > 40) p = Math.max(p, 1.1105); // hold above the AOI after the leg
-  G.push(mk(i, p - 0.0001, p + 0.0002, p - 0.0002, p));
+// A retracement that CLOSES below the swing origin has invalidated the swing:
+// there is no golden zone left to trade, even if a later candle pokes back up.
+{
+  const broken = fibSeries(0.0015); // bar 58 closes at 1.0995, under the 1.09975 origin
+  broken[59] = mk(59, 1.1035, 1.104, 1.102, 1.1039);
+  const fibBroken = findFibSetup(broken, detectPivots(broken), atr(broken)!);
+  check("fib: a swing closed through its origin is not a setup", fibBroken === null, fibBroken ? fibBroken.direction : "none");
 }
-// last candle dips into the AOI (low reaches 1.109) — first touch
-G[55] = mk(55, 1.1105, 1.1108, 1.109, 1.1095);
+
+// ============ Alex G set & forget: untested AOI first touch ============
+// swing high(20,1.11) → pullback low(28,1.106) → impulse to a higher high
+// (40,1.12) that BREAKS the 1.11 swing high. The structure-breaking leg is
+// 1.106→1.12, so the AOI is its 50–61.8% retracement = 1.1113–1.1130. Price
+// holds above the AOI after the leg until the LAST candle dips in.
+const sfSeries = (legHigh: number): Candle[] => {
+  const pts: [number, number][] = [
+    [0, 1.105], [10, 1.1], [20, 1.11], [28, 1.106], [40, legHigh], [55, legHigh - 0.002],
+  ];
+  const out: Candle[] = [];
+  for (let i = 0; i <= 55; i++) {
+    let p = 1.105;
+    for (let s = 0; s < pts.length - 1; s++) {
+      const [x0, y0] = pts[s];
+      const [x1, y1] = pts[s + 1];
+      if (i >= x0 && i <= x1) {
+        p = y0 + ((y1 - y0) / (x1 - x0)) * (i - x0);
+        break;
+      }
+    }
+    out.push(mk(i, p - 0.0001, p + 0.0002, p - 0.0002, p));
+  }
+  return out;
+};
+const G = sfSeries(1.12);
+// last candle dips into the AOI (low reaches 1.1125) — first touch
+G[55] = mk(55, 1.118, 1.1182, 1.1125, 1.1135);
 
 const pivotsG = detectPivots(G);
 const atrG = atr(G)!;
@@ -387,27 +425,30 @@ const sf = findSetForgetSetup(G, pivotsG, atrG);
 console.log("\n[setforget]", sf ? `${sf.direction} AOI ${sf.aoiBottom.toFixed(5)}-${sf.aoiTop.toFixed(5)} tested=${sf.tested}` : "none");
 check("setforget: long AOI setup found", sf?.direction === "long", sf ? sf.direction : "none");
 if (sf) {
-  // actual pivots carry the ±0.0002 wick: high 1.1204, low 1.0998, range 0.0206
-  // AOI top = 1.1204 - 0.5·0.0206 = 1.1101; bottom = 1.1204 - 0.618·0.0206 = 1.10767
-  check("setforget: AOI is 50–61.8% of the leg", Math.abs(sf.aoiTop - 1.1101) < 1e-4 && Math.abs(sf.aoiBottom - 1.10767) < 1e-4, `${sf.aoiBottom.toFixed(5)}-${sf.aoiTop.toFixed(5)}`);
+  // actual pivots carry the ±0.0002 wick: high 1.1202, low 1.1058, range 0.0144
+  // AOI top = 1.1202 - 0.5·0.0144 = 1.1130; bottom = 1.1202 - 0.618·0.0144 = 1.1113
+  check("setforget: AOI is 50–61.8% of the structure-breaking leg", Math.abs(sf.aoiTop - 1.113) < 1e-4 && Math.abs(sf.aoiBottom - 1.1113) < 1e-4, `${sf.aoiBottom.toFixed(5)}-${sf.aoiTop.toFixed(5)}`);
+  check("setforget: the leg broke the swing high before it", sf.brokenLevel > 1.11 && sf.brokenLevel < 1.1105 && sf.legHigh.price > sf.brokenLevel, `broke ${sf.brokenLevel.toFixed(5)}`);
   const entry = setForgetEntry(G, sf);
   check("setforget: first touch fires (untested AOI)", entry?.direction === "long", entry ? "long" : "no entry");
   // after a visit, the AOI is spent → no trigger
-  const gVisited = [...G, mk(56, 1.1095, 1.11, 1.1092, 1.1098)];
+  const gVisited = [...G, mk(56, 1.1135, 1.114, 1.1128, 1.1132)];
   const sf2 = findSetForgetSetup(gVisited, detectPivots(gVisited), atr(gVisited)!);
   check("setforget: spent AOI does not re-trigger", setForgetEntry(gVisited, sf2) === null, "tested");
 }
-
-// ============ Single strategy can fire without top-down veto ============
-// Reuse the zones firing context (3 non-HTF confirmations); a bearish top-down
-// bias must NOT block it — top-down is a confirmation point, not a veto.
+// a rally that stops SHORT of the prior swing high broke nothing → no AOI
 {
-  const bearishTopDown = analyzeTopDown({
-    weekly: D.map((c, i) => mk(i, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)),
-    daily: D.map((c, i) => mk(i, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)),
-    h4: D.map((c, i) => mk(i, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)),
-    h1: D.map((c, i) => mk(i, 2.1 - c.open, 2.1 - c.low, 2.1 - c.high, 2.1 - c.close)),
-  });
+  const noBreak = sfSeries(1.1095);
+  const sfNone = findSetForgetSetup(noBreak, detectPivots(noBreak), atr(noBreak)!);
+  check("setforget: a leg that breaks no structure leaves no AOI", sfNone === null, sfNone ? `${sfNone.direction} AOI` : "none");
+}
+
+// ============ Scoring tracks a setup even when the send gate would veto it ============
+// Reuse the zones firing context; a bearish weekly must not stop the setup
+// being scored and tracked ("fired") — it only clears topDownAligned, which
+// the send gate (lib/engine/select.ts) then refuses.
+{
+  const bearishTopDown = analyzeTopDown({ weekly: invertedU, daily: invertedU, h4: invertedU, h1: invertedU });
   const ctxSolo: ScoringContext = {
     instrument: "EUR_USD",
     candles: D,
@@ -421,6 +462,116 @@ if (sf) {
   const solo = scoreSetup("zones", ctxSolo);
   check("solo fire: fires despite opposing top-down", solo.fired && solo.count >= 3, `count=${solo.count} topDownAligned=${solo.topDownAligned}`);
   check("solo fire: topDownAligned false but fired true (no veto)", solo.fired && !solo.topDownAligned, "no veto");
+}
+
+// ============ Zones: an invalidated zone must not suppress a fresh one ============
+// Zone A (base 20-21, impulse 22) is closed through at 30. A new base + impulse
+// then forms in the SAME price band (40-42). The old two-pass detector still
+// saw zone A as active while scanning and dropped the new zone as a duplicate.
+{
+  const ZR: Candle[] = [];
+  for (let i = 0; i < 20; i++) ZR.push(mk(i, 1.1, 1.1003, 1.0998, 1.1));
+  ZR.push(mk(20, 1.1, 1.1003, 1.0998, 1.1001));
+  ZR.push(mk(21, 1.1001, 1.1003, 1.0998, 1.1));
+  ZR.push(mk(22, 1.1002, 1.1065, 1.1, 1.1062)); // impulse → zone A
+  for (let i = 23; i < 30; i++) ZR.push(mk(i, 1.1055, 1.1059, 1.1051, 1.1055));
+  ZR.push(mk(30, 1.1055, 1.1056, 1.0985, 1.099)); // closes through zone A
+  for (let i = 31; i < 40; i++) ZR.push(mk(i, 1.099, 1.0996, 1.0988, 1.0992));
+  ZR.push(mk(40, 1.0995, 1.1002, 1.0996, 1.1)); // new base, same band
+  ZR.push(mk(41, 1.1, 1.1003, 1.0997, 1.1001));
+  ZR.push(mk(42, 1.1002, 1.107, 1.1, 1.1066)); // impulse → zone B
+  for (let i = 43; i < 50; i++) ZR.push(mk(i, 1.106, 1.1064, 1.1056, 1.106));
+  const zr = detectZones(ZR).filter((z) => z.kind === "demand");
+  const live = zr.filter((z) => z.active);
+  check(
+    "zones: a dead zone does not block a fresh zone in the same band",
+    zr.some((z) => !z.active && z.invalidatedIndex === 30) && live.length === 1 && live[0].impulseIndex === 42,
+    zr.map((z) => `imp@${z.impulseIndex} active=${z.active}`).join(" | ")
+  );
+}
+
+// ============ Head & shoulders: only a FRESH neckline break is active ============
+{
+  const hsCandles = (closes: (i: number) => number): Candle[] =>
+    Array.from({ length: 80 }, (_, i) => mk(i, closes(i), closes(i) + 0.0002, closes(i) - 0.0002, closes(i)));
+  const at = (candles: Candle[], index: number, kind: Pivot["kind"], price: number): Pivot => ({ index, kind, price, time: candles[index].time });
+  const shape = (candles: Candle[]): Pivot[] => [
+    at(candles, 10, "high", 1.108),
+    at(candles, 20, "low", 1.1),
+    at(candles, 30, "high", 1.112),
+    at(candles, 40, "low", 1.1),
+    at(candles, 50, "high", 1.108),
+  ];
+  const fresh = hsCandles((i) => (i >= 78 ? 1.099 : 1.105));
+  const hsFresh = detectHeadShoulders(fresh, shape(fresh), 0.001);
+  check("h&s: fresh close through the neckline is active", hsFresh?.direction === "short" && hsFresh.triggerTime === fresh[78].time, hsFresh ? `short, break@${(hsFresh.triggerTime - fresh[0].time) / 900}` : "none");
+  check("h&s: target = neckline minus head height", hsFresh != null && Math.abs(hsFresh.target - (1.1 - 0.012)) < 1e-9, hsFresh ? hsFresh.target.toFixed(4) : "none");
+  const stale = hsCandles((i) => (i >= 55 ? 1.099 : 1.105));
+  check("h&s: a break 24 bars old is no longer a signal", detectHeadShoulders(stale, shape(stale), 0.001) === null, "stale");
+  const failed = hsCandles((i) => (i >= 75 && i < 79 ? 1.099 : 1.105));
+  check("h&s: a close back above the neckline cancels the break", detectHeadShoulders(failed, shape(failed), 0.001) === null, "reclaimed");
+}
+
+// ============ POI confluence must be independent of the retracement itself ============
+{
+  const area = { goldenTop: 1.1038, goldenBottom: 1.1021 };
+  const poi = (o: Partial<Parameters<typeof goldenZoneHasPoi>[1]>) =>
+    goldenZoneHasPoi(area, { direction: "long", zones: [], pivots: [], legStartIndex: 100, instrument: "EUR_USD", atrValue: 0.001, ...o });
+  check("poi: nothing nearby → no confluence", !poi({}), "false");
+  check("poi: a swing printed during the retracement does not count", !poi({ pivots: [{ price: 1.103, index: 130 }] }), "after leg start");
+  check("poi: a swing level from before the leg counts", poi({ pivots: [{ price: 1.103, index: 60 }] }), "prior level");
+  check("poi: a demand zone under a long counts", poi({ zones: [{ kind: "demand", top: 1.103, bottom: 1.1025, active: true }] }), "same side");
+  check("poi: an opposing supply zone is not confluence", !poi({ zones: [{ kind: "supply", top: 1.103, bottom: 1.1025, active: true }] }), "opposing");
+  check("poi: a round number inside counts", goldenZoneHasPoi({ goldenTop: 1.1008, goldenBottom: 1.0992 }, { direction: "long", zones: [], pivots: [], legStartIndex: 0, instrument: "EUR_USD", atrValue: 0.001 }), "1.1000");
+  check(
+    "poi: gold uses a $25 grid, not $5",
+    !goldenZoneHasPoi({ goldenTop: 4112, goldenBottom: 4104 }, { direction: "long", zones: [], pivots: [], legStartIndex: 0, instrument: "XAU_USD", atrValue: 5 }) &&
+      goldenZoneHasPoi({ goldenTop: 4128, goldenBottom: 4122 }, { direction: "long", zones: [], pivots: [], legStartIndex: 0, instrument: "XAU_USD", atrValue: 5 }),
+    "4105/4110 ignored, 4125 counts"
+  );
+}
+
+// ============ Trading session gate ============
+{
+  const utc = (h: number, m = 0) => Date.UTC(2026, 10, 18, h, m) / 1000;
+  check("session: default window is 12:00–21:00 UTC", tradingHoursUtc(undefined).join("-") === "12-21", tradingHoursUtc(undefined).join("-"));
+  check("session: New York hours are tradeable", inTradingSession(utc(12), [12, 21]) && inTradingSession(utc(20, 45), [12, 21]), "12:00, 20:45");
+  check("session: Asia and rollover are not", !inTradingSession(utc(3), [12, 21]) && !inTradingSession(utc(21), [12, 21]), "03:00, 21:00");
+  check("session: override parses, garbage falls back", tradingHoursUtc("6-21").join("-") === "6-21" && tradingHoursUtc("soon").join("-") === "12-21", "6-21 / default");
+  check("session: a window may wrap midnight; 0-24 disables", inTradingSession(utc(1), [22, 4]) && !inTradingSession(utc(12), [22, 4]) && inTradingSession(utc(3), [0, 24]), "22-4, 0-24");
+}
+
+// ============ Backtest: higher timeframes may only use CLOSED bars ============
+{
+  const h1 = [0, 3600, 7200].map((t, i) => ({ ...mk(i, 1, 1, 1, 1), time: t }));
+  const closed = closedBarCursor(h1, 3600);
+  const seen = [closed(900), closed(3599), closed(3600), closed(7199), closed(10800)];
+  check("backtest: a forming HTF bar is never visible", seen.join(",") === "0,0,1,1,3", seen.join(","));
+}
+
+// ============ Send gate + selection (shared by scanner and backtest) ============
+{
+  const cand = (direction: "long" | "short", o: Partial<SignalCandidate["scored"]> = {}, riskOk = true): SignalCandidate => ({
+    strategy: "zones",
+    direction,
+    scored: {
+      strategy: "zones", direction, confirmations: {}, count: 4, fired: true,
+      topDownAligned: true, m15Aligned: true, inSession: true, hasTrigger: true, trigger: null, ...o,
+    },
+    risk: riskOk
+      ? { ok: true, levels: { direction, entry: 1, stopLoss: 0.99, takeProfit: 1.03, stopDistance: 0.01, rMultiple: 3, atr: 0.005, positionUnits: 1, riskAmount: 1, tpSource: "swing", stopBasis: "", targetBasis: "", riskPips: 100, rewardPips: 300 } }
+      : { ok: false, reason: "structure only pays 1.20R", levels: null },
+  });
+  check("gate: a complete setup may be sent", passesSendGate(cand("long"), 4), "ok");
+  check("gate: below the confirmation minimum is held", !passesSendGate(cand("long"), 5), sendGateBlock(cand("long"), 5) ?? "");
+  check("gate: outside the session is held", /session/.test(sendGateBlock(cand("long", { inSession: false }), 4) ?? ""), sendGateBlock(cand("long", { inSession: false }), 4) ?? "");
+  check("gate: against the weekly is held", /weekly/.test(sendGateBlock(cand("long", { topDownAligned: false }), 4) ?? ""), sendGateBlock(cand("long", { topDownAligned: false }), 4) ?? "");
+  check("gate: failed risk reports the risk reason", sendGateBlock(cand("long", {}, false), 4) === "structure only pays 1.20R", "risk reason");
+  const both = selectSignal([cand("long"), cand("short")], topDownU);
+  check("select: HTF bias settles a long/short conflict", both?.side === "long" && both.winners.length === 1, both ? both.side : "none");
+  const stronger = selectSignal([cand("long", { count: 4 }), cand("short", { count: 6 })]);
+  check("select: without a bias the stronger side wins", stronger?.side === "short", stronger ? stronger.side : "none");
+  check("select: nothing to select from → null", selectSignal([]) === null, "null");
 }
 
 // ============ Stage 9: backtest engine smoke ============

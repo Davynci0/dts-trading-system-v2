@@ -1,11 +1,10 @@
 import type { Candle } from "@/lib/types";
 import type { Pivot } from "./pivots";
-import { atr } from "./indicators";
 
 /**
  * Head-and-Shoulders / Inverse Head-and-Shoulders reversal pattern.
- * Structure requires 5 consecutive alternating structural pivots.
- * Fires on a CLOSED break of the neckline, not a touch.
+ * Structure requires 5 consecutive alternating structural pivots
+ * (LS → N1 → H → N2 → RS). Fires on a CLOSED break of the neckline, not a touch.
  */
 
 export interface HeadShouldersPattern {
@@ -23,106 +22,92 @@ export interface HeadShouldersPattern {
   triggerTime: number;    // time of neckline break close
 }
 
+/** A neckline break older than this many bars is history, not a signal. */
+const BREAK_ACTIVE_BARS = 12;
+/** The right shoulder must be this recent for the formation to matter. */
+const MAX_BARS_SINCE_SHOULDER = 120;
+/** Shoulders may differ by at most this share of the taller shoulder's depth. */
+const SHOULDER_SYMMETRY = 0.5;
+/** Neckline points may differ by at most this many ATR (roughly horizontal). */
+const NECKLINE_FLAT_ATR = 0.75;
+
 /**
- * Find the most recent H&S / inverse H&S formation in the last N pivots and
- * check if the latest candle CLOSED through the neckline.
+ * Find the most recent H&S / inverse H&S formation in the latest structural
+ * pivots and report it while its neckline break is still fresh.
  *
- * Core trigger for the `headshoulders` strategy: close beyond neckline
- * after the 5-pivot formation is complete (LS → N1 → H → N2 → RS).
+ * The pattern is active when a candle CLOSED through the neckline after the
+ * right shoulder, that break is at most BREAK_ACTIVE_BARS old, and price has
+ * not closed back across the neckline since. `triggerTime` is the break
+ * candle. (All spans are counted in bars — `Candle.time` is in seconds, so a
+ * millisecond-style window here once made every old formation "recent".)
  */
 export function detectHeadShoulders(
   candles: Candle[],
   pivots: Pivot[],
   atrValue: number
 ): HeadShouldersPattern | null {
-  if (!candles.length || pivots.length < 5 || atrValue <= 0) return null;
-  if (candles.length < 40) return null;
+  if (candles.length < 40 || pivots.length < 5 || atrValue <= 0) return null;
+  const lastIndex = candles.length - 1;
+  const recent = pivots.slice(-7);
 
-  // Need at least 5 pivots to form LS,N1,H,N2,RS. Look backwards over the most
-  // recent pivots, checking each 5-pivot run for a valid pattern.
-  const last = candles[candles.length - 1];
-  const atr1x = atrValue;
-  const last5 = pivots.slice(-20); // look at recent structural pivots
+  // newest 5-pivot run first
+  for (let start = recent.length - 5; start >= 0; start--) {
+    const [ls, n1, h, n2, rs] = recent.slice(start, start + 5);
+    const bearish =
+      ls.kind === "high" && n1.kind === "low" && h.kind === "high" && n2.kind === "low" && rs.kind === "high";
+    const bullish =
+      ls.kind === "low" && n1.kind === "high" && h.kind === "low" && n2.kind === "high" && rs.kind === "low";
+    if (!bearish && !bullish) continue;
+    if (lastIndex - rs.index > MAX_BARS_SINCE_SHOULDER) continue;
 
-  for (let start = Math.max(0, last5.length - 7); start < last5.length - 4; start++) {
-    const ls = last5[start];
-    const n1 = last5[start + 1];
-    const h = last5[start + 2];
-    const n2 = last5[start + 3];
-    const rs = last5[start + 4];
+    // sign = +1 for the bearish (top) pattern, −1 for the inverse
+    const sign = bearish ? 1 : -1;
+    const lsDepth = sign * (h.price - ls.price);
+    const rsDepth = sign * (h.price - rs.price);
+    if (lsDepth <= 0 || rsDepth <= 0) continue; // head must be the extreme
+    if (Math.abs(lsDepth - rsDepth) > Math.max(lsDepth, rsDepth) * SHOULDER_SYMMETRY) continue;
+    if (Math.abs(n2.price - n1.price) > NECKLINE_FLAT_ATR * atrValue) continue;
 
-    // Bearish H&S shape: LS(high) N1(low) H(high) N2(low) RS(high)
-    if (ls.kind === "high" && n1.kind === "low" && h.kind === "high" && n2.kind === "low" && rs.kind === "high") {
-      // Head is the most extreme
-      if (h.price > ls.price && h.price > rs.price) {
-        // LS ≈ RS within 50% of each other's distance from H
-        const lsDist = h.price - ls.price;
-        const rsDist = h.price - rs.price;
-        const similar = Math.abs(lsDist - rsDist) <= Math.max(lsDist, rsDist) * 0.5 + 1e-10;
-        // Neckline points are roughly horizontal (slope < 0.5×ATR over span)
-        const span = n2.time - n1.time;
-        const slope = span > 0 ? Math.abs(n2.price - n1.price) / Math.max(span, 1) : 0;
-        const flat = slope <= atr1x / Math.max(span, 1) * 0.75 + 1e-10;
+    const span = n2.time - n1.time;
+    const slopePerSec = span > 0 ? (n2.price - n1.price) / span : 0;
+    const necklineAt = (time: number) => n2.price + slopePerSec * (time - n2.time);
+    const beyond = (c: Candle) => sign * (necklineAt(c.time) - c.close) > 0;
 
-        if (similar && flat) {
-          // Neckline: from n1.price to n2.price projected forward linearly
-          const nTime = n2.time - n1.time;
-          const slopePerSec = nTime > 0 ? (n2.price - n1.price) / nTime : 0;
-          const necklinePrice = n2.price + slopePerSec * (last.time - n2.time);
-          const headToNeckline = Math.abs(n1.price - h.price);
-          const triggered = last.close < necklinePrice;
-          const recent = last.time - rs.time <= 120 * 60 * 1000; // within ~120 bars of right shoulder
-
-          if (triggered && recent) {
-            return {
-              direction: "short",
-              ls, n1, h, n2, rs,
-              necklineSlope: slopePerSec,
-              necklineStartPrice: n1.price,
-              necklineEndPrice: n2.price,
-              target: necklinePrice - headToNeckline,
-              triggerTime: last.time,
-            };
-          }
-        }
+    // first close through the neckline after the right shoulder
+    let breakIndex = -1;
+    for (let k = rs.index + 1; k <= lastIndex; k++) {
+      if (beyond(candles[k])) {
+        breakIndex = k;
+        break;
       }
     }
-
-    // Bullish H&S shape: LS(low) N1(high) H(low) N2(high) RS(low)
-    if (ls.kind === "low" && n1.kind === "high" && h.kind === "low" && n2.kind === "high" && rs.kind === "low") {
-      // Head is the most extreme
-      if (h.price < ls.price && h.price < rs.price) {
-        // LS ≈ RS
-        const lsDist = ls.price - h.price;
-        const rsDist = rs.price - h.price;
-        const similar = Math.abs(lsDist - rsDist) <= Math.max(lsDist, rsDist) * 0.5 + 1e-10;
-        // Neckline flat
-        const span = n2.time - n1.time;
-        const slope = span > 0 ? Math.abs(n2.price - n1.price) / Math.max(span, 1) : 0;
-        const flat = slope <= atr1x / Math.max(span, 1) * 0.75 + 1e-10;
-
-        if (similar && flat) {
-          const nTime = n2.time - n1.time;
-          const slopePerSec = nTime > 0 ? (n2.price - n1.price) / nTime : 0;
-          const necklinePrice = n2.price + slopePerSec * (last.time - n2.time);
-          const headToNeckline = Math.abs(h.price - n1.price);
-          const triggered = last.close > necklinePrice;
-          const recent = last.time - rs.time <= 120 * 60 * 1000;
-
-          if (triggered && recent) {
-            return {
-              direction: "long",
-              ls, n1, h, n2, rs,
-              necklineSlope: slopePerSec,
-              necklineStartPrice: n1.price,
-              necklineEndPrice: n2.price,
-              target: necklinePrice + headToNeckline,
-              triggerTime: last.time,
-            };
-          }
-        }
+    if (breakIndex < 0 || lastIndex - breakIndex > BREAK_ACTIVE_BARS) continue;
+    // a close back across the neckline cancels the break
+    let held = true;
+    for (let k = breakIndex + 1; k <= lastIndex; k++) {
+      if (!beyond(candles[k])) {
+        held = false;
+        break;
       }
     }
+    if (!held) continue;
+
+    const breakCandle = candles[breakIndex];
+    const necklinePrice = necklineAt(breakCandle.time);
+    const headToNeckline = Math.abs(h.price - necklineAt(h.time));
+    return {
+      direction: bearish ? "short" : "long",
+      ls,
+      n1,
+      h,
+      n2,
+      rs,
+      necklineSlope: slopePerSec,
+      necklineStartPrice: n1.price,
+      necklineEndPrice: n2.price,
+      target: necklinePrice - sign * headToNeckline,
+      triggerTime: breakCandle.time,
+    };
   }
 
   return null;

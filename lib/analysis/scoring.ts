@@ -4,7 +4,8 @@ import type { Zone } from "./zones";
 import type { StructureState } from "./structure";
 import type { FibSetup } from "./fibonacci";
 import { classifyStructure } from "./structure";
-import { topDownAgrees, type TopDownAnalysis } from "./topDown";
+import { topDownAgrees, topDownOpposes, type TopDownAnalysis } from "./topDown";
+import { inTradingSession } from "./session";
 import {
   goldenZoneHasPoi,
   htfAgrees,
@@ -16,7 +17,6 @@ import { inGoldenZone } from "./fibonacci";
 import { detectZoneEntry } from "./zones";
 import { setForgetEntry, type SetForgetSetup } from "./setForget";
 import type { HeadShouldersPattern } from "./headshoulders";
-import { ema, emaSlope } from "./indicators";
 
 const REQUIRE_HTF_TREND = (process.env.REQUIRE_HTF_TREND ?? "true") !== "false";
 const REQUIRE_M15_TREND = (process.env.REQUIRE_M15_TREND ?? "true") !== "false";
@@ -40,6 +40,10 @@ export interface ScoringContext {
   candles: Candle[];
   htfCandles: Candle[];
   pivots: Pivot[];
+  /** Zigzag-filtered swings (analyzeM15.structuralPivots). The M15 trend and
+   *  prior-level checks read these so scoring sees the same structure the
+   *  setups were built from; falls back to `pivots` for legacy callers. */
+  structuralPivots?: Pivot[];
   atrValue: number;
   zones: Zone[];
   fib: FibSetup | null;
@@ -62,10 +66,12 @@ export interface ScoreResult {
   count: number;
   /** signal fires at >= 3 */
   fired: boolean;
-  /** False when Weekly/Daily direction conflicts with this setup. */
+  /** False when the weekly structure opposes this setup (send-gate veto). */
   topDownAligned: boolean;
   /** False when M15 structure conflicts with this setup. */
   m15Aligned: boolean;
+  /** False when the entry would fall outside the trading session. */
+  inSession: boolean;
   /** true when no core trigger exists at all — caller should not track state */
   hasTrigger: boolean;
   /** the setup's trigger for risk context */
@@ -92,16 +98,34 @@ function htfTrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolea
   return ctx.topDown ? topDownAgrees(ctx.topDown, direction) : htfAgrees(ctx.htfCandles, direction);
 }
 
+/** Send-gate veto: nothing on the higher timeframes argues against the trade.
+ *  Looser than the confirmation point above — a ranging weekly passes. */
+function htfTrendPermits(ctx: ScoringContext, direction: SignalDirection): boolean {
+  const mode = ctx.trendMode ?? { htf: REQUIRE_HTF_TREND, m15: REQUIRE_M15_TREND };
+  if (!mode.htf) return true;
+  return ctx.topDown ? !topDownOpposes(ctx.topDown, direction) : htfAgrees(ctx.htfCandles, direction);
+}
+
+/** The moment the latest candle closed — when a signal from it would be entered. */
+function entryTime(candles: Candle[]): number {
+  const last = candles[candles.length - 1];
+  const step = candles.length > 1 ? last.time - candles[candles.length - 2].time : 900;
+  // a weekend/holiday gap before the last bar is not the bar length
+  return last.time + (step > 0 && step <= 4 * 3600 ? step : 900);
+}
+
+/**
+ * M15 trend = the M15 swing structure (HH+HL / LH+LL on the zigzag-filtered
+ * swings the setups are built from). It deliberately does NOT also require
+ * price beyond a rising EMA50: every strategy here buys a pullback, and a
+ * 50–79% retracement sits on the wrong side of a fast EMA by construction —
+ * that extra condition rejected four in five otherwise-valid setups without
+ * improving the ones it kept.
+ */
 function m15TrendAgrees(ctx: ScoringContext, direction: SignalDirection): boolean {
   const mode = ctx.trendMode ?? { htf: REQUIRE_HTF_TREND, m15: REQUIRE_M15_TREND };
   if (!mode.m15) return true;
-  const structureOk = m15Agrees(classifyStructure(ctx.pivots), direction);
-  if (!structureOk) return false;
-  const last = ctx.candles[ctx.candles.length - 1];
-  const ema50 = ema(ctx.candles, 50);
-  const slope = emaSlope(ctx.candles, 50, 5);
-  if (ema50 == null || slope == null) return structureOk;
-  return direction === "long" ? last.close > ema50 && slope > 0 : last.close < ema50 && slope < 0;
+  return m15Agrees(classifyStructure(ctx.structuralPivots ?? ctx.pivots), direction);
 }
 
 /**
@@ -111,7 +135,8 @@ export function scoreSetup(
   strategy: StrategyId,
   ctx: ScoringContext
 ): ScoreResult {
-  const { candles, htfCandles } = ctx;
+  const { candles } = ctx;
+  const structural = ctx.structuralPivots ?? ctx.pivots;
 
   let direction: SignalDirection | null = null;
   const confirmations: Record<string, boolean> = {};
@@ -147,7 +172,14 @@ export function scoreSetup(
       hsAligned ||
       goldenZoneHasPoi(
         { goldenTop: entry.setup.aoiTop, goldenBottom: entry.setup.aoiBottom },
-        { zones: ctx.zones, pivots: ctx.pivots, instrument: ctx.instrument, atrValue: ctx.atrValue }
+        {
+          direction,
+          zones: ctx.zones,
+          pivots: structural,
+          legStartIndex: Math.min(entry.setup.legLow.index, entry.setup.legHigh.index),
+          instrument: ctx.instrument,
+          atrValue: ctx.atrValue,
+        }
       );
     confirmations["Momentum (RSI) turning"] = rsiTurning(candles, direction);
     confirmations["HTF trend agrees"] = htfTrendAgrees(ctx, direction);
@@ -162,8 +194,10 @@ export function scoreSetup(
     confirmations["Price in golden zone"] = true; // core trigger
     confirmations["Rejection candle in zone"] = isRejectionCandle(candles, direction);
     confirmations["Zone overlaps another POI"] = goldenZoneHasPoi(fib, {
+      direction,
       zones: ctx.zones,
-      pivots: ctx.pivots,
+      pivots: structural,
+      legStartIndex: Math.min(fib.swingLow.index, fib.swingHigh.index),
       instrument: ctx.instrument,
       atrValue: ctx.atrValue,
     });
@@ -173,9 +207,12 @@ export function scoreSetup(
   }
 
   const count = Object.values(confirmations).filter(Boolean).length;
-  // Top-down / M15 agreement are confirmation points, not vetoes — a single
-  // strategy reaching the threshold can fire on its own (user requirement).
-  const topDownAligned = !REQUIRE_HTF_TREND || !ctx.topDown || topDownAgrees(ctx.topDown, direction);
+  // Top-down / M15 agreement are confirmation points here, not vetoes — a
+  // strategy reaching the threshold still "fires" for tracking. The send gate
+  // (lib/engine/select.ts) is what requires these flags. Both honour the
+  // pair's trend mode, so a pair with a check switched off is never vetoed
+  // by it.
+  const topDownAligned = htfTrendPermits(ctx, direction);
   const m15Aligned = m15TrendAgrees(ctx, direction);
   return {
     strategy,
@@ -185,6 +222,7 @@ export function scoreSetup(
     fired: count >= SIGNAL_THRESHOLD,
     topDownAligned,
     m15Aligned,
+    inSession: inTradingSession(entryTime(candles)),
     hasTrigger: true,
     trigger,
   };
@@ -199,6 +237,7 @@ function noTrigger(strategy: StrategyId): ScoreResult {
     fired: false,
     topDownAligned: false,
     m15Aligned: false,
+    inSession: false,
     hasTrigger: false,
     trigger: null,
   };

@@ -6,12 +6,11 @@ import {
   computeRiskLevels,
   analyzeM15,
   EXECUTION_HTF,
-  topDownAgrees,
   trendModeFor,
-  MIN_RR,
   type ScoringContext,
   type ScoreResult,
 } from "@/lib/analysis";
+import { passesSendGate, selectSignal, sendGateBlock } from "@/lib/engine/select";
 import { analyzeTopDown } from "@/lib/analysis/topDown";
 import { buildSetupKey } from "@/lib/analysis/setupKey";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
@@ -129,7 +128,7 @@ export async function runScan(opts: {
           granularity: EXECUTION_HTF,
           count: 300,
         });
-        const m15 = analyzeM15(candles);
+        const m15 = analyzeM15(candles, pair);
         if (!m15) continue;
 
         const { pivots, atrValue, zones, fib, setForget } = m15;
@@ -139,6 +138,7 @@ export async function runScan(opts: {
           candles,
           htfCandles,
           pivots,
+          structuralPivots: m15.structuralPivots,
           atrValue,
           zones,
           fib,
@@ -255,6 +255,7 @@ export async function runScan(opts: {
                 candles,
                 pivots,
                 zones,
+                trigger: scored.trigger,
                 accountBalance,
                 quoteUsdRate,
               }),
@@ -269,6 +270,7 @@ export async function runScan(opts: {
             lastSeen: now,
             zoneAlerted,
             lastSignaledAt: prior?.lastSignaledAt,
+            lastSignaledCount: prior?.lastSignaledCount,
           });
         }
 
@@ -410,47 +412,34 @@ interface Firing {
 
 /** Why a send-eligible setup did not produce a signal — recorded so the
  *  feed doesn't repeat itself and the setup is re-considered when it changes. */
-function skipReasonFor(f: Firing): string {
-  if (!f.risk.ok) return f.risk.reason;
-  if (f.risk.levels.rMultiple < MIN_RR) {
-    return `structure only pays ${f.risk.levels.rMultiple.toFixed(2)}R (min ${MIN_RR})`;
-  }
-  return `counter-trend: HTF and/or M15 structure disagrees with the ${f.direction}`;
+function skipReasonFor(pair: string, f: Firing): string {
+  return sendGateBlock(f, minConfidenceFor(pair, f.scored.strategy)) ?? "not selected";
 }
 
-/** Research-ranked strategy preference: setforget (PF 2.19) > zones (1.50) >
- *  fibonacci (1.03). The primary strategy's risk levels define the trade. */
-const STRATEGY_QUALITY_BONUS: Record<StrategyId, number> = {
-  setforget: 8,
-  zones: 4,
-  fibonacci: 0,
-};
-
 /** Per-strategy minimum confirmations required before a signal is sent.
- *  Measured post-fix on 5,000 XAU/USD M15 candles (52 days), one trade per pair,
- *  validated on split halves (scripts/research-live2.ts / research-fib6.ts):
- *    - zones >= 5, setforget >= 4, fibonacci >= 5 (old gate): 139 trades, PF 0.92 — negative
- *    - zones >= 5, setforget >= 4 (fib OFF): PF 1.57 but only 12 trades
- *    - fibonacci >= 6 (confluence-grade, below): PF 1.23, 31 trades, halves 0.94/1.69
- *  Fibonacci's standalone edge at 5 is negative, so it only sends at a perfect
- *  6/6 where it doubles as confluence for a zones/setforget setup.
+ *  Re-measured on 12 months of M15 data for all eight pairs with closed-bar
+ *  higher timeframes and the live send gate (the earlier 52-day XAU study
+ *  read still-forming HTF candles, which inflated every trend-related number):
+ *    - 3/6 was the worst bucket for every strategy (zones −0.05R, set & forget
+ *      −0.25R, fibonacci −0.01R per trade); 4/6 and above were flat to positive.
+ *    - above 4 there was no consistent gain, so zones and set & forget send at 4.
+ *    - fibonacci is the weakest and by far the most frequent setup (about
+ *      breakeven after costs at any gate), so it stays at a perfect 6/6.
  *
- *  Override: set ZONES_MIN_CONFIDENCE=1 (or 3) to treat every buy/sell-zone touch
- *  as a potential trade. Research suggests this degrades edge, so it is opt-in.
+ *  Override with ZONES_MIN_CONFIDENCE / SETFORGET_MIN_CONFIDENCE /
+ *  FIB_MIN_CONFIDENCE (1–6).
  */
-const ZONES_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.ZONES_MIN_CONFIDENCE ?? 5)));
+const ZONES_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.ZONES_MIN_CONFIDENCE ?? 4)));
 const FIB_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.FIB_MIN_CONFIDENCE ?? 6)));
 const SETFORGET_MIN_CONFIDENCE = Math.max(1, Math.min(6, Number(process.env.SETFORGET_MIN_CONFIDENCE ?? 4)));
-const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
+export const STRATEGY_MIN_CONFIDENCE: Record<StrategyId, number> = {
   zones: ZONES_MIN_CONFIDENCE,
   setforget: SETFORGET_MIN_CONFIDENCE,
   fibonacci: FIB_MIN_CONFIDENCE,
 };
 
 /** Per-pair gate override: set FIB_MIN_CONFIDENCE_XAU_USD=4 (or ZONES_...,
- *  SETFORGET_...) to use a different confirmation minimum for one pair.
- *  Deep research showed XAU/USD fibonacci is profitable at 4/6 with M15-only
- *  trend, while other pairs need the stricter global gate. */
+ *  SETFORGET_...) to use a different confirmation minimum for one pair. */
 export function minConfidenceFor(pair: string, strategy: StrategyId): number {
   const envName = `${strategy.toUpperCase()}_MIN_CONFIDENCE_${pair}`;
   const raw = Number(process.env[envName]);
@@ -560,39 +549,15 @@ async function reconcileAndSignal(args: {
     }
   }
 
-  const quality = (f: Firing): number => {
-    let q = f.scored.count * 10;
-    if (f.scored.topDownAligned) q += 35; // alignment is the strongest edge
-    const rejection = Object.entries(f.scored.confirmations).some(
-      ([k, v]) => v && /Rejection|Momentum/.test(k)
-    );
-    if (rejection) q += 12;
-    if (f.risk.ok) {
-      q += Math.min(14, f.risk.levels.rMultiple * 3); // reward potential
-      q += Math.min(8, 1 / Math.max(0.1, f.risk.levels.stopDistance / f.risk.levels.atr)); // tighter SL relative to ATR is better
-    } else {
-      q -= 50;
-    }
-    q += STRATEGY_QUALITY_BONUS[f.scored.strategy];
-    return q;
-  };
-  // High-quality final signal gate: valid risk, R≥2 and alignment with the
-  // higher or execution timeframe. (The strategy confirmation minimum was
-  // already required before the setup entered this reconciliation.)
-  const highOdds = (f: Firing) => {
-    if (!f.risk.ok) return false;
-    if (f.scored.count < minConfidenceFor(pair, f.scored.strategy)) return false;
-    // Both HTF and M15 must agree when their respective REQUIRE flags are enabled.
-    // (A disabled check evaluates to true, so this degrades gracefully.)
-    const trendAligned = f.scored.topDownAligned && f.scored.m15Aligned;
-    if (!trendAligned) return false;
-    return true;
-  };
-
-  const candidates = fired.filter(highOdds);
-  if (candidates.length === 0) {
+  // Send gate + side/primary selection live in lib/engine/select.ts, shared
+  // with the backtest: valid risk, the strategy's confirmation minimum, the
+  // trading session, no opposing weekly structure and an agreeing M15 trend
+  // (a trend check that is switched off for the pair evaluates to true).
+  const candidates = fired.filter((f) => passesSendGate(f, minConfidenceFor(pair, f.scored.strategy)));
+  const selection = selectSignal(candidates, ctx.topDown);
+  if (!selection) {
     for (const f of fired) {
-      const reason = skipReasonFor(f);
+      const reason = skipReasonFor(pair, f);
       if (f.prior?.lastSkip !== reason) {
         events.push({ pair, timeframe: tf, strategy: f.strategy, kind: "skipped", detail: reason });
       }
@@ -600,30 +565,7 @@ async function reconcileAndSignal(args: {
     }
     return;
   }
-
-  const longs = candidates.filter((f) => f.direction === "long");
-  const shorts = candidates.filter((f) => f.direction === "short");
-
-  // If both directions have candidates, use top-down alignment to pick a side;
-  // otherwise pick the side with candidates. This prevents counter-trend signals
-  // when the higher timeframe is clearly bearish/bullish.
-  let winnerSide: "long" | "short";
-  let arbitrationNote: string | null = null;
-
-  if (longs.length === 0 || shorts.length === 0) {
-    winnerSide = longs.length > 0 ? "long" : "short";
-  } else if (ctx.topDown) {
-    winnerSide = topDownAgrees(ctx.topDown, "long") ? "long" : "short";
-    arbitrationNote = `both sides present — chose ${winnerSide} via HTF bias`;
-  } else {
-    const sideScore = (arr: Firing[]) => arr.reduce((s, f) => s + quality(f), 0);
-    winnerSide = sideScore(longs) >= sideScore(shorts) ? "long" : "short";
-    arbitrationNote = `conflict resolved by confirmation majority: ${winnerSide}`;
-  }
-
-  const winners = winnerSide === "long" ? longs : shorts;
-  const ranked = [...winners].sort((a, b) => quality(b) - quality(a));
-  const primary = ranked[0];
+  const { side: winnerSide, winners, primary, arbitrationNote } = selection;
 
   // The winning side produced its decision row for this pair (sent, or
   // recorded as skipped-for-risk) — done for these setups. Setups on the

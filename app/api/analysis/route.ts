@@ -28,7 +28,7 @@ export async function GET(req: NextRequest) {
       fetchCandles({ instrument, granularity: "H4", count: 120 }),
       fetchCandles({ instrument, granularity: "H1", count: 120 }),
     ]);
-    const analysis = analyzeM15(candles);
+    const analysis = analyzeM15(candles, instrument);
     if (!analysis) {
       return NextResponse.json({ candles, zones: [], fib: null, aoi: null, topDown: null });
     }

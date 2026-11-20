@@ -1,5 +1,6 @@
 import type { Candle } from "@/lib/types";
 import type { Pivot } from "./pivots";
+import { legIsIntact } from "./swing";
 
 /**
  * Alex G "set & forget": a strong impulse leg that breaks structure leaves an
@@ -30,8 +31,9 @@ const MIN_LEG_ATR = 2.5;
 const LEG_LOOKBACK = 10; // legs among the last N pivots
 
 /**
- * Find the most recent structure-breaking impulse and its AOI. Long: a leg
- * from a swing low that broke a prior swing high. Short mirrors it.
+ * Find the most recent structure-breaking impulse and its AOI. Long: an intact
+ * leg from a swing low whose high took out the swing high that PRECEDED that
+ * low (a break of structure). Short mirrors it.
  */
 export function findSetForgetSetup(
   candles: Candle[],
@@ -54,12 +56,12 @@ export function findSetForgetSetup(
       const range = high.price - low.price;
       if (range < MIN_LEG_ATR * atrValue) continue;
 
+      if (!legIsIntact(candles, low, high)) continue;
+
       let setup: SetForgetSetup | null = null;
       if (low.index < high.index) {
-        // bullish leg: must break a prior swing high that sits between the two
-        const priorHigh = pivots
-          .filter((p) => p.kind === "high" && p.index > low.index && p.index < high.index)
-          .sort((x, y) => y.price - x.price)[0];
+        // bullish leg: its high must break the last swing high before the leg began
+        const priorHigh = lastBefore(pivots, "high", low.index);
         if (!priorHigh || high.price <= priorHigh.price) continue;
         setup = {
           direction: "long",
@@ -72,9 +74,7 @@ export function findSetForgetSetup(
           legEndIndex: high.index,
         };
       } else {
-        const priorLow = pivots
-          .filter((p) => p.kind === "low" && p.index > high.index && p.index < low.index)
-          .sort((x, y) => x.price - y.price)[0];
+        const priorLow = lastBefore(pivots, "low", high.index);
         if (!priorLow || low.price >= priorLow.price) continue;
         setup = {
           direction: "short",
@@ -103,6 +103,14 @@ export function findSetForgetSetup(
     }
   }
   return best;
+}
+
+/** The most recent pivot of `kind` that formed before candle `index`. */
+function lastBefore(pivots: Pivot[], kind: Pivot["kind"], index: number): Pivot | undefined {
+  for (let i = pivots.length - 1; i >= 0; i--) {
+    if (pivots[i].kind === kind && pivots[i].index < index) return pivots[i];
+  }
+  return undefined;
 }
 
 /**

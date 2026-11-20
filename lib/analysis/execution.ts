@@ -7,8 +7,12 @@ import { findSetForgetSetup, type SetForgetSetup } from "./setForget";
 import { classifyStructure, type StructureState } from "./structure";
 import { detectTrendlines, type Trendline } from "./trendlines";
 import { detectHeadShoulders, type HeadShouldersPattern } from "./headshoulders";
+import { typicalSpread } from "./instruments";
 
-export const MIN_TRADEABLE_ATR = 0.0003; // ~3 pips on EUR/USD; reject spread-dominated low-volatility bars
+/** A market is only worth analysing when a typical bar is several spreads
+ *  wide; below this the spread dominates every stop. (An absolute price floor
+ *  can't do this job — 0.0003 is 3 pips on EUR/USD but nothing on JPY or gold.) */
+export const MIN_ATR_SPREADS = 2.5;
 
 /** Live TA and signals run on 15-minute candles only. */
 export const EXECUTION_TIMEFRAME = "M15" as const;
@@ -19,22 +23,6 @@ export const M15_PIVOT_K = 5;
 export const M15_SWING_ATR = 0.75;
 export const M15_TRENDLINE_LOOKBACK = 200;
 
-export interface M15Analysis {
-  candles: Candle[];
-  pivots: Pivot[];
-  structuralPivots: Pivot[];
-  atrValue: number;
-  zones: Zone[];
-  fib: FibSetup | null;
-  setForget: SetForgetSetup | null;
-  trendlines: Trendline[];
-  /** Head-and-shoulders/inverse-H&S patterns currently active. Empty most scans. */
-  headShoulders: HeadShouldersPattern[];
-  /** Recent significant swing highs/lows for horizontal S/R levels on the chart. */
-  levels: { kind: "support" | "resistance"; price: number; time: number }[];
-  preferredDirection: SignalDirection | null;
-  structureState: StructureState;
-}
 
 export interface M15Analysis {
   candles: Candle[];
@@ -52,11 +40,17 @@ export interface M15Analysis {
   preferredDirection: SignalDirection | null;
   structureState: StructureState;
 }
-export function analyzeM15(candles: Candle[]): M15Analysis | null {
+
+/**
+ * Full M15 read of one instrument. `instrument` enables the spread-relative
+ * volatility floor; without it only a zero/unknown ATR is rejected.
+ */
+export function analyzeM15(candles: Candle[], instrument?: string): M15Analysis | null {
   if (candles.length < 60) return null;
   const pivots = detectPivots(candles, M15_PIVOT_K);
   const atrValue = atr(candles);
-  if (atrValue == null || atrValue < MIN_TRADEABLE_ATR) return null;
+  if (atrValue == null || atrValue <= 0) return null;
+  if (instrument && atrValue < MIN_ATR_SPREADS * typicalSpread(instrument)) return null;
 
   const structuralPivots = significantPivots(pivots, atrValue, M15_SWING_ATR);
   const zones = detectZones(candles);
@@ -83,7 +77,6 @@ export function analyzeM15(candles: Candle[]): M15Analysis | null {
   const levels: { kind: "support" | "resistance"; price: number; time: number }[] = [];
   {
     const recent = structuralPivots.slice(-40);
-    const last = candles[candles.length - 1];
     const used: { price: number; kind: string }[] = [];
     for (let i = recent.length - 1; i >= 0 && levels.length < 6; i--) {
       const p = recent[i];

@@ -2,7 +2,7 @@ import { WebSocket } from "ws";
 (globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket = WebSocket;
 
 /**
- * Pair ranking on ~6 months of M15 data at the live gate (5/4/6, one trade
+ * Pair ranking on ~6 months of M15 data at the live gate (4/4/6, one trade
  * per pair, realistic spreads, USD-converted sizing). Each pair reports the
  * full window plus the built-in in-sample (first 70%) / out-of-sample (last
  * 30%) splits, so a pair that only worked in one regime is visible.
@@ -15,7 +15,7 @@ import { fetchCandles, fetchLatestPrice } from "@/lib/oanda";
 import type { Pair } from "@/lib/types";
 
 const SPAN_DAYS = 182; // ~6 months
-const LIVE_GATE = { zones: 5, setforget: 4, fibonacci: 6 } as const;
+const LIVE_GATE = { zones: 4, setforget: 4, fibonacci: 6 } as const;
 
 async function fetchRange(instrument: string, granularity: string, days: number, windowDays: number) {
   const end = Date.now();

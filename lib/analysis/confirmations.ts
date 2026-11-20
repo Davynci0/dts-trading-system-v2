@@ -1,5 +1,6 @@
 import type { Candle, SignalDirection } from "@/lib/types";
 import { rsiSeries } from "./indicators";
+import { roundNumberStep } from "./instruments";
 import { classifyStructure } from "./structure";
 import { detectPivots } from "./pivots";
 
@@ -136,44 +137,46 @@ export function zoneIsVeryFresh(touches: number): boolean {
   return touches <= 1;
 }
 
-/** Pip size per instrument (round-number POI detection + spread config). */
-export function pipSize(instrument: string): number {
-  if (instrument.includes("JPY")) return 0.01;
-  if (instrument.startsWith("XAU")) return 0.1;
-  return 0.0001;
-}
+export { pipSize } from "./instruments";
 
 /**
- * Golden-zone overlap with another point of interest (Section 3, fib #3):
- * an active supply/demand zone, a round number, or a prior swing level.
+ * Does a retracement area (fib golden zone / set-and-forget AOI) line up with
+ * an independent point of interest? Three kinds count:
+ *  - an active supply/demand zone on the SAME side as the trade (a demand
+ *    zone under a long; an opposing zone is an obstacle, not confluence),
+ *  - a round number inside the area,
+ *  - a structural swing level that formed BEFORE the leg began (old
+ *    resistance turned support, or the reverse).
+ * Swings made during or after the leg are excluded: the retracement itself
+ * prints pivots inside the area, which made the old check pass every time.
  */
 export function goldenZoneHasPoi(
   fib: { goldenTop: number; goldenBottom: number },
   opts: {
-    zones: { top: number; bottom: number; active: boolean }[];
-    pivots: { price: number }[];
+    direction: SignalDirection;
+    zones: { kind: "demand" | "supply"; top: number; bottom: number; active: boolean }[];
+    pivots: { price: number; index: number }[];
+    /** candle index where the leg starts — only earlier pivots count */
+    legStartIndex: number;
     instrument: string;
     atrValue: number;
   }
 ): boolean {
-  const { zones, pivots, instrument, atrValue } = opts;
-
-  // overlap with an active zone
-  for (const z of zones) {
-    if (z.active && !(fib.goldenTop < z.bottom || fib.goldenBottom > z.top)) return true;
-  }
-
-  // round number (50-pip grid) inside the golden zone
-  const step = 50 * pipSize(instrument);
+  const { direction, zones, pivots, legStartIndex, instrument, atrValue } = opts;
   const lo = Math.min(fib.goldenBottom, fib.goldenTop);
   const hi = Math.max(fib.goldenBottom, fib.goldenTop);
-  const k0 = Math.ceil(lo / step);
-  if (k0 * step <= hi) return true;
 
-  // prior swing level within a small tolerance of the zone
+  const wanted = direction === "long" ? "demand" : "supply";
+  for (const z of zones) {
+    if (z.active && z.kind === wanted && !(hi < z.bottom || lo > z.top)) return true;
+  }
+
+  const step = roundNumberStep(instrument);
+  if (Math.ceil(lo / step) * step <= hi) return true;
+
   const tol = 0.2 * atrValue;
   for (const p of pivots) {
-    if (p.price > lo - tol && p.price < hi + tol) return true;
+    if (p.index < legStartIndex && p.price > lo - tol && p.price < hi + tol) return true;
   }
   return false;
 }

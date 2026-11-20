@@ -48,3 +48,6 @@ next-env.d.ts
 # local artifacts
 supabase/.temp/
 *.png
+
+# research candle cache (scripts/research-validate.ts)
+/.cache/

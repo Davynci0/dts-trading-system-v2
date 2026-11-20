@@ -33,8 +33,43 @@ const MAX_BASE_WIDTH_ATR = 1.5; // base wider than this isn't a tight accumulati
 export function detectZones(candles: Candle[]): Zone[] {
   const atrs = atrSeries(candles, 14);
   const zones: Zone[] = [];
+  // per-zone "price is currently inside" flag for touch counting
+  const inside = new Map<Zone, boolean>();
 
+  /** Advance every live zone by one candle: invalidation first, then touches. */
+  const advance = (i: number) => {
+    const c = candles[i];
+    for (const z of zones) {
+      if (!z.active || i <= z.impulseIndex) continue;
+      if (z.kind === "demand") {
+        if (c.close < z.bottom) {
+          z.active = false;
+          z.invalidatedIndex = i;
+          continue;
+        }
+        const enters = c.low <= z.top;
+        if (enters && !inside.get(z)) z.touches++;
+        inside.set(z, enters && c.close >= z.bottom);
+      } else {
+        if (c.close > z.top) {
+          z.active = false;
+          z.invalidatedIndex = i;
+          continue;
+        }
+        const enters = c.high >= z.bottom;
+        if (enters && !inside.get(z)) z.touches++;
+        inside.set(z, enters && c.close <= z.top);
+      }
+    }
+  };
+
+  // Single forward pass: zone state is always current as of candle i, so the
+  // duplicate check below sees which earlier zones are STILL alive. (Marking
+  // invalidation in a second pass left every zone "active" during detection —
+  // a dead zone then suppressed any fresh zone forming in the same band.)
   for (let i = 15; i < candles.length; i++) {
+    advance(i);
+
     const a = atrs[i];
     const c = candles[i];
     if (!a) continue;
@@ -68,51 +103,28 @@ export function detectZones(candles: Candle[]): Zone[] {
 
     const kind: Zone["kind"] = c.close > c.open ? "demand" : "supply";
 
-    // skip if an existing active same-kind zone already covers this price band
+    // The impulse must actually LEAVE the base: a big candle that closes back
+    // inside the range it started from has not shown one-sided order flow.
+    if (kind === "demand" ? c.close <= top : c.close >= bottom) continue;
+
+    // skip if a still-active same-kind zone already covers this price band
     const dupe = zones.some(
       (z) => z.active && z.kind === kind && !(top < z.bottom || bottom > z.top)
     );
     if (dupe) continue;
 
     zones.push({
-      id: `${kind}-${candles[j].time}`,
+      id: `${kind}-${candles[baseStart].time}`,
       kind,
       top,
       bottom,
-      startIndex: j,
-      startTime: candles[j].time,
+      startIndex: baseStart,
+      startTime: candles[baseStart].time,
       impulseIndex: i,
       invalidatedIndex: null,
       active: true,
       touches: 0,
     });
-  }
-
-  // forward pass per zone: touches + invalidation (uses only candles after the impulse)
-  for (const z of zones) {
-    let inside = false;
-    for (let i = z.impulseIndex + 1; i < candles.length; i++) {
-      const c = candles[i];
-      if (z.kind === "demand") {
-        if (c.close < z.bottom) {
-          z.active = false;
-          z.invalidatedIndex = i;
-          break;
-        }
-        const enters = c.low <= z.top;
-        if (enters && !inside) z.touches++;
-        inside = enters && c.close >= z.bottom;
-      } else {
-        if (c.close > z.top) {
-          z.active = false;
-          z.invalidatedIndex = i;
-          break;
-        }
-        const enters = c.high >= z.bottom;
-        if (enters && !inside) z.touches++;
-        inside = enters && c.close <= z.top;
-      }
-    }
   }
 
   return zones;
