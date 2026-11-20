@@ -1,0 +1,55 @@
+name: Scan
+
+# Runs the signal scan every 15 minutes during the trading session.
+#
+# Vercel's Hobby plan only allows one cron run per day, and an M15 scanner has
+# to see every 15-minute candle, so the schedule lives here instead. The scan
+# itself still runs on Vercel — this job only calls /api/scan.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   SCAN_URL     the deployed site's origin, e.g. https://your-app.vercel.app
+#   CRON_SECRET  the same value as the CRON_SECRET env var on Vercel
+#
+# Keep this window in step with TRADING_HOURS_UTC (lib/analysis/session.ts).
+
+on:
+  schedule:
+    # 12:01–20:46 UTC, Monday–Friday. One minute past each quarter hour so the
+    # M15 candle that just closed is already marked complete by OANDA; the last
+    # run reads the 20:45 close, the final entry inside the 12:00–21:00 window.
+    - cron: "1,16,31,46 12-20 * * 1-5"
+  workflow_dispatch:
+
+# GitHub can start scheduled runs late; never let two scans overlap.
+concurrency:
+  group: scan
+  cancel-in-progress: false
+
+permissions: {}
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Call /api/scan
+        shell: bash
+        env:
+          SCAN_URL: ${{ secrets.SCAN_URL }}
+          CRON_SECRET: ${{ secrets.CRON_SECRET }}
+        run: |
+          if [ -z "$SCAN_URL" ]; then
+            echo "::error::The SCAN_URL repository secret is not set."
+            exit 1
+          fi
+          # The response lists live setups, and this repository's logs are
+          # public — record the status code only, never the body.
+          status=$(curl --silent --show-error --output /dev/null --write-out '%{http_code}' \
+            --max-time 90 \
+            --header "Authorization: Bearer ${CRON_SECRET}" \
+            "${SCAN_URL%/}/api/scan")
+          echo "scan responded with HTTP ${status}"
+          if [ "$status" != "200" ]; then
+            echo "::error::Scan failed with HTTP ${status}."
+            exit 1
+          fi
