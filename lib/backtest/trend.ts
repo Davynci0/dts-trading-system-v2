@@ -11,8 +11,10 @@ import {
 /**
  * Backtest of the trend system (lib/analysis/trend.ts), with the scanner's own
  * detection: signal on a CLOSED H4 candle, fill at the next candle's open plus
- * the full spread + slippage, at most one position per entry type, several
- * types side by side — but never a buy while a sell is open, or the reverse.
+ * the full spread + slippage. Entries that fire on the same candle are ONE
+ * trade; an entry type holds at most one position; positions opened on
+ * different candles may run side by side — but never a buy while a sell is
+ * open, or the reverse.
  *
  * Each trade ends at its trailing stop or at its take-profit, whichever comes
  * first. The trailing stop is followed on `fine` candles (M15) when they are given —
@@ -21,8 +23,10 @@ import {
  * before the candle's own extreme may move it.
  */
 export interface TrendTrade {
-  /** entry type id (TREND_ENTRIES) */
+  /** entry type id (TREND_ENTRIES) — the first of those that fired on the signal candle */
   entryId: string;
+  /** every entry type that fired on that candle; the trade stands for all of them */
+  entries: string[];
   /** take-profit price (NaN when the system has none) */
   takeProfit: number;
   strategy: "trend";
@@ -57,8 +61,10 @@ export function runTrendBacktest(opts: {
   costMultiplier?: number;
   /** research only: allow a buy while sells are open (and the reverse). The live system never does. */
   allowOpposite?: boolean;
+  /** research only: false books every entry of a candle as its own trade, as earlier versions did. */
+  mergeSameCandle?: boolean;
 }): TrendTrade[] {
-  const { pair, candles, daily, fine, from = 0, costMultiplier = 1, allowOpposite = false } = opts;
+  const { pair, candles, daily, fine, from = 0, costMultiplier = 1, allowOpposite = false, mergeSameCandle = true } = opts;
   const s = buildTrendSeries(candles, daily);
   const cost = tradeCost(pair) * Math.max(0, costMultiplier);
   const trades: TrendTrade[] = [];
@@ -74,14 +80,19 @@ export function runTrendBacktest(opts: {
     } catch {
       continue;
     }
-    for (const setup of setups) {
-      if ((busy.get(setup.id) ?? 0) > entryTime) continue;
-      // no buy while a sell is still open, and no sell while a buy is: the
-      // open positions have to be stopped out before the system changes sides
-      if (!allowOpposite && trades.some((t) => t.direction !== setup.direction && t.exitTime > entryTime)) continue;
-      const trade = follow(setup, i);
+    // Entries that fire on the same candle share one entry price, stop and
+    // target: they are one trade. An entry type that already holds a position
+    // takes no part.
+    const group = setups.filter((setup) => (busy.get(setup.id) ?? 0) <= entryTime);
+    if (group.length === 0) continue;
+    // no buy while a sell is still open, and no sell while a buy is: the
+    // open positions have to be stopped out before the system changes sides
+    if (!allowOpposite && trades.some((t) => t.direction !== group[0].direction && t.exitTime > entryTime)) continue;
+    for (const lead of mergeSameCandle ? [group[0]] : group) {
+      const trade = follow(lead, i);
       if (!trade) continue;
-      busy.set(setup.id, trade.exitTime);
+      trade.entries = mergeSameCandle ? group.map((g) => g.id) : [lead.id];
+      for (const id of trade.entries) busy.set(id, trade.exitTime);
       trades.push(trade);
     }
   }
@@ -147,6 +158,7 @@ export function runTrendBacktest(opts: {
     }
     return {
       entryId: setup.id,
+      entries: [setup.id],
       strategy: "trend",
       direction: setup.direction,
       entryTime: s.t[e],

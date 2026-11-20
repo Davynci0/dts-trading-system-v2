@@ -5,7 +5,7 @@ with eleven entry types; every trade has a **stop loss, a take-profit and a trai
 close it is sent to Telegram. The user reviews each signal and executes manually — the system
 never places trades.
 
-Expect about three signals a day, with **several positions open at the same time and all
+Expect about two signals a day, with **several positions open at the same time and all
 pointing the same way**, and about 3 winners in 10 trades. Read
 [the backtest results](#backtesting) before trusting it.
 
@@ -65,7 +65,7 @@ All of it is in `lib/analysis/trend.ts`, shared by the scanner, the backtest and
 | Trailing stop | 6 ATR (the ATR at entry, a fixed distance) behind the best price — the broker's own trailing stop can run it |
 | Take profit | 8 × the risk (8R, `TREND_TARGET_R`) — the trailing stop usually closes the trade first |
 | Time limit | closed at market after 360 candles of trading time (7.5 trading days) |
-| Positions | one per entry type; different entry types may be open side by side (up to eleven) — **always on one side**: no buy is sent while a sell is still open, and no sell while a buy is |
+| Positions | entries that fire on the **same candle are one trade** (same entry, stop and target) and one signal; an entry type holds one position; positions opened on different candles may run side by side — **always on one side**: no buy is sent while a sell is still open, and no sell while a buy is |
 | Costs | a trade is refused when spread + slippage exceed 10% of its risk |
 | Size | 0.1% of the account per trade (`TREND_RISK_PCT`) |
 
@@ -119,6 +119,8 @@ setups" — as context. They do not send: with fixed targets they made about not
 - A signal is only sent within 20 minutes of its candle's close (`MAX_ENTRY_AGE_MIN`). A scan
   that runs later — after an outage, or at the weekend — does not send a trade at a price that
   is no longer there.
+- Entries that fire on the same candle are sent as **one signal** naming all of them — they
+  share the entry price, the stop and the target, so they are one trade, not several.
 - An entry type that already has a position open does not send again until that position has
   been stopped out.
 - A signal against the positions that are open is never sent. When the daily trend turns, the
@@ -148,27 +150,30 @@ XAU/USD on M30, 15 years to 2026-11-20:
 
 | Period | Trades | Result |
 | --- | --- | --- |
-| 2011-11 → 2021-11 (the years the settings were chosen on) | 8,126 | +456R |
-| 2021-11 → 2023-11 | 1,767 | +23R |
-| 2023-11 → 2026-11 | 2,488 | +1,083R |
-| **All 15 years** | **12,381 (3.2 a day)** | **+1,562R** |
+| 2011-11 → 2021-11 (the years the settings were chosen on) | 5,373 | +101R |
+| 2021-11 → 2023-11 | 1,155 | +86R |
+| 2023-11 → 2026-11 | 1,663 | +708R |
+| **All 15 years** | **8,191 (2.1 a day)** | **+896R** |
 
-32% of trades win. 11 of the 15 years were positive (the losing ones: −70R, −64R, −90R,
-−51R), and every one of the eleven entries is positive on its own. With costs doubled the
-total is +928R — nearly all of it from 2023–2026; the ten design years come out at about zero.
+31% of trades win. 11 of the 15 years were positive (the losing ones: −69R, −24R, −93R,
+−26R). With costs doubled the total is +511R, all of it from 2023–2026.
+
+These figures count each trade once. Earlier versions booked every entry of a candle as its
+own trade — up to seven identical trades for one move — which made the record look larger
+(12,381 trades, +1,562R) without being a different system.
 
 **Read this before trusting it.**
 
-- **The evidence is modest.** In the ten design years the weekly results are positive but not
-  far from what chance could produce (weekly t ≈ 0.9), and the settings were picked from
-  thousands of candidates. Most of the profit is still in 2023–2026, when gold rallied.
+- **The evidence is modest.** The ten design years made +101R on 5,373 trades — close to
+  flat — and the settings were picked from thousands of candidates, in a search that still
+  counted identical trades separately. Most of the profit is still in 2023–2026, when gold rallied.
   Expect live results to be weaker.
-- **Very large drawdowns.** The worst was 296R (492R with costs doubled), and single years
-  had drawdowns of 100–200R. At 0.1% risk per trade that is about 30% of the account; at 1%
+- **Large drawdowns.** The worst was 210R (381R with costs doubled), and single years had
+  drawdowns of 60–140R. At 0.1% risk per trade that is about 21% of the account; at 1%
   the account would not have survived.
 - **Long losing runs.** Seven trades in ten lose. The profit comes from a minority of large
   winners, so weeks of small losses are normal.
-- **Positions overlap and point the same way.** Up to eleven are open at once and are stopped
+- **Positions overlap and point the same way.** Up to ten are open at once and are stopped
   together when the trend turns.
 
 The same rules **with the earlier settings** (50/100-day trend, ADX below 27, 3-ATR trailing

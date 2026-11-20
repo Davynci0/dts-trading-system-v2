@@ -168,7 +168,7 @@ export default function Dashboard() {
     const trails = pairSignals
       .filter((s) => s.strategy === "trend" && !s.outcome && s.status === "active" && candles.length > 0)
       .map((s) => ({
-        label: trend?.watch.find((w) => w.id === s.variant)?.label ?? "trend",
+        label: `${trend?.watch.find((w) => w.id === s.variant)?.label ?? "trend"}${(s.confluence_strategies?.length ?? 0) > 1 ? ` +${s.confluence_strategies!.length - 1} more` : ""}`,
         direction: s.direction,
         entry: s.entry,
         stop: s.trail_stop ?? s.stop_loss,

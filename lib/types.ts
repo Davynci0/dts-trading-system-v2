@@ -20,6 +20,8 @@ export interface Signal {
   strategy: StrategyId | "trend";
   /** trend system: the entry type that fired (TREND_ENTRIES id) */
   variant?: string | null;
+  /** trend system: every entry type that fired on the signal candle — one position stands for all of them */
+  confluence_strategies?: string[] | null;
   /** trend system: fixed trailing distance in price — such a trade has no take-profit */
   trail_distance?: number | null;
   /** trend system: where the trailing stop stands now */

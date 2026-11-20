@@ -164,8 +164,11 @@ const withBreak = [...quiet, breakUp];
   const moon = [...withBreak, ...Array.from({ length: 80 }, (_, k) => bar(H0 + (461 + k) * H4, 3330 + 4 * k, 3336 + 4 * k, 3329 + 4 * k, 3334 + 4 * k))];
   const ran = runTrendBacktest({ pair: "XAU_USD", candles: moon, daily: up }).find((t) => t.entryId === "don20");
   check("backtest: a run that reaches the take-profit is closed there", !!ran && ran.outcome === "target" && Math.abs(ran.rAchieved - TREND_TARGET_R) < 1e-9, ran ? `${ran.outcome} ${ran.rAchieved.toFixed(2)}R` : "no trade");
-  const overlap = trades.some((a) => trades.some((b) => a !== b && a.entryId === b.entryId && a.entryTime < b.exitTime && b.entryTime < a.exitTime));
-  check("backtest: an entry type never holds two positions at once", !overlap && trades.length > 3, `${trades.length} trades`);
+  check("backtest: entries that fire on the same candle are one trade, not several", !!first && first.entries.length >= 5 && ["don20", "don30", "don60", "don120", "don240"].every((id) => first.entries.includes(id)) && trades.filter((t) => t.entryTime === first.entryTime).length === 1, first ? `1 trade for ${first.entries.join(",")}` : "no trade");
+  const overlap = trades.some((a) => trades.some((b) => a !== b && a.entries.some((id) => b.entries.includes(id)) && a.entryTime < b.exitTime && b.entryTime < a.exitTime));
+  check("backtest: an entry type never holds two positions at once", !overlap, `${trades.length} trades`);
+  const apart = runTrendBacktest({ pair: "XAU_USD", candles: series, daily: up, mergeSameCandle: false });
+  check("backtest: without merging, the same candle would book several identical trades", apart.filter((t) => first && t.entryTime === first.entryTime).length >= 5, `${apart.filter((t) => first && t.entryTime === first.entryTime).length} trades`);
 
   const buy = { id: "don20", label: "20-candle breakout", direction: "long" as const };
   check("positions: a new entry is sent when nothing conflicts", blockedByOpen(buy, [{ variant: "ema20pb", direction: "long" }]) === null, "allowed");

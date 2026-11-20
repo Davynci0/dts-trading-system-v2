@@ -30,7 +30,8 @@ const arrow = (t: number) => (t === 1 ? "▲ up" : t === -1 ? "▼ down" : "unkn
 export default function TrendTracker({ trend, signals, digits = 2 }: { trend: TrendSummary | null; signals: Signal[]; digits?: number }) {
   const px = (n: number) => n.toFixed(digits);
   const open = signals.filter((s) => s.strategy === "trend" && !s.outcome && s.status === "active");
-  const byVariant = new Map(open.map((s) => [s.variant ?? "", s]));
+  // one position stands for every entry type that fired on its candle
+  const byVariant = new Map(open.flatMap((s) => (s.confluence_strategies?.length ? s.confluence_strategies : [s.variant ?? ""]).map((id) => [id, s] as const)));
   const st = trend?.state;
   const agree = !!st && st.fast !== 0 && st.fast === st.slow;
   const checks: [string, boolean][] =
@@ -51,7 +52,9 @@ export default function TrendTracker({ trend, signals, digits = 2 }: { trend: Tr
     <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
       <div className="mb-2 flex items-baseline justify-between">
         <h2 className="text-sm font-semibold text-neutral-100">Trend system</h2>
-        <span className="text-xs text-neutral-500">sends signals · {open.length} open</span>
+        <span className="text-xs text-neutral-500">
+          sends signals · {open.length} position{open.length === 1 ? "" : "s"} open
+        </span>
       </div>
       {!trend || !st ? (
         <p className="text-xs text-neutral-600">Loading…</p>

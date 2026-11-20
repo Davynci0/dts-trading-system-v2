@@ -119,7 +119,7 @@ export default function SignalFeed() {
                 </span>
               </span>
               <span className="text-neutral-500">
-                {fmtTime(s.created_at)} · {s.strategy === "trend" ? `trend · ${s.variant ?? ""}` : `${s.strategy} · ${s.confidence}/${CHECKS[s.strategy] ?? 6}`}
+                {fmtTime(s.created_at)} · {s.strategy === "trend" ? `trend · ${(s.confluence_strategies?.length ? s.confluence_strategies : [s.variant ?? ""]).join(", ")}` : `${s.strategy} · ${s.confidence}/${CHECKS[s.strategy] ?? 6}`}
                 {s.strategy === "trend" ? "" : isASetup(s.strategy, s.confidence) ? " · A setup" : " · B setup"}
                 {s.confirmations?.["Key level behind the entry"] ? " ★" : ""}
                 {s.status === "skipped" ? " · SKIPPED" : ""}

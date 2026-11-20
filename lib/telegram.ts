@@ -120,8 +120,8 @@ export async function sendFinalSignal(opts: {
 export async function sendTrendSignal(opts: {
   pair: string;
   direction: "long" | "short";
-  /** the entry type, e.g. "30-candle breakout" */
-  label: string;
+  /** the entry types that fired on this candle, e.g. ["20-candle breakout", "30-candle breakout"] */
+  labels: string[];
   rule: string;
   entry: number;
   stopLoss: number;
@@ -148,15 +148,18 @@ export async function sendTrendSignal(opts: {
       : `Size: the stop is too wide for ${pct}% risk — the smallest size (1 unit, 0.01 lot) risks $${unitRisk.toFixed(0)}, ${pct}% of the account is $${opts.riskAmount.toFixed(0)}`;
   await sendTelegramMessage(
     [
-      `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (${opts.label})`,
+      `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (${opts.labels[0]}${opts.labels.length > 1 ? ` +${opts.labels.length - 1} more` : ""})`,
       `*Entry:* \`${px(opts.entry)}\` (at market)`,
       `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(unitRisk)} away (1R)`,
       opts.takeProfit > 0 ? `*Take profit:* \`${px(opts.takeProfit)}\` — ${px(Math.abs(opts.takeProfit - opts.entry))} away (${opts.targetR}R)` : `*Take profit:* none`,
       `*Trailing stop:* ${px(opts.trailDistance)} behind price — set it on your broker; it usually closes the trade before the take profit`,
+      opts.labels.length > 1 ? `Entries that agree (${opts.labels.length}): ${opts.labels.join(", ")} — one trade, not ${opts.labels.length}` : null,
       `Why: ${opts.rule}; the ${opts.fastDays}-day and ${opts.slowDays}-day trends both point ${opts.direction === "long" ? "up" : "down"}; price is ${opts.direction === "long" ? "above" : "below"} its ${opts.emaBars}-candle average`,
       `Trend positions open now: ${opts.openCount}`,
       sizeLine,
       `_Signal only — review and execute manually._`,
-    ].join("\n")
+    ]
+      .filter(Boolean)
+      .join("\n")
   );
 }
