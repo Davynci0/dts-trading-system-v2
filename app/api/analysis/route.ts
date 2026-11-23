@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { EXECUTION_CANDLES, EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
 import { buildFibSeries, fibPrice, fibStateAt, FIB_LEVELS, FIB_TARGET_EXTENSION, FIB_ZONE_DEEP, FIB_ZONE_SHALLOW } from "@/lib/analysis/fibonacci";
+import { buildTrendSeries, trendStateAt, TREND_BREAKOUT_BARS, TREND_MIN_CANDLES, TREND_STOP_ATR, TREND_TARGET_R, TREND_TRAIL_ATR } from "@/lib/analysis/trend";
 import { fetchFibCandles } from "@/lib/engine/scanner";
 
 export const maxDuration = 60;
@@ -8,10 +9,11 @@ export const maxDuration = 60;
 /**
  * GET /api/analysis?instrument=XAU_USD&count=500[&to=<ISO time>]
  * Everything the chart draws, from the same code the scanner runs: the
- * 15-minute candles and the Fibonacci system's read of the last closed one —
- * the two trends, the 1-hour swing, its retracement levels, the entry zone and
- * the stop and target a trade from it would have. `to` returns the read as it
- * stood at that moment, for reviewing a past setup.
+ * 15-minute candles; the Fibonacci system's read of the last closed one — the
+ * two trends, the 1-hour swing, its retracement levels, the entry zone and the
+ * stop and target a trade from it would have; and the trend entries' read of
+ * the last closed 1-hour candle. `to` returns the read as it stood at that
+ * moment, for reviewing a past setup.
  */
 export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
@@ -31,7 +33,7 @@ export async function GET(req: NextRequest) {
   try {
     const data = await fetchFibCandles(instrument, to, count);
     const candles = data.m15;
-    if (candles.length < 60) return NextResponse.json({ candles, fib: null, asOf: to ?? null });
+    if (candles.length < 60) return NextResponse.json({ candles, fib: null, trend: null, asOf: to ?? null });
 
     const series = buildFibSeries(data);
     const state = fibStateAt(series, series.n - 1, instrument);
@@ -56,7 +58,35 @@ export async function GET(req: NextRequest) {
       targetLevel: 1 + FIB_TARGET_EXTENSION,
       setup: state.setup ? { direction: state.setup.direction, entry: state.setup.entry, stopLoss: state.setup.stopLoss, takeProfit: state.setup.takeProfit, rr: state.setup.rr, trigger: state.setup.trigger } : null,
     };
-    return NextResponse.json({ candles, fib, asOf: to ?? null });
+
+    let trend = null;
+    if (data.h1.length > TREND_MIN_CANDLES) {
+      const ts = buildTrendSeries(data);
+      const t = trendStateAt(ts, ts.n - 1, instrument);
+      trend = {
+        dailyTrend: t.dailyTrend,
+        maTrend: t.maTrend,
+        emaFast: t.emaFast,
+        emaSlow: t.emaSlow,
+        adx: t.adx,
+        plusDi: t.plusDi,
+        minusDi: t.minusDi,
+        rsi: t.rsi,
+        atr: t.atr,
+        side: t.side,
+        checks: t.checks,
+        blocked: t.blocked,
+        breakoutLevel: t.breakoutLevel,
+        breakoutBars: TREND_BREAKOUT_BARS,
+        stopAtr: TREND_STOP_ATR,
+        trailAtr: TREND_TRAIL_ATR,
+        targetR: TREND_TARGET_R,
+        /** when the 1-hour candle this was read on closed (epoch seconds) */
+        readAt: ts.candles[ts.n - 1].time + 3600,
+        setup: t.setup ? { direction: t.setup.direction, entry: t.setup.entry, stopLoss: t.setup.stopLoss, takeProfit: t.setup.takeProfit, trailDistance: t.setup.trailDistance, trigger: t.setup.trigger } : null,
+      };
+    }
+    return NextResponse.json({ candles, fib, trend, asOf: to ?? null });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }

@@ -76,7 +76,8 @@ function MetricTable({ rows, segment }: { rows: ResultRow[]; segment: Segment })
 
 /**
  * Backtest results: stored runs of the system that sends live signals (the
- * Fibonacci system), with the whole run next to its first 70% and last 30%.
+ * trend entries and the Fibonacci retracement), with the whole run next to its
+ * first 70% and last 30%.
  */
 export default function BacktestsPage() {
   const [run, setRun] = useState<RunRow | null>(null);
@@ -124,7 +125,7 @@ export default function BacktestsPage() {
   const sections: [string, ResultRow[], boolean][] = [
     ["Combined", results.filter((r) => r.scope === "combined"), true],
     ["Per year", rowsOf("year:"), false],
-    ["By entry candle", rowsOf("strategy:"), true],
+    ["By entry", rowsOf("strategy:"), true],
     ["By key level", rowsOf("grade:"), true],
     ["Buys and sells", rowsOf("pair:"), true],
   ];
@@ -136,10 +137,11 @@ export default function BacktestsPage() {
         <div>
           <h1 className="text-lg font-semibold text-neutral-100">Backtest Results</h1>
           <p className="mt-1 max-w-3xl text-xs text-neutral-500">
-            The Fibonacci retracement system replayed on history with the scanner&apos;s own detection: a signal on a
-            closed 15-minute candle fills at the next candle&apos;s open, the full spread + slippage is charged once,
-            there is one trade per swing and one trade at a time, and a candle that touches both the stop and the
-            target counts as a loss. Older runs in the list belong to earlier versions of the system.
+            The trend entries (1-hour breakout and RSI pullback, with a trailing stop) and the Fibonacci retracement
+            replayed on history with the scanner&apos;s own detection: a signal on a closed candle fills at the next
+            15-minute candle&apos;s open, the full spread + slippage is charged once, each of the two holds one trade
+            at a time, and a candle that touches both the stop and the target counts as a loss. Older runs in the list
+            belong to earlier versions of the system.
           </p>
         </div>
         <button

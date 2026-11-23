@@ -242,7 +242,8 @@ export default function Chart({
     }
     const has =
       overlay.fib != null ||
-      overlay.position != null ||
+      overlay.trend != null ||
+      (overlay.positions?.length ?? 0) > 0 ||
       (overlay.history?.length ?? 0) > 0;
     if (has) {
       const p = new OverlayPrimitive(overlay);

@@ -15,12 +15,12 @@ export interface Signal {
   created_at: string;
   pair: string;
   direction: SignalDirection;
-  /** "fibonacci" for every signal the system sends now; older rows keep the strategy that sent them */
+  /** "fibonacci" or "trend-h1" for the signals the system sends now; older rows keep the strategy that sent them */
   strategy: string;
-  /** fibonacci: the key of the 1-hour leg the trade was taken on (one trade per leg) */
+  /** fibonacci: the key of the 1-hour leg the trade was taken on (one trade per leg); trend-h1: the key of the signal candle */
   variant?: string | null;
   confluence_strategies?: string[] | null;
-  /** legacy trend-system rows: the trailing distance and where the trailing stop stands */
+  /** trend trades: the trailing distance and where the trailing stop stands */
   trail_distance?: number | null;
   trail_stop?: number | null;
   entry: number;
@@ -60,5 +60,7 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 /** The chart timeframe entries are taken on (see lib/analysis/execution.ts). */
 export const TRADE_TIMEFRAMES = ["M15"] as const satisfies readonly Timeframe[];
 
-/** The strategy every new signal is stored under. */
+/** The strategies new signals are stored under: the Fibonacci retracement and the 1-hour trend entries. */
 export const FIB_STRATEGY = "fibonacci" as const;
+export const TREND_STRATEGY = "trend-h1" as const;
+export const LIVE_STRATEGIES: readonly string[] = [FIB_STRATEGY, TREND_STRATEGY];

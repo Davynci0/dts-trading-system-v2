@@ -53,7 +53,7 @@ export function settleSignal(s: SettleInput, candles: { time: number; open: numb
   return null;
 }
 
-/** A trade of the retired trend system as stored: a trailing stop a fixed distance behind the best price. */
+/** A trend trade as stored: a trailing stop a fixed distance behind the best price. */
 export interface TrailInput {
   direction: "long" | "short";
   entry: number;
@@ -69,10 +69,11 @@ export interface TrailInput {
 }
 
 /**
- * The trend system no longer sends signals, but its trades that were still
- * open when it was retired are followed to their end: the trailing stop is
- * tested first, then the take-profit, then the stop trails behind the candle's
- * best price.
+ * Follow a trend trade (lib/analysis/trend.ts) through the 15-minute candles
+ * since it was last followed, exactly as the backtest does: the stop is tested
+ * first, then the take-profit, then the stop trails behind the candle's best
+ * price. Trades of the retired 30-minute trend system that are still open are
+ * stored the same way and end the same way.
  */
 export function settleTrailing(
   s: TrailInput,

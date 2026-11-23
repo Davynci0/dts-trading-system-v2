@@ -29,15 +29,28 @@ export interface OverlayData {
     /** true while the last closed candle is inside the entry zone */
     inZone?: boolean;
   } | null;
-  /** the open trade's plan (entry/SL/TP), drawn as a position tool */
-  position?: {
+  /** the trend entries' read: the level a 1-hour close has to break for the breakout entry */
+  trend?: {
+    direction: "long" | "short";
+    level: number;
+    /** how many 1-hour candles the level is the high/low of */
+    bars: number;
+    /** false while the trend readings do not all agree or the trend is too weak */
+    ready: boolean;
+  } | null;
+  /** the open trades' plans (entry/SL/TP), drawn as position tools — at most one per strategy */
+  positions?: {
+    /** which strategy the trade belongs to, as shown on the chart */
+    label: string;
     direction: "long" | "short";
     entry: number;
     stopLoss: number;
     takeProfit: number;
+    /** where a trailing stop stands now, when it has moved past the stop loss */
+    stopNow?: number | null;
     startTime: number;
     rMultiple: number;
-  } | null;
+  }[];
   /** settled signals: entry → the bar/price where the trade closed */
   history?: {
     direction: "long" | "short";
@@ -54,9 +67,10 @@ export interface OverlayData {
 
 export const EMPTY_OVERLAY: OverlayData = { fib: null };
 
-/** One colour per idea, used the same way on the chart and in the panels: violet for the Fibonacci levels, green/red for direction and results. */
+/** One colour per idea, used the same way on the chart and in the panels: violet for the Fibonacci levels, blue for the trend entries, green/red for direction and results. */
 export const CHART_COLORS = {
   fib: "167,139,250", // violet
+  trend: "56,189,248", // sky blue — the breakout level
   zone: "250,204,21", // yellow — the entry zone
   muted: "100,116,139",
   ink: "229,231,235",
@@ -74,7 +88,8 @@ interface PaneSource {
 }
 
 /**
- * Draws the Fibonacci system's read on the candle pane. The visual rules:
+ * Draws the Fibonacci system's read, the trend entries' breakout level and
+ * the open trades on the candle pane. The visual rules:
  *
  *  - the entry ZONE is a soft box with a solid accent bar on its left edge
  *    and one label inside its top-left corner;
@@ -195,7 +210,7 @@ class OverlayPaneView implements IPrimitivePaneView {
               }
             }
             // where a trade from this swing would have its stop and target (only while none is open)
-            if (!data.position && !dim) {
+            if (!data.positions?.some((p) => p.label === "FIBONACCI") && !dim) {
               const yS = f.stopLoss != null ? Y(f.stopLoss) : null;
               const yT = f.takeProfit != null ? Y(f.takeProfit) : null;
               if (yS != null) {
@@ -221,23 +236,39 @@ class OverlayPaneView implements IPrimitivePaneView {
             tag(`${h.direction === "long" ? "BUY" : "SELL"} ${result}`, xB + 7, yB - 3, rgb, "left", 4, { small: true });
           }
 
-          // ── the open trade plan ──────────────────────────────────────────
-          if (data.position) {
-            const p = data.position;
+          // ── the trend entries: the level a 1-hour close has to break ──────
+          if (data.trend) {
+            const t = data.trend;
+            const y = Y(t.level);
+            if (y != null) {
+              const up = t.direction === "long";
+              line(0, W, y, C.trend, t.ready ? 0.75 : 0.35, 1, [8, 4]);
+              tag(`TREND · ${side(t.direction)} on a 1-hour close ${up ? "above" : "below"} ${fmt(t.level)} (${t.bars}-candle ${up ? "high" : "low"})${t.ready ? "" : " · trend not confirmed"}`, 8, y + (up ? -3 : 13), C.trend, "left", 3, { dim: !t.ready });
+            }
+          }
+
+          // ── the open trade plans ─────────────────────────────────────────
+          for (const p of data.positions ?? []) {
             const x0 = Math.max(X(p.startTime) ?? 0, 0);
             const [yE, yS, yT] = [Y(p.entry), Y(p.stopLoss), Y(p.takeProfit)];
-            if (yE != null && yS != null && yT != null) {
-              ctx.fillStyle = rgba(C.win, 0.09);
-              ctx.fillRect(x0, Math.min(yE, yT), W - x0, Math.abs(yT - yE));
-              ctx.fillStyle = rgba(C.loss, 0.09);
-              ctx.fillRect(x0, Math.min(yE, yS), W - x0, Math.abs(yS - yE));
-              const dash: number[] = [];
-              line(x0, W, yT, C.win, 0.95, 1.5, dash);
-              line(x0, W, yE, C.ink, 0.95, 1.5, dash);
-              line(x0, W, yS, C.loss, 0.95, 1.5, dash);
-              tag(`TARGET ${fmt(p.takeProfit)} · +${p.rMultiple.toFixed(p.rMultiple % 1 ? 2 : 0)}R`, W - 4, yT - 3, C.win, "right", 0);
-              tag(`${side(p.direction)} ${fmt(p.entry)}`, W - 4, yE - 3, C.ink, "right", 0);
-              tag(`STOP ${fmt(p.stopLoss)}`, W - 4, yS - 3, C.loss, "right", 0);
+            if (yE == null || yS == null || yT == null) continue;
+            ctx.fillStyle = rgba(C.win, 0.09);
+            ctx.fillRect(x0, Math.min(yE, yT), W - x0, Math.abs(yT - yE));
+            ctx.fillStyle = rgba(C.loss, 0.09);
+            ctx.fillRect(x0, Math.min(yE, yS), W - x0, Math.abs(yS - yE));
+            const dash: number[] = [];
+            line(x0, W, yT, C.win, 0.95, 1.5, dash);
+            line(x0, W, yE, C.ink, 0.95, 1.5, dash);
+            // once a trailing stop has moved, it is the stop that counts; the first one fades
+            const trailed = p.stopNow != null && p.stopNow !== p.stopLoss;
+            line(x0, W, yS, C.loss, trailed ? 0.4 : 0.95, trailed ? 1 : 1.5, trailed ? [4, 4] : dash);
+            tag(`TARGET ${fmt(p.takeProfit)} · +${p.rMultiple.toFixed(p.rMultiple % 1 ? 2 : 0)}R`, W - 4, yT - 3, C.win, "right", 0);
+            tag(`${p.label} ${side(p.direction)} ${fmt(p.entry)}`, W - 4, yE - 3, C.ink, "right", 0);
+            tag(`${trailed ? "FIRST STOP" : "STOP"} ${fmt(p.stopLoss)}`, W - 4, yS - 3, C.loss, "right", trailed ? 6 : 0, { small: trailed, dim: trailed });
+            const yN = trailed ? Y(p.stopNow!) : null;
+            if (yN != null) {
+              line(x0, W, yN, C.loss, 0.95, 1.5, dash);
+              tag(`STOP NOW ${fmt(p.stopNow!)} (trailing)`, W - 4, yN - 3, C.loss, "right", 0);
             }
           }
 
