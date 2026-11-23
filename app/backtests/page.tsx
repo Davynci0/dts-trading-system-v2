@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import type { MetricsCore, ScopedMetrics } from "@/lib/backtest/engine";
+import type { MetricsCore, ScopedMetrics } from "@/lib/backtest/fib";
 
 interface RunRow {
   id: string;
@@ -37,7 +37,7 @@ function verdict(m: MetricsCore): string {
 
 function MetricTable({ rows, segment }: { rows: ResultRow[]; segment: Segment }) {
   // the confirmation-count columns only mean something for the 6-point pullback strategies
-  const counts = rows.some((r) => (r.metrics[segment]?.confidence4 ?? 0) + (r.metrics[segment]?.confidence5 ?? 0) > 0);
+  const counts = rows.some((r) => (r.metrics[segment]?.confidence4 ?? 0) > 0);
   const cols = ["", "Trades", "Win rate", "Profit factor", "Avg R", "Total R", "t", "Max DD", ...(counts ? ["4/6", "5–6/6"] : [])];
   return (
     <div className="overflow-x-auto">
@@ -76,7 +76,7 @@ function MetricTable({ rows, segment }: { rows: ResultRow[]; segment: Segment })
 
 /**
  * Backtest results: stored runs of the system that sends live signals (the
- * trend system), with the whole run next to its first 70% and last 30%.
+ * Fibonacci system), with the whole run next to its first 70% and last 30%.
  */
 export default function BacktestsPage() {
   const [run, setRun] = useState<RunRow | null>(null);
@@ -102,12 +102,12 @@ export default function BacktestsPage() {
 
   async function runBacktest() {
     setRunning(true);
-    setStatus("running the quick backtest on the signal pairs (up to a minute)…");
+    setStatus("running the quick backtest on the last six months (up to a minute)…");
     try {
       const res = await fetch("/api/backtest/run", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ count: 5000 }),
+        body: JSON.stringify({}),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -124,7 +124,7 @@ export default function BacktestsPage() {
   const sections: [string, ResultRow[], boolean][] = [
     ["Combined", results.filter((r) => r.scope === "combined"), true],
     ["Per year", rowsOf("year:"), false],
-    ["Per entry type", rowsOf("strategy:"), true],
+    ["By entry candle", rowsOf("strategy:"), true],
     ["By key level", rowsOf("grade:"), true],
     ["Buys and sells", rowsOf("pair:"), true],
   ];
@@ -136,11 +136,10 @@ export default function BacktestsPage() {
         <div>
           <h1 className="text-lg font-semibold text-neutral-100">Backtest Results</h1>
           <p className="mt-1 max-w-3xl text-xs text-neutral-500">
-            The trend system replayed on history with the scanner&apos;s own detection: a signal on a closed
-            candle fills at the next candle&apos;s open plus the full spread + slippage, each entry type holds one
-            position, and every trade is closed by its trailing stop (there is no target). Positions overlap and
-            point the same way, so read the total and the drawdown rather than any single row. Older runs in the
-            list belong to earlier versions of the system.
+            The Fibonacci retracement system replayed on history with the scanner&apos;s own detection: a signal on a
+            closed 15-minute candle fills at the next candle&apos;s open, the full spread + slippage is charged once,
+            there is one trade per swing and one trade at a time, and a candle that touches both the stop and the
+            target counts as a loss. Older runs in the list belong to earlier versions of the system.
           </p>
         </div>
         <button
@@ -148,7 +147,7 @@ export default function BacktestsPage() {
           disabled={running}
           className="rounded bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-40"
         >
-          {running ? "Running…" : "Quick run (last ~5 months)"}
+          {running ? "Running…" : "Quick run (last 6 months)"}
         </button>
       </div>
 
@@ -209,7 +208,7 @@ export default function BacktestsPage() {
             )
           )}
           <p className="text-xs text-neutral-600">
-            R is the risk of one trade: the distance from its entry to its first stop. Where shown, the 4/6 and
+            R is the risk of one trade: the distance from its entry to its stop. Where shown, the 4/6 and
             5–6/6 columns belong to runs of the earlier pattern strategies.
           </p>
         </>

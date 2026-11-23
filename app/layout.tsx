@@ -16,8 +16,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "DTS — Forex Signals",
-  description: "Signal-only forex trading system: trendline, market structure, and fibonacci strategies",
+  title: "DTS — Gold Signals",
+  description: "Signal-only gold trading system: Fibonacci retracement entries on the 15-minute chart, with the daily and 4-hour trend",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -29,7 +29,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body className="flex min-h-full flex-col">
         <header className="flex flex-wrap items-center gap-x-6 gap-y-1 border-b border-neutral-800 bg-neutral-950 px-4 py-2.5">
           <span className="text-sm font-bold tracking-wide text-neutral-100">
-            DTS <span className="font-normal text-neutral-500">· forex signals</span>
+            DTS <span className="font-normal text-neutral-500">· gold signals</span>
           </span>
           <nav className="flex gap-4 text-sm text-neutral-400">
             <Link href="/" className="hover:text-neutral-100">Dashboard</Link>

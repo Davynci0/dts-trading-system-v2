@@ -1,7 +1,6 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { fetchCandles } from "@/lib/oanda";
-import { trailThrough, TREND_MAX_HOLD_BARS } from "@/lib/analysis/trend";
-import { EXECUTION_BAR_SECONDS } from "@/lib/analysis/execution";
+import { FIB_MAX_HOLD_BARS } from "@/lib/analysis/fibonacci";
 
 export interface SettleInput {
   direction: "long" | "short";
@@ -15,45 +14,46 @@ export interface SettleInput {
 export interface Settlement {
   outcome: "win" | "loss" | "expired";
   r: number;
-  /** epoch seconds of the candle that hit, or null when expired */
+  /** epoch seconds of the candle that closed the trade */
   hitTime: number | null;
   hitPrice: number | null;
 }
 
-/** A pattern trade that has reached neither level after six weeks is closed as expired. */
-const EXPIRY_MS = 42 * 24 * 3600 * 1000;
-/** Signals are settled on M15 candles, whatever timeframe produced them: the
- *  finer bar says which level was touched first more often than a larger one
- *  can. M15 candle duration. `candle.time` is the bar OPEN — the bar is tradeable
- *  from its open; a bar only predates the signal when it CLOSED before it. */
+/** Signals are settled on 15-minute candles. `candle.time` is the candle's OPEN;
+ *  a candle only predates the signal when it CLOSED before it. */
 const CANDLE_MS = 15 * 60 * 1000;
 
-/** First candle after firing that touches TP (win) or SL (loss); a candle touching both counts as a loss.
- *  A candle is considered when its close (open + CANDLE_MS) is after the signal
- *  time — the entry bar itself must be evaluated, an immediate SL/TP touch there
- *  is a real outcome (comparing open times would skip it). */
-export function settleSignal(
-  s: SettleInput,
-  candles: { time: number; high: number; low: number }[],
-  now = Date.now()
-): Settlement | null {
+/**
+ * Follow a trade through the 15-minute candles since it was sent: the first
+ * candle to touch the stop is a loss, the first to touch the target a win, and
+ * a candle that touches both counts as a loss. A trade that has reached
+ * neither after FIB_MAX_HOLD_BARS candles is closed at that candle's close
+ * ("expired", with whatever it made or lost). A gap through the stop fills at
+ * the candle's open.
+ */
+export function settleSignal(s: SettleInput, candles: { time: number; open: number; high: number; low: number; close: number }[]): Settlement | null {
   const long = s.direction === "long";
+  const dir = long ? 1 : -1;
+  const risk = Math.abs(s.entry - s.stop_loss);
+  let held = 0;
   for (const c of candles) {
     if (c.time * 1000 + CANDLE_MS <= s.firedAt) continue;
-    const hitTp = long ? c.high >= s.take_profit : c.low <= s.take_profit;
-    const hitSl = long ? c.low <= s.stop_loss : c.high >= s.stop_loss;
-    if (hitTp && hitSl) return { outcome: "loss", r: -1, hitTime: c.time, hitPrice: s.stop_loss };
-    if (hitSl) return { outcome: "loss", r: -1, hitTime: c.time, hitPrice: s.stop_loss };
-    if (hitTp) {
-      const r = Math.abs(s.take_profit - s.entry) / Math.abs(s.entry - s.stop_loss);
-      return { outcome: "win", r, hitTime: c.time, hitPrice: s.take_profit };
+    if (long ? c.low <= s.stop_loss : c.high >= s.stop_loss) {
+      const price = long ? Math.min(s.stop_loss, c.open) : Math.max(s.stop_loss, c.open);
+      return { outcome: "loss", r: risk > 0 ? (dir * (price - s.entry)) / risk : -1, hitTime: c.time, hitPrice: price };
     }
+    if (long ? c.high >= s.take_profit : c.low <= s.take_profit) {
+      return { outcome: "win", r: risk > 0 ? Math.abs(s.take_profit - s.entry) / risk : 0, hitTime: c.time, hitPrice: s.take_profit };
+    }
+    if (held >= FIB_MAX_HOLD_BARS) {
+      return { outcome: "expired", r: risk > 0 ? (dir * (c.close - s.entry)) / risk : 0, hitTime: c.time, hitPrice: c.close };
+    }
+    held++;
   }
-  if (now - s.firedAt > EXPIRY_MS) return { outcome: "expired", r: 0, hitTime: null, hitPrice: null };
   return null;
 }
 
-/** A trailing-stop trade (trend system) as stored: no target, a fixed trailing distance. */
+/** A trade of the retired trend system as stored: a trailing stop a fixed distance behind the best price. */
 export interface TrailInput {
   direction: "long" | "short";
   entry: number;
@@ -64,54 +64,41 @@ export interface TrailInput {
   take_profit?: number;
   /** the stop as it stood when the candles were last followed */
   trail_stop: number;
-  /** epoch ms: candles that opened before this have already been followed */
+  /** epoch ms: candles that closed before this have already been followed */
   checkedAt: number;
-  firedAt: number;
 }
 
-/** A trend trade still open after TREND_MAX_HOLD_BARS candles of trading time is closed at market
- *  (the market trades about five days in seven, so calendar time is 7/5 of that). */
-const TRAIL_EXPIRY_MS = Math.round(TREND_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS * 1000 * (7 / 5));
-
 /**
- * Follow a trailing-stop trade through the M15 candles since it was last
- * checked. Returns the settlement when the stop was hit (a win if it had
- * trailed into profit, a loss otherwise), the take-profit was reached, or the
- * trade expired, and in every
- * case where the stop now stands and how far the candles have been followed.
+ * The trend system no longer sends signals, but its trades that were still
+ * open when it was retired are followed to their end: the trailing stop is
+ * tested first, then the take-profit, then the stop trails behind the candle's
+ * best price.
  */
 export function settleTrailing(
   s: TrailInput,
-  candles: { time: number; open: number; high: number; low: number; close: number }[],
-  now = Date.now()
+  candles: { time: number; open: number; high: number; low: number; close: number }[]
 ): { settlement: Settlement | null; trailStop: number; checkedAt: number } {
-  // a candle counts when it CLOSED after the last check — the entry candle itself included
   const fresh = candles.filter((c) => c.time * 1000 + CANDLE_MS > s.checkedAt);
   const risk = Math.abs(s.entry - s.stop_loss);
   const dir = s.direction === "long" ? 1 : -1;
   const target = s.take_profit != null && s.take_profit > 0 ? s.take_profit : NaN;
   const last = fresh[fresh.length - 1];
   const checkedAt = last ? last.time * 1000 + CANDLE_MS : s.checkedAt;
-  // candle by candle: the stop is tested first, then the take-profit, then the stop trails
   let stop = s.trail_stop;
   for (const c of fresh) {
-    const one = trailThrough(s.direction, stop, s.trail_distance, [c]);
-    if (one.exit) {
-      const r = risk > 0 ? (dir * (one.exit.price - s.entry)) / risk : 0;
-      return { settlement: { outcome: r > 0 ? "win" : "loss", r, hitTime: one.exit.time, hitPrice: one.exit.price }, trailStop: stop, checkedAt };
+    if (dir === 1 ? c.low <= stop : c.high >= stop) {
+      const price = dir === 1 ? Math.min(stop, c.open) : Math.max(stop, c.open);
+      const r = risk > 0 ? (dir * (price - s.entry)) / risk : 0;
+      return { settlement: { outcome: r > 0 ? "win" : "loss", r, hitTime: c.time, hitPrice: price }, trailStop: stop, checkedAt };
     }
     if (dir === 1 ? c.high >= target : c.low <= target) {
       const r = risk > 0 ? (dir * (target - s.entry)) / risk : 0;
-      return { settlement: { outcome: "win", r, hitTime: c.time, hitPrice: target }, trailStop: one.stop, checkedAt };
+      return { settlement: { outcome: "win", r, hitTime: c.time, hitPrice: target }, trailStop: stop, checkedAt };
     }
-    stop = one.stop;
+    const next = (dir === 1 ? c.high : c.low) - dir * s.trail_distance;
+    stop = dir === 1 ? Math.max(stop, next) : Math.min(stop, next);
   }
-  const step = { stop };
-  if (now - s.firedAt > TRAIL_EXPIRY_MS && last) {
-    const r = risk > 0 ? (dir * (last.close - s.entry)) / risk : 0;
-    return { settlement: { outcome: "expired", r, hitTime: last.time, hitPrice: last.close }, trailStop: step.stop, checkedAt };
-  }
-  return { settlement: null, trailStop: step.stop, checkedAt };
+  return { settlement: null, trailStop: stop, checkedAt };
 }
 
 interface Row extends Omit<SettleInput, "firedAt"> {
@@ -126,10 +113,8 @@ interface Row extends Omit<SettleInput, "firedAt"> {
 let lastRun = 0;
 
 /**
- * Settles every unscored signal that has real levels, using M15 candles from
- * the oldest signal's creation — independent of the timeframe that produced it,
- * so skipped trades resolve without waiting for a scan. Throttled so polling
- * the feed doesn't hammer OANDA.
+ * Settles every open signal on 15-minute candles from the oldest one's
+ * creation. Throttled so polling the feed doesn't hammer OANDA.
  */
 export async function scoreOpenSignals(
   supabase: ReturnType<typeof createAdminClient>,
@@ -143,7 +128,7 @@ export async function scoreOpenSignals(
     .from("signals")
     .select("id, pair, created_at, direction, entry, stop_loss, take_profit, trail_distance, trail_stop, trail_checked_at")
     .is("outcome", null)
-    .gt("stop_loss", 0) // legacy skipped rows stored SL/TP 0 — nothing to score
+    .gt("stop_loss", 0)
     .order("created_at", { ascending: true })
     .limit(100);
   if (error || !data?.length) return 0;
@@ -167,28 +152,14 @@ export async function scoreOpenSignals(
       let res: Settlement | null;
       if (r.trail_distance != null) {
         const followed = settleTrailing(
-          {
-            direction: r.direction,
-            entry: r.entry,
-            stop_loss: r.stop_loss,
-            trail_distance: r.trail_distance,
-            take_profit: r.take_profit,
-            trail_stop: r.trail_stop ?? r.stop_loss,
-            checkedAt: startOf(r),
-            firedAt,
-          },
+          { direction: r.direction, entry: r.entry, stop_loss: r.stop_loss, trail_distance: r.trail_distance, take_profit: r.take_profit, trail_stop: r.trail_stop ?? r.stop_loss, checkedAt: startOf(r) },
           candles
         );
         res = followed.settlement;
-        if (!res) {
-          // still open: remember where the stop stands now
-          await supabase
-            .from("signals")
-            .update({ trail_stop: followed.trailStop, trail_checked_at: new Date(followed.checkedAt).toISOString() })
-            .eq("id", r.id);
-          continue;
-        }
-        await supabase.from("signals").update({ trail_stop: followed.trailStop }).eq("id", r.id);
+        await supabase
+          .from("signals")
+          .update({ trail_stop: followed.trailStop, ...(res ? {} : { trail_checked_at: new Date(followed.checkedAt).toISOString() }) })
+          .eq("id", r.id);
       } else {
         res = settleSignal({ ...r, firedAt }, candles);
       }
@@ -208,7 +179,7 @@ export async function scoreOpenSignals(
   return settled;
 }
 
-/** M15 candles from `fromMs` to now, paged — OANDA returns at most 5000 a request (about 52 days). */
+/** 15-minute candles from `fromMs` to now, paged — OANDA returns at most 5000 a request (about 52 days). */
 async function fetchM15Since(pair: string, fromMs: number) {
   const PAGE_MS = 40 * 24 * 3600 * 1000;
   const out: Awaited<ReturnType<typeof fetchCandles>> = [];

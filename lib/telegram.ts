@@ -1,8 +1,7 @@
 /**
- * Telegram is the system's communication channel (Section 8). It sends:
- *  - early zone-touch alerts when price enters a buy/sell zone, and
- *  - the final actionable trade signal with entry/SL/TP once all confirmations line up.
- * Watching, confirmation-update and skipped-for-risk notes stay in the dashboard feed.
+ * Telegram is the system's communication channel: it carries the trade signal
+ * — entry, stop loss and take profit — once every condition of the Fibonacci
+ * system is met. Everything else stays in the dashboard feed.
  * Credentials come from TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID env vars only.
  */
 export async function sendTelegramMessage(text: string): Promise<void> {
@@ -28,138 +27,59 @@ export async function sendTelegramMessage(text: string): Promise<void> {
 }
 
 const pairLabel = (pair: string) => pair.replace("_", "/");
-const dirLabel = (d: "long" | "short") => (d === "long" ? "🟢 LONG" : "🔴 SHORT");
+const dirLabel = (d: "long" | "short") => (d === "long" ? "🟢 BUY" : "🔴 SELL");
 
-/** Zone-touch alert: price just entered a buy (demand) or sell (supply) zone.
- *  This is an early-warning notification, separate from the final trade signal.
- */
-export async function sendZoneAlert(opts: {
-  pair: string;
-  direction: "long" | "short";
-  zoneKind: "demand" | "supply";
-  zoneBottom: number;
-  zoneTop: number;
-  touches: number;
-  price: number;
-}): Promise<void> {
-  const label = opts.zoneKind === "demand" ? "🟩 BUY ZONE" : "🟥 SELL ZONE";
-  const dir = dirLabel(opts.direction);
-  await sendTelegramMessage(
-    [
-      `🎯 *ZONE TOUCH: ${pairLabel(opts.pair)} ${label}*`,
-      `${dir} · price \`${opts.price.toFixed(5)}\``,
-      `Zone \`${opts.zoneBottom.toFixed(5)} – ${opts.zoneTop.toFixed(5)}\` · ${opts.touches} prior touch${opts.touches === 1 ? "" : "es"}`,
-      `_Waiting for remaining confirmations before a signal is sent._`,
-    ].join("\n")
-  );
-}
-
-export async function sendFinalSignal(opts: {
-  pair: string;
-  direction: "long" | "short";
-  strategy: string;
-  entry: number;
-  stopLoss: number;
-  takeProfit: number;
-  rMultiple: number;
-  riskPips: number;
-  rewardPips: number;
-  stopBasis: string;
-  targetBasis: string;
-  confidence: number; // confirmations met
-  /** how many checks the strategy's list has */
-  checks?: number;
-  /** the flipped support/resistance level just behind the entry, when there is one */
-  keyLevel?: { price: number; touches: number } | null;
-  visionNote: string | null;
-  positionUnits: number;
-  riskAmount: number;
-  /** comparison with a stale open trade on the same pair, when there is one */
-  comparison?: string | null;
-  replacedCount?: number;
-}): Promise<void> {
-  const checks = opts.checks ?? 6;
-  const digits = opts.pair.startsWith("XAU") ? 2 : opts.pair.includes("JPY") ? 3 : 5;
-  const px = (n: number) => n.toFixed(digits);
-  // A wide stop on a small account: 1% of the balance can be less than
-  // one unit's risk. Say so instead of printing a size of zero.
-  const unitRisk = Math.abs(opts.entry - opts.stopLoss);
-  const sizeLine =
-    opts.positionUnits >= 1
-      ? `Size: ${opts.positionUnits.toLocaleString()} units (risk $${opts.riskAmount.toFixed(0)}, 1%)`
-      : `Size: the stop is too wide for 1% risk — the smallest size (1 unit, 0.01 lot) risks $${unitRisk.toFixed(0)}, 1% of the account is $${opts.riskAmount.toFixed(0)}`;
-  await sendTelegramMessage(
-    [
-      opts.replacedCount
-        ? `🔄 *NEW SETUP REPLACES YOUR STALE OPEN TRADE*`
-        : opts.comparison
-          ? `🆕 *NEW SETUP (your open trade stays)*`
-          : null,
-      `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (${opts.strategy})`,
-      `Entry \`${px(opts.entry)}\`  SL \`${px(opts.stopLoss)}\`  TP \`${px(opts.takeProfit)}\``,
-      `Risk *${opts.riskPips.toFixed(1)} pips* → Target *${opts.rewardPips.toFixed(1)} pips*`,
-      `SL ${opts.stopBasis} · TP at ${opts.targetBasis}`,
-      `R:R *${opts.rMultiple.toFixed(2)}* · *A setup* · confirmations ${opts.confidence}/${checks}`,
-      opts.keyLevel
-        ? `Key level behind the entry: ${px(opts.keyLevel.price)} (support and resistance, ${opts.keyLevel.touches} touches)`
-        : `No key level behind the entry`,
-      sizeLine,
-      opts.visionNote ? `📝 Context: ${opts.visionNote}` : null,
-      opts.comparison ? `\n${opts.comparison.replace(/[_*`\[]/g, " ")}` : null,
-      `_Signal only — review and execute manually._`,
-    ]
-      .filter(Boolean)
-      .join("\n")
-  );
-}
+/** The smallest gold trade most brokers allow: 0.01 lot, which is one ounce. */
+const MIN_LOT_OUNCES = 1;
 
 /**
- * A trend-system signal: entry, stop loss, take profit and the trailing-stop
- * distance, one per line, so the order can be placed straight from it.
+ * A Fibonacci signal: entry, stop loss and take profit one per line, so the
+ * order can be placed straight from it, then why the trade is there and how
+ * big it may be.
  */
-export async function sendTrendSignal(opts: {
+export async function sendFibSignal(opts: {
   pair: string;
   direction: "long" | "short";
-  /** the entry types that fired on this candle, e.g. ["20-candle breakout", "30-candle breakout"] */
-  labels: string[];
-  rule: string;
   entry: number;
   stopLoss: number;
-  /** take-profit price; 0 when the system has none */
   takeProfit: number;
-  targetR: number;
-  /** trailing distance in price */
-  trailDistance: number;
-  fastDays: number;
-  slowDays: number;
-  emaBars: number;
-  /** trend positions open, this one included */
-  openCount: number;
-  positionUnits: number;
-  riskAmount: number;
+  /** reward ÷ risk */
+  rr: number;
+  trigger: string;
+  /** how deep the pullback went, 0–1 */
+  retracement: number;
+  legFrom: number;
+  legTo: number;
+  /** leg length in 1-hour ATR */
+  legAtr: number | null;
+  trendDays: number;
+  holdDays: number;
+  accountBalance: number;
   riskPct: number;
 }): Promise<void> {
   const px = (n: number) => n.toFixed(2);
-  const unitRisk = Math.abs(opts.entry - opts.stopLoss);
+  const risk = Math.abs(opts.entry - opts.stopLoss);
+  const reward = Math.abs(opts.takeProfit - opts.entry);
+  const budget = opts.accountBalance * opts.riskPct;
+  const ounces = Math.floor((budget / risk) * 100) / 100;
   const pct = String(Number((opts.riskPct * 100).toFixed(2)));
+  const minRisk = risk * MIN_LOT_OUNCES;
   const sizeLine =
-    opts.positionUnits >= 1
-      ? `Size: ${opts.positionUnits.toLocaleString()} units (risk $${opts.riskAmount.toFixed(0)}, ${pct}%)`
-      : `Size: the stop is too wide for ${pct}% risk — the smallest size (1 unit, 0.01 lot) risks $${unitRisk.toFixed(0)}, ${pct}% of the account is $${opts.riskAmount.toFixed(0)}`;
+    ounces >= MIN_LOT_OUNCES
+      ? `Size: ${ounces.toFixed(2)} oz (${(ounces / 100).toFixed(2)} lot) risks $${(ounces * risk).toFixed(2)}, ${pct}% of $${opts.accountBalance.toFixed(0)}`
+      : `Size: ${pct}% of $${opts.accountBalance.toFixed(0)} is $${budget.toFixed(2)}, which is ${ounces.toFixed(2)} oz. The usual minimum (0.01 lot = 1 oz) would risk $${minRisk.toFixed(0)}, ${((minRisk / opts.accountBalance) * 100).toFixed(0)}% of the account — only take this on a micro or cent account.`;
+  const up = opts.direction === "long";
   await sendTelegramMessage(
     [
-      `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (${opts.labels[0]}${opts.labels.length > 1 ? ` +${opts.labels.length - 1} more` : ""})`,
+      `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (Fibonacci retracement)`,
       `*Entry:* \`${px(opts.entry)}\` (at market)`,
-      `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(unitRisk)} away (1R)`,
-      opts.takeProfit > 0 ? `*Take profit:* \`${px(opts.takeProfit)}\` — ${px(Math.abs(opts.takeProfit - opts.entry))} away (${opts.targetR}R)` : `*Take profit:* none`,
-      `*Trailing stop:* ${px(opts.trailDistance)} behind price — set it on your broker; it usually closes the trade before the take profit`,
-      opts.labels.length > 1 ? `Entries that agree (${opts.labels.length}): ${opts.labels.join(", ")} — one trade, not ${opts.labels.length}` : null,
-      `Why: ${opts.rule}; the ${opts.fastDays}-day and ${opts.slowDays}-day trends both point ${opts.direction === "long" ? "up" : "down"}; price is ${opts.direction === "long" ? "above" : "below"} its ${opts.emaBars}-candle average`,
-      `Trend positions open now: ${opts.openCount}`,
+      `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(risk)} away, beyond the start of the swing`,
+      `*Take profit:* \`${px(opts.takeProfit)}\` — ${px(reward)} away, the 161.8% extension (${opts.rr.toFixed(1)}R)`,
+      `Swing (1-hour): ${px(opts.legFrom)} → ${px(opts.legTo)}${opts.legAtr != null ? `, ${opts.legAtr.toFixed(1)} ATR` : ""}; price pulled back ${(opts.retracement * 100).toFixed(0)}% and a 15-minute ${opts.trigger} rejected the zone`,
+      `Trend: daily ${up ? "above" : "below"} its ${opts.trendDays}-day average, 4-hour ${up ? "above a rising" : "below a falling"} 50 EMA`,
       sizeLine,
+      `If neither level is hit in ${opts.holdDays} trading days, close the trade at market.`,
       `_Signal only — review and execute manually._`,
-    ]
-      .filter(Boolean)
-      .join("\n")
+    ].join("\n")
   );
 }

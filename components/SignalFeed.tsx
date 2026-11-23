@@ -1,45 +1,27 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CHECKS, isASetup, type Signal } from "@/lib/types";
-import { pipSize } from "@/lib/analysis/confirmations";
+import { FIB_STRATEGY, type Signal } from "@/lib/types";
 
-const fmtPips = (price: number, pair: string) => (price / pipSize(pair)).toFixed(1);
 const fmtTime = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
-const STALE_HOURS = 24;
-const fmtAge = (iso: string) => {
-  const h = (Date.now() - new Date(iso).getTime()) / 3_600_000;
-  if (h < 24) return `${Math.max(1, Math.round(h))}h`;
-  const d = Math.floor(h / 24);
-  const rest = Math.round(h - d * 24);
-  return rest > 0 ? `${d}d ${rest}h` : `${d}d`;
-};
-const ageHours = (iso: string) => (Date.now() - new Date(iso).getTime()) / 3_600_000;
+  new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
+const px = (n: number) => n.toFixed(2);
+const signedR = (r: number | null) => (r == null ? "" : `${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R`);
 
-/** Per-strategy outcome record, split by status: "would the skip have won?" is
- * the skip success rate; active-signal win rate is the live score. */
-function successStats(signals: Signal[]) {
-  const by = new Map<string, { firedWin: number; firedLoss: number; skipWin: number; skipLoss: number }>();
-  for (const s of signals) {
-    if (s.outcome !== "win" && s.outcome !== "loss") continue;
-    if (s.superseded_by) continue; // retired trades are not the trade you were told to take
-    const b = by.get(s.strategy) ?? { firedWin: 0, firedLoss: 0, skipWin: 0, skipLoss: 0 };
-    if (s.status === "skipped") {
-      if (s.outcome === "win") b.skipWin++;
-      else b.skipLoss++;
-    } else {
-      if (s.outcome === "win") b.firedWin++;
-      else b.firedLoss++;
-    }
-    by.set(s.strategy, b);
-  }
-  return [...by.entries()];
+/** Closed Fibonacci trades: how many, how many won, and the total in R. */
+function record(signals: Signal[]) {
+  const closed = signals.filter((s) => s.strategy === FIB_STRATEGY && s.outcome != null && s.outcome_r != null);
+  if (closed.length === 0) return null;
+  const won = closed.filter((s) => (s.outcome_r ?? 0) > 0).length;
+  const total = closed.reduce((sum, s) => sum + (s.outcome_r ?? 0), 0);
+  return { closed: closed.length, won, total };
 }
 
 /**
- * Signal feed (Section 9). Reads signals written by the scanner via
- * /api/signals (service role server-side; the anon key never sees them).
+ * Signal feed. Reads the signals written by the scanner via /api/signals
+ * (service role server-side; the anon key never sees them). Signals from the
+ * strategies that were removed stay in the list, marked as such, until they
+ * drop off the end.
  */
 export default function SignalFeed() {
   const [signals, setSignals] = useState<Signal[] | null>(null);
@@ -65,154 +47,64 @@ export default function SignalFeed() {
     };
   }, []);
 
-  const notice = error;
-  const stats = signals ? successStats(signals) : [];
+  const stats = signals ? record(signals) : null;
 
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
-      <h2 className="mb-3 text-sm font-semibold text-neutral-100">Signal Feed</h2>
-      {stats.length > 0 && (
-        <div className="mb-3 space-y-0.5 rounded border border-neutral-800 bg-neutral-950 p-2">
-          {stats.map(([strategy, b]) => {
-            const firedTotal = b.firedWin + b.firedLoss;
-            const skipTotal = b.skipWin + b.skipLoss;
-            return (
-              <div key={strategy} className="flex justify-between text-[10px] text-neutral-400">
-                <span className="capitalize">{strategy}</span>
-                <span>
-                  {firedTotal > 0 && `signals ${b.firedWin}/${firedTotal} won (${Math.round((100 * b.firedWin) / firedTotal)}%)`}
-                  {firedTotal > 0 && skipTotal > 0 && " · "}
-                  {skipTotal > 0 && `skips ${b.skipWin}/${skipTotal} would have won (${Math.round((100 * b.skipWin) / skipTotal)}%)`}
-                </span>
-              </div>
-            );
-          })}
-        </div>
-      )}
-      {notice && <p className="text-xs text-amber-400">{notice}</p>}
-      {!notice && signals?.length === 0 && (
-        <p className="text-xs text-neutral-500">
-          No signals yet — trigger a scan to run the engine.
-        </p>
-      )}
+      <div className="mb-3 flex items-baseline justify-between">
+        <h2 className="text-sm font-semibold text-neutral-100">Signal feed</h2>
+        {stats && (
+          <span className="text-[10px] text-neutral-400">
+            Fibonacci: {stats.won}/{stats.closed} won · {signedR(stats.total)}
+          </span>
+        )}
+      </div>
+      {error && <p className="text-xs text-amber-400">{error}</p>}
+      {!error && signals?.length === 0 && <p className="text-xs text-neutral-500">No signals yet.</p>}
       <ul className="space-y-2">
         {signals?.map((s) => {
-          const replacement = s.superseded_by ? signals.find((x) => x.id === s.superseded_by) : undefined;
-          const open = !s.outcome && s.status === "active" && !s.superseded_by && s.stop_loss > 0;
-          const stale = open && ageHours(s.created_at) >= STALE_HOURS;
+          const fib = s.strategy === FIB_STRATEGY;
+          const hasLevels = s.stop_loss > 0;
+          const risk = Math.abs(s.entry - s.stop_loss);
           return (
-          <li
-            key={s.id}
-            className={`rounded border p-2 text-xs ${
-              s.superseded_by
-                ? "border-neutral-800 bg-neutral-950 opacity-60"
-                : s.status === "skipped"
-                  ? "border-amber-900/60 bg-amber-950/30"
-                  : "border-neutral-800 bg-neutral-950"
-            }`}
-          >
-            <div className="flex justify-between">
-              <span className="font-medium text-neutral-200">
-                {s.pair.replace("_", "/")}{" "}
-                <span className={s.direction === "long" ? "text-teal-400" : "text-red-400"}>
-                  {s.direction.toUpperCase()}
+            <li key={s.id} className={`rounded border border-neutral-800 bg-neutral-950 p-2 text-xs ${fib ? "" : "opacity-60"}`}>
+              <div className="flex justify-between gap-2">
+                <span className="font-medium text-neutral-200">
+                  {s.pair.replace("_", "/")}{" "}
+                  <span className={s.direction === "long" ? "text-teal-400" : "text-red-400"}>{s.direction === "long" ? "BUY" : "SELL"}</span>
                 </span>
-              </span>
-              <span className="text-neutral-500">
-                {fmtTime(s.created_at)} · {s.strategy === "trend" ? `trend · ${(s.confluence_strategies?.length ? s.confluence_strategies : [s.variant ?? ""]).join(", ")}` : `${s.strategy} · ${s.confidence}/${CHECKS[s.strategy] ?? 6}`}
-                {s.strategy === "trend" ? "" : isASetup(s.strategy, s.confidence) ? " · A setup" : " · B setup"}
-                {s.confirmations?.["Key level behind the entry"] ? " ★" : ""}
-                {s.status === "skipped" ? " · SKIPPED" : ""}
-              </span>
-            </div>
-            {s.replace_reason && (
-              <div
-                className={`mt-1 whitespace-pre-line rounded border p-2 leading-relaxed ${
-                  s.replaces
-                    ? "border-violet-800/60 bg-violet-950/30 text-violet-200"
-                    : "border-neutral-700 bg-neutral-900 text-neutral-300"
-                }`}
-              >
-                <div className="mb-1 font-semibold">
-                  {s.replaces ? "↻ Replaces your stale open trade — why this one is better" : "Compared with your open trade"}
+                <span className="text-right text-neutral-500">
+                  {fmtTime(s.created_at)} · {fib ? "Fibonacci" : `${s.strategy} (removed strategy)`}
+                </span>
+              </div>
+              {hasLevels && (
+                <div className="mt-1 font-mono text-neutral-400">
+                  E {px(s.entry)} · SL {px(s.stop_loss)}
+                  {s.take_profit > 0 ? ` · TP ${px(s.take_profit)}` : ""}
+                  {s.r_multiple != null && ` · ${s.r_multiple.toFixed(1)}R`}
+                  {s.trail_distance != null && !s.outcome && s.trail_stop != null && ` · stop now ${px(s.trail_stop)}`}
                 </div>
-                {s.replace_reason}
-              </div>
-            )}
-            {s.superseded_by && (
-              <div className="mt-1 text-violet-300">
-                ↻ Retired {s.superseded_at ? fmtTime(s.superseded_at) : ""} — replaced by{" "}
-                {replacement ? `the ${replacement.direction.toUpperCase()} from ${fmtTime(replacement.created_at)}` : "a newer setup"}. Still tracked to check that call.
-              </div>
-            )}
-            {stale && (
-              <div className="mt-1 text-amber-400">
-                Open {fmtAge(s.created_at)} without reaching TP or SL — will be replaced if a clearly better setup appears.
-              </div>
-            )}
-            {s.trail_distance != null && (
-              <div className="mt-1 font-mono text-neutral-400">
-                E {s.entry} · SL {s.stop_loss.toFixed(2)}
-                {s.take_profit > 0 ? ` · TP ${s.take_profit.toFixed(2)}` : ""} · trailing {s.trail_distance.toFixed(2)}
-                {!s.outcome && s.trail_stop != null && ` · stop now ${s.trail_stop.toFixed(2)}`}
-              </div>
-            )}
-            {s.trail_distance == null && s.stop_loss > 0 && s.take_profit > 0 && (
-              <div className="mt-1 font-mono text-neutral-400">
-                E {s.entry} · SL {s.stop_loss} · TP {s.take_profit}
-                {s.r_multiple != null && ` · ${s.r_multiple.toFixed(2)}R`}
-              </div>
-            )}
-            {s.stop_loss > 0 && s.take_profit > 0 && (
-              <div className="mt-0.5 text-neutral-300">
-                Risk {fmtPips(Math.abs(s.entry - s.stop_loss), s.pair)} pips → make{" "}
-                {fmtPips(Math.abs(s.take_profit - s.entry), s.pair)} pips
-              </div>
-            )}
-            {(s.sl_basis || s.tp_basis) && (
-              <div className="mt-0.5 text-neutral-500">
-                SL {s.sl_basis ?? "—"} · TP at {s.tp_basis ?? "—"}
-              </div>
-            )}
-            {s.status === "skipped" && (
-              <div className="mt-1 text-amber-400/80">{s.skip_reason}</div>
-            )}
-            {s.outcome && (
-              <div
-                className={`mt-1 font-medium ${
-                  s.outcome === "win"
-                    ? "text-teal-400"
-                    : s.outcome === "loss"
-                      ? "text-red-400"
-                      : "text-neutral-500"
-                }`}
-              >
-                {s.status === "skipped"
-                  ? s.outcome === "win"
-                    ? `↳ Would have hit TP ${s.outcome_price ?? ""} — +${s.outcome_r?.toFixed(2)}R (this skip missed a winner)`
-                    : s.outcome === "loss"
-                      ? `↳ Would have hit SL ${s.outcome_price ?? ""} — −1R (good skip)`
-                      : "↳ Expired without touching TP/SL"
-                  : s.outcome === "win"
-                    ? `↳ Hit TP ${s.outcome_price ?? ""} — +${s.outcome_r?.toFixed(2)}R`
-                    : s.outcome === "loss"
-                      ? `↳ Hit SL ${s.outcome_price ?? ""} — −1R`
-                      : "↳ Expired without touching TP/SL"}
-                {s.outcome_at && s.outcome !== "expired" && ` · ${fmtTime(s.outcome_at)}`}
-              </div>
-            )}
-            {!s.outcome && s.stop_loss > 0 && (
-              <div className="mt-1 text-neutral-600">↳ outcome pending…</div>
-            )}
-            {s.vision_note && (
-              <div className="mt-1 text-neutral-500">AI: {s.vision_note}</div>
-            )}
-            {s.vision_verdict === "rejects" && (
-              <div className={`mt-1 font-mono text-xs ${s.status === "skipped" ? "text-red-500" : "text-amber-400"}`}>
-                {s.status === "skipped" ? "⛔ AI vision rejected this setup" : "⚠ AI vision disagrees — sent anyway (it is a note, not a veto)"}
-              </div>
-            )}
-          </li>
+              )}
+              {hasLevels && s.take_profit > 0 && (
+                <div className="mt-0.5 text-neutral-300">
+                  Risk ${px(risk)} per ounce → make ${px(Math.abs(s.take_profit - s.entry))}
+                </div>
+              )}
+              {(s.sl_basis || s.tp_basis) && (
+                <div className="mt-0.5 text-neutral-500">
+                  Stop {s.sl_basis ?? "—"} · target {s.tp_basis ?? "—"}
+                </div>
+              )}
+              {s.outcome ? (
+                <div className={`mt-1 font-medium ${(s.outcome_r ?? 0) > 0 ? "text-teal-400" : (s.outcome_r ?? 0) < 0 ? "text-red-400" : "text-neutral-500"}`}>
+                  ↳ {s.outcome === "win" ? "Closed in profit" : s.outcome === "loss" ? "Stopped out" : "Closed at the time limit"}
+                  {s.outcome_price != null ? ` at ${px(s.outcome_price)}` : ""} · {signedR(s.outcome_r)}
+                  {s.outcome_at && ` · ${fmtTime(s.outcome_at)}`}
+                </div>
+              ) : (
+                hasLevels && <div className="mt-1 text-neutral-600">↳ open</div>
+              )}
+            </li>
           );
         })}
       </ul>

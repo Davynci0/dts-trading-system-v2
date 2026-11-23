@@ -12,70 +12,33 @@ interface RenderTarget {
 }
 
 export interface OverlayData {
-  zones: {
-    kind: "demand" | "supply";
-    top: number;
-    bottom: number;
-    startTime: number;
-    /** times price has returned to the zone (0 = untouched) */
-    touches?: number;
-    /** false when the trend rule does not allow a trade from this zone */
-    tradeable?: boolean;
-  }[];
-  /** Alex G Set & Forget: the 50–61.8% AOI of the most recent structure-breaking leg */
-  aoi: {
-    direction: "long" | "short";
-    top: number;
-    bottom: number;
-    startTime: number;
-    legEndTime: number;
-    tested: boolean;
-    /** the impulse leg the AOI is measured on */
-    leg?: { lowTime: number; lowPrice: number; highTime: number; highPrice: number };
-    tradeable?: boolean;
-  } | null;
+  /** the Fibonacci system's read: the 1-hour swing, its retracement levels, the entry zone and the trade's levels */
   fib: {
     direction: "long" | "short";
-    goldenTop: number;
-    goldenBottom: number;
-    /** swing anchors + golden-ratio levels for precise rendering */
-    swingLow: { time: number; price: number };
-    swingHigh: { time: number; price: number };
-    level50: number;
-    level618: number;
-    level786: number;
-    range: number;
-    /** true when this is the swing the scanner would trade; false = reference only */
-    isSetup?: boolean;
-    /** true while the latest closed candle is inside the golden zone */
+    /** where the swing started (100%) and ended (0%) */
+    origin: { time: number; price: number };
+    end: { time: number; price: number };
+    levels: { level: number; price: number }[];
+    zone: { shallow: number; deep: number; shallowLevel: number; deepLevel: number } | null;
+    stopLoss: number | null;
+    takeProfit: number | null;
+    /** the target as a multiple of the swing, e.g. 1.618 */
+    targetLevel: number;
+    /** false when the trend, the size of the swing or its state rules a trade out */
+    tradeable: boolean;
+    /** true while the last closed candle is inside the entry zone */
     inZone?: boolean;
-    tradeable?: boolean;
   } | null;
-  /** trend system: the two EMAs, the levels its entries wait on, and whether it may trade now */
-  trend?: {
-    ema20: { time: number; value: number }[];
-    ema50: { time: number; value: number }[];
-    /** the long trend average: no buying under it, no selling above it */
-    emaTrend?: { time: number; value: number }[];
-    emaBars?: number;
-    levels: { label: string; price: number }[];
-    side: "long" | "short" | null;
-  } | null;
-  /** open trend positions: the entry and where the trailing stop stands now */
-  trails?: { label: string; direction: "long" | "short"; entry: number; stop: number; target?: number | null; startTime: number }[];
-  /** pending signal's trade plan (entry/SL/TP), drawn as a position tool */
+  /** the open trade's plan (entry/SL/TP), drawn as a position tool */
   position?: {
     direction: "long" | "short";
     entry: number;
     stopLoss: number;
     takeProfit: number;
     startTime: number;
-    riskPips: number;
-    rewardPips: number;
     rMultiple: number;
-    skipped: boolean;
   } | null;
-  /** settled signals: entry → the bar/price where TP or SL was hit */
+  /** settled signals: entry → the bar/price where the trade closed */
   history?: {
     direction: "long" | "short";
     entry: number;
@@ -84,74 +47,17 @@ export interface OverlayData {
     exitPrice: number;
     outcome: "win" | "loss";
     r: number;
-    skipped: boolean;
   }[];
-  /** price display precision on labels (XAU 2, JPY quotes 3, 4-dec majors 5) */
+  /** price display precision on labels */
   digits?: number;
-  /** trendlines from structural pivots, drawn as rays from origin through definitionAnchor */
-  trendlines?: {
-    kind: "resistance" | "support";
-    origin: { time: number; price: number };
-    definitionAnchor: { time: number; price: number };
-    anchors: { time: number; price: number }[];
-    touches: number;
-    broken: boolean;
-  }[];
-  /** head-and-shoulders reversal patterns on the chart */
-  headshoulders?: {
-    direction: "short" | "long";
-    ls: { time: number; price: number };
-    n1: { time: number; price: number };
-    h: { time: number; price: number };
-    n2: { time: number; price: number };
-    rs: { time: number; price: number };
-    target: number;
-    triggerTime: number;
-  }[];
-  /** support/resistance: H1 levels price has turned at more than once */
-  levels?: {
-    kind: "support" | "resistance";
-    price: number;
-    /** the band the level's swing points span */
-    top: number;
-    bottom: number;
-    touches: number;
-    /** has acted as both support and resistance */
-    flipped: boolean;
-    time: number;
-  }[];
-  /** trend breakout: the one-week channel and the daily trend */
-  breakout?: {
-    trend: 1 | -1 | 0;
-    channel: { high: number; low: number; startTime?: number } | null;
-  } | null;
-  /** market structure: the engine's swing points, labelled HH / HL / LH / LL */
-  structure?: {
-    time: number;
-    price: number;
-    kind: "high" | "low";
-    label: string;
-  }[];
 }
 
-export const EMPTY_OVERLAY: OverlayData = { zones: [], aoi: null, fib: null, trendlines: [] };
+export const EMPTY_OVERLAY: OverlayData = { fib: null };
 
-/**
- * One colour per idea, used the same way everywhere (chart, legend, tracker):
- * the four strategies each own a hue, and green/red are kept for direction
- * and results.
- */
+/** One colour per idea, used the same way on the chart and in the panels: violet for the Fibonacci levels, green/red for direction and results. */
 export const CHART_COLORS = {
-  breakout: "245,158,11", // amber
-  demand: "38,166,154", // teal — buy zones
-  supply: "239,83,80", // red — sell zones
   fib: "167,139,250", // violet
-  aoi: "56,189,248", // sky
-  level: "203,213,225", // slate — support / resistance
-  trend: "250,204,21", // yellow — the trend system's entry levels
-  ema20: "244,114,182", // pink
-  ema50: "129,140,248", // indigo
-  emaTrend: "250,204,21", // yellow — the trend filter's long average
+  zone: "250,204,21", // yellow — the entry zone
   muted: "100,116,139",
   ink: "229,231,235",
   win: "38,166,154",
@@ -168,14 +74,12 @@ interface PaneSource {
 }
 
 /**
- * Draws the engine's analysis on the candle pane. The visual rules:
+ * Draws the Fibonacci system's read on the candle pane. The visual rules:
  *
- *  - a strategy's AREA (zone, golden zone, AOI) is a soft box with a solid
- *    accent bar on its left edge and one label inside its top-left corner;
- *  - a LEVEL (breakout trigger, support/resistance) is a line with a short
- *    tag at the right edge;
- *  - anything the trend rule does not allow is drawn muted — outline only —
- *    so what can actually be traded is what stands out;
+ *  - the entry ZONE is a soft box with a solid accent bar on its left edge
+ *    and one label inside its top-left corner;
+ *  - a retracement LEVEL is a line with a short tag at the right edge;
+ *  - a swing the rules do not allow a trade on is drawn muted — outline only;
  *  - labels never overprint each other: one that finds no room is dropped.
  *
  * All coordinates come straight from the detection engine.
@@ -229,7 +133,8 @@ class OverlayPaneView implements IPrimitivePaneView {
               ctx.fillRect(left, top, 3, height);
             }
             // label sits inside the top-left corner, or above a box too thin to hold it
-            return { x: left + 8, y: height >= 16 ? top + 13 : top - 4 };
+            // (a box that starts above the visible chart keeps its label at the top edge)
+            return { x: left + 8, y: height >= 16 ? Math.max(top, 0) + 13 : top - 4 };
           };
           const line = (x0: number, x1: number, y: number, rgb: string, alpha: number, width = 1, dash: number[] = []) => {
             ctx.strokeStyle = rgba(rgb, alpha);
@@ -260,169 +165,46 @@ class OverlayPaneView implements IPrimitivePaneView {
             ctx.fill();
           };
           const side = (direction: "long" | "short") => (direction === "long" ? "BUY" : "SELL");
-          const emphasisOf = (tradeable: boolean | undefined, live = false): Emphasis =>
-            tradeable === false ? "muted" : live ? "live" : "ready";
-          const againstTrend = (tradeable: boolean | undefined) => (tradeable === false ? " · against the trend" : "");
 
-          // ── context: support / resistance ────────────────────────────────
-          // A line at each level with a short tag on the right. Levels that have
-          // been both ceiling and floor ("flipped") count as a confirmation, so
-          // they are solid; the rest are dotted.
-          for (const lvl of data.levels ?? []) {
-            const y = Y(lvl.price);
-            if (y == null) continue;
-            const from = Math.max(X(lvl.time) ?? 0, 0);
-            if (lvl.flipped) {
-              const yTop = Y(lvl.top);
-              const yBottom = Y(lvl.bottom);
-              if (yTop != null && yBottom != null) {
-                ctx.fillStyle = rgba(C.level, 0.05);
-                ctx.fillRect(from, Math.min(yTop, yBottom), W - from, Math.max(Math.abs(yBottom - yTop), 1));
-              }
-            }
-            line(from, W, y, C.level, lvl.flipped ? 0.6 : 0.35, 1, lvl.flipped ? [] : [2, 4]);
-            const name = lvl.flipped ? "S/R" : lvl.kind === "support" ? "S" : "R";
-            tag(`${name} ${fmt(lvl.price)}${lvl.touches > 1 ? ` ×${lvl.touches}` : ""}`, W - 4, y - 3, C.level, "right", 6, { small: true, dim: !lvl.flipped });
-          }
-
-          // ── context: market structure ────────────────────────────────────
-          if (data.structure && data.structure.length > 1) {
-            const pts = data.structure
-              .map((sp) => ({ ...sp, px: X(sp.time), py: Y(sp.price) }))
-              .filter((sp): sp is typeof sp & { px: number; py: number } => sp.px != null && sp.py != null);
-            ctx.strokeStyle = rgba(C.muted, 0.45);
-            ctx.lineWidth = 1;
-            ctx.beginPath();
-            pts.forEach((sp, i) => (i === 0 ? ctx.moveTo(sp.px, sp.py) : ctx.lineTo(sp.px, sp.py)));
-            ctx.stroke();
-            for (const sp of pts) {
-              if (sp.px < 0 || sp.px > W) continue; // off-screen swings keep their place in the zigzag, no label
-              const bullish = sp.label === "HH" || sp.label === "HL";
-              const bearish = sp.label === "LH" || sp.label === "LL";
-              tag(sp.label, sp.px - 7, sp.py + (sp.kind === "high" ? -7 : 15), bullish ? C.demand : bearish ? C.supply : C.muted, "left", 8, { small: true });
-            }
-          }
-
-          // ── context: trendlines ──────────────────────────────────────────
-          for (const l of data.trendlines ?? []) {
-            const x0 = X(l.origin.time);
-            const y0 = Y(l.origin.price);
-            const x1 = X(l.definitionAnchor.time);
-            const y1 = Y(l.definitionAnchor.price);
-            if (x0 == null || y0 == null || x1 == null || y1 == null || x1 === x0) continue;
-            const rgb = l.broken ? C.muted : l.kind === "support" ? C.demand : C.supply;
-            const yEdge = y0 + ((y1 - y0) / (x1 - x0)) * (W - x0);
-            segment(x0, y0, W, yEdge, rgb, l.broken ? 0.5 : 0.8, 1, l.broken ? [5, 4] : []);
-            for (const a of l.anchors) {
-              const ax = X(a.time);
-              const ay = Y(a.price);
-              if (ax != null && ay != null) dot(ax, ay, rgb, 2.5);
-            }
-            tag(`Trendline · ${l.kind} ×${l.touches}${l.broken ? " · broken" : ""}`, Math.min(x1 + 8, W - 10), y1 - 5, rgb, "left", 7, { small: true, dim: l.broken });
-          }
-
-          // ── context: head and shoulders ──────────────────────────────────
-          for (const p of data.headshoulders ?? []) {
-            const pts = [p.ls, p.n1, p.h, p.n2, p.rs].map((pt) => ({ px: X(pt.time), py: Y(pt.price) }));
-            if (!pts.every((g) => g.px != null && g.py != null)) continue;
-            const rgb = p.direction === "short" ? C.supply : C.demand;
-            for (let i = 1; i < pts.length; i++) segment(pts[i - 1].px!, pts[i - 1].py!, pts[i].px!, pts[i].py!, rgb, 0.8, 1, [4, 3]);
-            ["LS", "", "H", "", "RS"].forEach((name, i) => {
-              if (!name) return;
-              dot(pts[i].px!, pts[i].py!, rgb, 2.5);
-              tag(name, pts[i].px! - 6, pts[i].py! + (p.direction === "short" ? -7 : 15), rgb, "left", 7, { small: true });
-            });
-            const [n1, n2] = [pts[1], pts[3]];
-            if (n2.px !== n1.px) {
-              const yEdge = n1.py! + ((n2.py! - n1.py!) / (n2.px! - n1.px!)) * (W - n1.px!);
-              segment(n1.px!, n1.py!, W, yEdge, C.level, 0.6);
-              tag(`${p.direction === "short" ? "H&S" : "Inverse H&S"} neckline`, W - 4, yEdge - 3, C.level, "right", 7, { small: true });
-            }
-            const ty = Y(p.target);
-            if (ty != null) {
-              line(Math.max(pts[4].px!, 0), W, ty, rgb, 0.5, 1, [6, 4]);
-              tag(`H&S target ${fmt(p.target)}`, W - 4, ty - 3, rgb, "right", 7, { small: true });
-            }
-          }
-
-          // ── strategy: supply / demand zones ──────────────────────────────
-          for (const z of data.zones) {
-            const rgb = z.kind === "demand" ? C.demand : C.supply;
-            const at = area(X(z.startTime) ?? 0, z.top, z.bottom, rgb, emphasisOf(z.tradeable));
-            if (!at) continue;
-            const visits = z.touches == null ? "" : z.touches === 0 ? " · untouched" : z.touches === 1 ? " · 1 touch" : ` · ${z.touches} touches`;
-            tag(`ZONE · ${z.kind === "demand" ? "BUY" : "SELL"} ${fmt(z.bottom)}–${fmt(z.top)}${visits}${againstTrend(z.tradeable)}`, at.x, at.y, rgb, "left", 3, { dim: z.tradeable === false });
-          }
-
-          // ── strategy: set & forget AOI ───────────────────────────────────
-          if (data.aoi) {
-            const a = data.aoi;
-            if (a.leg) {
-              const [lx, ly, hx, hy] = [X(a.leg.lowTime), Y(a.leg.lowPrice), X(a.leg.highTime), Y(a.leg.highPrice)];
-              if (lx != null && ly != null && hx != null && hy != null) segment(lx, ly, hx, hy, C.aoi, 0.6, 1, [5, 3]);
-            }
-            const at = area(X(a.legEndTime) ?? 0, a.top, a.bottom, C.aoi, a.tested ? "muted" : emphasisOf(a.tradeable));
-            if (at) {
-              tag(`SET & FORGET · ${side(a.direction)} AOI ${fmt(a.bottom)}–${fmt(a.top)}${a.tested ? " · already tested" : ""}${againstTrend(a.tradeable)}`, at.x, at.y, C.aoi, "left", 2, { dim: a.tested || a.tradeable === false });
-            }
-          }
-
-          // ── strategy: fibonacci golden zone ──────────────────────────────
+          // ── the Fibonacci system: swing, levels, entry zone, stop and target ──
           if (data.fib) {
             const f = data.fib;
             const up = f.direction === "long";
-            const end = up ? f.swingHigh : f.swingLow; // 0% — where the swing finished
-            const origin = up ? f.swingLow : f.swingHigh; // 100% — where it began
-            const [ox, oy, ex, ey] = [X(origin.time), Y(origin.price), X(end.time), Y(end.price)];
-            const reference = f.isSetup === false;
+            const [ox, oy, ex, ey] = [X(f.origin.time), Y(f.origin.price), X(f.end.time), Y(f.end.price)];
+            const dim = !f.tradeable;
             if (ox != null && oy != null && ex != null && ey != null) {
               // the swing being measured: present, but never louder than the candles
-              segment(ox, oy, ex, ey, C.fib, reference ? 0.3 : 0.5, 1, [5, 3]);
+              segment(ox, oy, ex, ey, C.fib, dim ? 0.35 : 0.6, 1, [5, 3]);
               dot(ox, oy, C.fib, 2.5);
               dot(ex, ey, C.fib, 2.5);
-              // an anchor scrolled out of view gets no label (it would be pinned to the edge)
-              if (ox >= 0 && ox <= W) tag("100%", ox - 12, oy + (up ? 14 : -6), C.fib, "left", 6, { small: true, dim: true });
-              if (ex >= 0 && ex <= W) tag("0%", ex - 6, ey + (up ? -6 : 14), C.fib, "left", 6, { small: true, dim: true });
             }
-            const from = ex ?? 0;
-            const at = area(from, f.goldenTop, f.goldenBottom, C.fib, reference ? "muted" : emphasisOf(f.tradeable, f.inZone === true));
-            const y50 = Y(f.level50);
-            if (y50 != null) {
-              line(Math.max(from, 0), W, y50, C.fib, 0.35, 1, [2, 4]);
-              tag("50%", W - 4, y50 - 3, C.fib, "right", 7, { small: true, dim: true });
+            // levels run from the end of the swing (or the left edge when it has scrolled away) to the right edge
+            const from = Math.max(ex ?? 0, 0);
+            for (const lv of f.levels) {
+              const y = Y(lv.price);
+              if (y == null) continue;
+              const edge = lv.level === 0 || lv.level === 1;
+              line(from, W, y, C.fib, dim ? 0.25 : edge ? 0.6 : 0.4, 1, edge ? [] : [2, 4]);
+              tag(`${(lv.level * 100).toFixed(1).replace(/\.0$/, "")}% ${fmt(lv.price)}`, W - 4, y - 3, C.fib, "right", 7, { small: true, dim: true });
             }
-            if (at) {
-              const text = reference
-                ? `FIB reference · 61.8–78.6% ${fmt(f.goldenBottom)}–${fmt(f.goldenTop)} · no setup`
-                : `FIBONACCI · ${side(f.direction)} 61.8–78.6% ${fmt(f.goldenBottom)}–${fmt(f.goldenTop)}${f.inZone ? " · price inside" : ""}${againstTrend(f.tradeable)}`;
-              tag(text, at.x, at.y, C.fib, "left", 2, { dim: reference || f.tradeable === false });
+            if (f.zone) {
+              const at = area(from, f.zone.shallow, f.zone.deep, C.zone, dim ? "muted" : f.inZone ? "live" : "ready");
+              if (at) {
+                const pct = (v: number) => (v * 100).toFixed(1);
+                tag(`FIBONACCI · ${side(f.direction)} zone ${pct(f.zone.shallowLevel)}–${pct(f.zone.deepLevel)}% · ${fmt(Math.min(f.zone.shallow, f.zone.deep))}–${fmt(Math.max(f.zone.shallow, f.zone.deep))}${f.inZone ? " · price inside" : ""}${dim ? " · no trade" : ""}`, at.x, at.y, C.zone, "left", 2, { dim });
+              }
             }
-          }
-
-          // ── strategy: trend breakout ─────────────────────────────────────
-          // The one-week channel is a faint bracket over its own bars; only
-          // the edge on the trend's side is a trigger, drawn as one amber line.
-          if (data.breakout?.channel) {
-            const b = data.breakout;
-            const ch = b.channel!;
-            const yTop = Y(ch.high);
-            const yBottom = Y(ch.low);
-            const x0 = Math.max((ch.startTime != null ? X(ch.startTime) : null) ?? 0, 0);
-            if (yTop != null && yBottom != null) {
-              ctx.fillStyle = rgba(C.breakout, 0.035);
-              ctx.fillRect(x0, yTop, Math.max(W - x0, 2), yBottom - yTop);
-              // the edge against the trend is context only
-              const idle = b.trend === 1 ? yBottom : b.trend === -1 ? yTop : null;
-              for (const y of idle == null ? [yTop, yBottom] : [idle]) line(x0, W, y, C.breakout, 0.35, 1, [2, 4]);
-              tag("30-candle range", x0 + 6, yTop + 12, C.breakout, "left", 7, { small: true, dim: true });
-            }
-            if (b.trend !== 0) {
-              const up = b.trend === 1;
-              const level = up ? ch.high : ch.low;
-              const y = Y(level);
-              if (y != null) {
-                line(x0, W, y, C.breakout, 0.95, 1.5, []);
-                tag(`BREAKOUT · ${up ? "BUY above" : "SELL below"} ${fmt(level)} · 30-candle ${up ? "high" : "low"}`, W - 4, y - 3, C.breakout, "right", 1);
+            // where a trade from this swing would have its stop and target (only while none is open)
+            if (!data.position && !dim) {
+              const yS = f.stopLoss != null ? Y(f.stopLoss) : null;
+              const yT = f.takeProfit != null ? Y(f.takeProfit) : null;
+              if (yS != null) {
+                line(from, W, yS, C.loss, 0.55, 1, [6, 4]);
+                tag(`stop would be ${fmt(f.stopLoss!)}`, W - 4, yS + (up ? 13 : -3), C.loss, "right", 5, { small: true });
+              }
+              if (yT != null) {
+                line(from, W, yT, C.win, 0.55, 1, [6, 4]);
+                tag(`target would be ${fmt(f.takeProfit!)} (${(f.targetLevel * 100).toFixed(1)}%)`, W - 4, yT - 3, C.win, "right", 5, { small: true });
               }
             }
           }
@@ -432,64 +214,11 @@ class OverlayPaneView implements IPrimitivePaneView {
             const [xA, xB, yA, yB] = [X(h.startTime), X(h.endTime), Y(h.entry), Y(h.exitPrice)];
             if (xA == null || xB == null || yA == null || yB == null || xB < 0) continue;
             const rgb = h.outcome === "win" ? C.win : C.loss;
-            segment(xA, yA, xB, yB, rgb, 0.9, 1.5, h.skipped ? [4, 3] : []);
+            segment(xA, yA, xB, yB, rgb, 0.9, 1.5, []);
             dot(xA, yA, rgb, 2.5);
             dot(xB, yB, rgb, 4);
-            const result = h.outcome === "win" ? `+${h.r.toFixed(1)}R` : "−1R";
-            tag(`${h.skipped ? "skipped " : ""}${h.direction === "long" ? "BUY" : "SELL"} ${result}`, xB + 7, yB - 3, rgb, "left", 4, { small: true });
-          }
-
-          // ── the trend system ─────────────────────────────────────────────
-          // The two EMAs its pullback entries read, and the levels its
-          // breakout entries wait on (only on the side the trend allows).
-          if (data.trend) {
-            const t = data.trend;
-            const curve = (pts: { time: number; value: number }[], rgb: string, name: string) => {
-              ctx.beginPath();
-              let started = false;
-              let lastY: number | null = null;
-              for (const p of pts) {
-                const x = X(p.time);
-                const y = Y(p.value);
-                if (x == null || y == null) continue;
-                if (started) ctx.lineTo(x, y);
-                else ctx.moveTo(x, y);
-                started = true;
-                lastY = y;
-              }
-              ctx.strokeStyle = rgba(rgb, 0.85);
-              ctx.lineWidth = 1.25;
-              ctx.setLineDash([]);
-              ctx.stroke();
-              if (lastY != null) tag(name, W - 4, lastY - 3, rgb, "right", 6, { small: true, dim: true });
-            };
-            if (t.emaTrend?.length) curve(t.emaTrend, C.emaTrend, `EMA ${t.emaBars ?? ""} (trend filter)`);
-            curve(t.ema50, C.ema50, "EMA 50");
-            curve(t.ema20, C.ema20, "EMA 20");
-            for (const lv of t.levels) {
-              const y = Y(lv.price);
-              if (y == null) continue;
-              line(W * 0.5, W, y, C.trend, t.side ? 0.8 : 0.4, 1, [6, 4]);
-              tag(`${t.side === "long" ? "BUY above" : t.side === "short" ? "SELL below" : "level"} ${fmt(lv.price)} · ${lv.label}`, W - 4, y - 3, C.trend, "right", 2, { small: true, dim: !t.side });
-            }
-          }
-          // open trend positions: entry, and the trailing stop where it stands now
-          for (const p of data.trails ?? []) {
-            const x0 = Math.max(X(p.startTime) ?? 0, 0);
-            const [yE, yS] = [Y(p.entry), Y(p.stop)];
-            if (yE != null) {
-              line(x0, W, yE, C.ink, 0.7, 1, [2, 3]);
-              tag(`${side(p.direction)} ${fmt(p.entry)} · ${p.label}`, x0 + 6, yE - 3, C.ink, "left", 3, { small: true });
-            }
-            if (yS != null) {
-              line(x0, W, yS, C.loss, 0.95, 1.5, []);
-              tag(`TRAILING STOP ${fmt(p.stop)}`, W - 4, yS - 3, C.loss, "right", 0);
-            }
-            const yT = p.target ? Y(p.target) : null;
-            if (yT != null) {
-              line(x0, W, yT, C.win, 0.9, 1.5, []);
-              tag(`TAKE PROFIT ${fmt(p.target!)}`, W - 4, yT - 3, C.win, "right", 0);
-            }
+            const result = `${h.r >= 0 ? "+" : "−"}${Math.abs(h.r).toFixed(1)}R`;
+            tag(`${h.direction === "long" ? "BUY" : "SELL"} ${result}`, xB + 7, yB - 3, rgb, "left", 4, { small: true });
           }
 
           // ── the open trade plan ──────────────────────────────────────────
@@ -502,12 +231,12 @@ class OverlayPaneView implements IPrimitivePaneView {
               ctx.fillRect(x0, Math.min(yE, yT), W - x0, Math.abs(yT - yE));
               ctx.fillStyle = rgba(C.loss, 0.09);
               ctx.fillRect(x0, Math.min(yE, yS), W - x0, Math.abs(yS - yE));
-              const dash = p.skipped ? [6, 4] : [];
+              const dash: number[] = [];
               line(x0, W, yT, C.win, 0.95, 1.5, dash);
               line(x0, W, yE, C.ink, 0.95, 1.5, dash);
               line(x0, W, yS, C.loss, 0.95, 1.5, dash);
               tag(`TARGET ${fmt(p.takeProfit)} · +${p.rMultiple.toFixed(p.rMultiple % 1 ? 2 : 0)}R`, W - 4, yT - 3, C.win, "right", 0);
-              tag(`${p.skipped ? "SKIPPED " : ""}${side(p.direction)} ${fmt(p.entry)}`, W - 4, yE - 3, C.ink, "right", 0);
+              tag(`${side(p.direction)} ${fmt(p.entry)}`, W - 4, yE - 3, C.ink, "right", 0);
               tag(`STOP ${fmt(p.stopLoss)}`, W - 4, yS - 3, C.loss, "right", 0);
             }
           }
