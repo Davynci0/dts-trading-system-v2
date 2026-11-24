@@ -40,6 +40,12 @@ import { tradeCost } from "./instruments";
  *    trades lost. And when a zone sits behind the entry, the STOP goes just
  *    beyond that zone instead of beyond the last two candles, as long as that
  *    keeps it within the limits below.
+ *  - SUPPLY AND DEMAND: a zone is a base of one to three small-bodied 1-hour
+ *    candles that price left with a strong candle; it is FRESH until price
+ *    first comes back to it. No trade into a fresh zone of the other side —
+ *    no buy with fresh supply less than 1R ahead (no sell into fresh demand).
+ *  - NO OVERSIZED SIGNAL CANDLE: a signal candle 2.5 ATR or longer is not
+ *    traded; those trades lost in both halves of the test.
  *  - NO DUPLICATE ENTRY: within 60 minutes of the last trade's entry, a new
  *    trade on the same side is only taken once price is more than 1R (the
  *    last trade's risk) away from that entry. Re-entering the same move at
@@ -98,6 +104,73 @@ export const TREND_SR_DAYS = 30;
 export const TREND_SR_WIDTH_ATR = 0.15;
 /** … with at least this many swing points (touches) in a zone. */
 export const TREND_SR_TOUCHES = 3;
+/** No trade on a signal candle this many 15-minute ATRs long or longer. */
+export const TREND_MAX_CANDLE_ATR = 2.5;
+/** Supply and demand (1-hour): a base of up to this many candles … */
+export const TREND_SD_BASE_MAX = 3;
+/** … each with a body no bigger than this share of its range … */
+export const TREND_SD_BASE_BODY = 0.5;
+/** … left by a candle whose body is at least this share of its range and this many ATRs long … */
+export const TREND_SD_LEG_BODY = 0.6;
+export const TREND_SD_LEG_ATR = 1.2;
+/** … and a zone counts for this many days. */
+export const TREND_SD_LIFE_DAYS = 10;
+/** No trade with a fresh zone of the other side within this many R ahead of the entry. */
+export const TREND_SD_AHEAD_R = 1;
+
+/** A supply (sell) or demand (buy) zone of the 1-hour chart. */
+export interface SdZone {
+  kind: "demand" | "supply";
+  /** the edge price returns to first, and the far edge */
+  proximal: number;
+  distal: number;
+  /** when it was known (the close of the candle that left the base), when price first came back to it, when a close went beyond its far edge, and when it lapses (epoch seconds; Infinity = not yet) */
+  known: number;
+  touched: number;
+  broken: number;
+  expires: number;
+}
+
+/** Every supply and demand zone of a 1-hour series, with what happened to it afterwards — all read from CLOSED candles. */
+export function supplyDemandZones(h1: Candle[]): SdZone[] {
+  const atr = wilderAtr(h1);
+  const out: SdZone[] = [];
+  for (let j = 15; j < h1.length; j++) {
+    const leg = h1[j];
+    const body = Math.abs(leg.close - leg.open);
+    const range = leg.high - leg.low;
+    if (!(range > 0) || body < TREND_SD_LEG_BODY * range || !(body >= TREND_SD_LEG_ATR * atr[j - 1])) continue;
+    const up = leg.close > leg.open;
+    const base: Candle[] = [];
+    for (let k = j - 1; k >= 0 && base.length < TREND_SD_BASE_MAX; k--) {
+      const b = h1[k];
+      const rb = b.high - b.low;
+      if (rb > 0 && Math.abs(b.close - b.open) <= TREND_SD_BASE_BODY * rb) base.push(b);
+      else break;
+    }
+    if (!base.length) continue;
+    const baseHigh = Math.max(...base.map((b) => b.high));
+    const baseLow = Math.min(...base.map((b) => b.low));
+    // the candle has to leave the base
+    if (up ? leg.close <= baseHigh : leg.close >= baseLow) continue;
+    const proximal = up ? Math.max(...base.map((b) => Math.max(b.open, b.close))) : Math.min(...base.map((b) => Math.min(b.open, b.close)));
+    const distal = up ? Math.min(baseLow, leg.low) : Math.max(baseHigh, leg.high);
+    const known = leg.time + H1;
+    const expires = known + TREND_SD_LIFE_DAYS * DAY;
+    let touched = Infinity;
+    let broken = Infinity;
+    for (let q = j + 1; q < h1.length && h1[q].time < expires; q++) {
+      // known once the candle that did it has closed
+      if (touched === Infinity && (up ? h1[q].low <= proximal : h1[q].high >= proximal)) touched = h1[q].time + H1;
+      if (up ? h1[q].close < distal : h1[q].close > distal) {
+        broken = h1[q].time + H1;
+        break;
+      }
+    }
+    out.push({ kind: up ? "demand" : "supply", proximal, distal, known, touched, broken, expires });
+  }
+  return out;
+}
 
 /** A support/resistance zone: the band its touches span. */
 export interface SrZone {
@@ -270,6 +343,8 @@ export interface TrendSeries {
   h1Swings: { time: number; known: number; price: number }[];
   /** support/resistance zones already worked out, by the swings they were built from */
   zoneCache: Map<string, SrZone[]>;
+  /** the 1-hour supply and demand zones */
+  sdZones: SdZone[];
 }
 
 /** OANDA prints an empty daily candle on some weekends (it opens on a Friday or Saturday, UTC); it is not a trading day. */
@@ -354,6 +429,7 @@ export function buildTrendSeries(input: { m15: Candle[]; h1: Candle[]; daily: Ca
     dailyAtr: new Float64Array(n).fill(NaN),
     h1Swings: [],
     zoneCache: new Map(),
+    sdZones: supplyDemandZones(input.h1),
   };
 
   for (const bars of TREND_BREAKOUT_BARS) {
@@ -525,6 +601,12 @@ export interface TrendState {
   zones: SrZone[];
   /** the zone this candle closed through, if it did — no trade on such a candle */
   brokeZone: SrZone | null;
+  /** the FRESH supply and demand zones at this candle's close, nearest to the price first (up to three of each) */
+  sdZones: SdZone[];
+  /** the fresh zone of the other side less than 1R ahead of the entry, which stops a trade */
+  sdAhead: SdZone | null;
+  /** the signal candle's length in ATR */
+  candleAtr: number | null;
   setup: TrendSetup | null;
 }
 
@@ -648,6 +730,24 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
     }
   }
 
+  // the signal candle's size, and the fresh supply/demand zones as they stood at its close
+  const candleAtr = atr > 0 ? (c.high - c.low) / atr : NaN;
+  const oversized = candleAtr >= TREND_MAX_CANDLE_ATR;
+  const now = c.time + M15;
+  const freshSd = s.sdZones.filter((z) => z.known <= now && now < z.expires && z.broken > now && z.touched > now);
+  let sdAhead: SdZone | null = null;
+  if (daily !== 0) {
+    const price = entry ?? c.close;
+    const risk = plan?.risk ?? NaN;
+    for (const z of freshSd) {
+      if (z.kind !== (dir === 1 ? "supply" : "demand")) continue;
+      const inside = dir * (price - z.proximal) >= 0 && dir * (z.distal - price) >= 0;
+      const ahead = dir * (z.proximal - price);
+      if (inside || (ahead > 0 && risk > 0 && ahead <= TREND_SD_AHEAD_R * risk)) {
+        if (!sdAhead || dir * (z.proximal - sdAhead.proximal) < 0) sdAhead = z;
+      }
+    }
+  }
   const pct = (x: number) => (Number.isFinite(x) ? `${(x * 100).toFixed(1)}%` : "?");
   const two = (h: number) => `${String(h).padStart(2, "0")}:00`;
   const quietHours = `${two(TREND_QUIET_HOURS_UTC[0])}–${two(TREND_QUIET_HOURS_UTC[1])}`;
@@ -672,6 +772,18 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
       met: brokeZone == null,
     },
     {
+      label: oversized
+        ? `This candle is ${candleAtr.toFixed(1)} ATR long — ${TREND_MAX_CANDLE_ATR} or more is not traded`
+        : `Not an oversized candle (under ${TREND_MAX_CANDLE_ATR} ATR${Number.isFinite(candleAtr) ? `; this one ${candleAtr.toFixed(1)}` : ""})`,
+      met: !oversized,
+    },
+    {
+      label: sdAhead
+        ? `A fresh 1-hour ${sdAhead.kind} zone at ${Math.min(sdAhead.proximal, sdAhead.distal).toFixed(2)}–${Math.max(sdAhead.proximal, sdAhead.distal).toFixed(2)} is less than ${TREND_SD_AHEAD_R}R ahead`
+        : `No fresh 1-hour ${dir === 1 ? "supply" : "demand"} zone less than ${TREND_SD_AHEAD_R}R ahead`,
+      met: sdAhead == null,
+    },
+    {
       label: `Entry: a 15-minute close ${dir === 1 ? "above" : "below"} the last swing ${dir === 1 ? "high" : "low"} or the ${dir === 1 ? "high" : "low"} of the last ${TREND_BREAKOUT_BARS.map(hours).join(", ")} hours, or a ${dir === 1 ? "rising" : "falling"} candle of ${TREND_MOMENTUM_ATR} ATR or more`,
       met: trigger != null && plan != null,
     },
@@ -689,9 +801,11 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
   else if (!placed) blocked = `price is in the ${dir === 1 ? "lower" : "upper"} half of the last 24 hours' range — ${dir === 1 ? "buys" : "sells"} wait for the ${dir === 1 ? "upper" : "lower"} half`;
   else if (!affordable) blocked = `the candles are too small — costs would be ${pct(costShare)} of even the widest stop (limit ${TREND_MAX_COST_SHARE * 100}%)`;
   else if (trigger && brokeZone) blocked = `this candle closed through the ${dir === 1 ? "resistance" : "support"} zone at ${brokeZone.low.toFixed(2)}–${brokeZone.high.toFixed(2)} — no trade until price has tested it`;
+  else if (trigger && oversized) blocked = `this candle is ${candleAtr.toFixed(1)} ATR long — no trade on a candle of ${TREND_MAX_CANDLE_ATR} ATR or more`;
+  else if (trigger && plan && sdAhead) blocked = `a fresh 1-hour ${sdAhead.kind} zone (${Math.min(sdAhead.proximal, sdAhead.distal).toFixed(2)}–${Math.max(sdAhead.proximal, sdAhead.distal).toFixed(2)}) is less than ${TREND_SD_AHEAD_R}R ahead — no ${dir === 1 ? "buy into supply" : "sell into demand"}`;
 
   let setup: TrendSetup | null = null;
-  if (!blocked && side && trigger && plan && !brokeZone) {
+  if (!blocked && side && trigger && plan && !brokeZone && !oversized && !sdAhead) {
     const price = entry ?? c.close;
     setup = {
       direction: side,
@@ -731,6 +845,9 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
     blocked,
     zones: [...zones.filter((z) => z.high < c.close).slice(-4), ...zones.filter((z) => z.low <= c.close && z.high >= c.close), ...zones.filter((z) => z.low > c.close).slice(0, 4)],
     brokeZone,
+    sdZones: [...freshSd.filter((z) => z.kind === "demand").sort((x, y) => Math.abs(c.close - x.proximal) - Math.abs(c.close - y.proximal)).slice(0, 3), ...freshSd.filter((z) => z.kind === "supply").sort((x, y) => Math.abs(c.close - x.proximal) - Math.abs(c.close - y.proximal)).slice(0, 3)],
+    sdAhead,
+    candleAtr: finite(candleAtr),
     setup,
   };
 }

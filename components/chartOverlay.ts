@@ -24,6 +24,8 @@ export interface OverlayData {
   } | null;
   /** support/resistance zones: bands where several 1-hour swing highs/lows sit */
   zones?: { low: number; high: number; touches: number }[];
+  /** fresh 1-hour supply (sell) and demand (buy) zones */
+  sdZones?: { kind: "demand" | "supply"; low: number; high: number; known: number }[];
   /** Tori Trades' 4-hour trendlines (alerts only): the line's price at points along the chart */
   trendlines?: { kind: "down" | "up"; touches: number; now: number; points: { time: number; price: number }[] }[];
   /** the open trade's plan (entry/SL/TP), drawn as a position tool — the system holds one at a time */
@@ -60,6 +62,8 @@ export const CHART_COLORS = {
   trend: "56,189,248", // sky blue — the breakout levels
   zone: "245,158,11", // amber — support and resistance
   tori: "192,132,252", // violet — Tori Trades' trendlines
+  demand: "45,212,191", // teal — fresh demand
+  supply: "251,113,133", // rose — fresh supply
   muted: "100,116,139",
   ink: "229,231,235",
   win: "38,166,154",
@@ -164,6 +168,24 @@ class OverlayPaneView implements IPrimitivePaneView {
             line(0, W, top, C.zone, 0.35, 1, []);
             line(0, W, top + h, C.zone, 0.35, 1, []);
             tag(`S/R ${fmt(z.low)}–${fmt(z.high)} · ${z.touches} touches`, W - 4, top + h + 10, C.zone, "right", 2, { small: true, dim: true });
+          }
+
+          // ── fresh supply and demand: a band from where the zone formed to the right edge ──
+          for (const z of data.sdZones ?? []) {
+            const [yHi, yLo] = [Y(z.high), Y(z.low)];
+            if (yHi == null || yLo == null) continue;
+            const x0 = Math.max(X(Math.floor(z.known / 900) * 900 - 900) ?? 0, 0);
+            const rgb = z.kind === "demand" ? C.demand : C.supply;
+            const top = Math.min(yHi, yLo);
+            const h = Math.max(Math.abs(yLo - yHi), 2);
+            ctx.fillStyle = rgba(rgb, 0.12);
+            ctx.fillRect(x0, top, W - x0, h);
+            ctx.strokeStyle = rgba(rgb, 0.5);
+            ctx.lineWidth = 1;
+            ctx.setLineDash([3, 3]);
+            ctx.strokeRect(x0, top, W - x0, h);
+            ctx.setLineDash([]);
+            tag(`${z.kind === "demand" ? "DEMAND" : "SUPPLY"} 1H ${fmt(z.low)}–${fmt(z.high)} · fresh`, x0 + 4, top + (z.kind === "demand" ? h + 10 : -3), rgb, "left", 2, { small: true, dim: true });
           }
 
           // ── Tori Trades' 4-hour trendlines: a straight line per trendline, with its touches ──

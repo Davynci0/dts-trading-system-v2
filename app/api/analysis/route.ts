@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { EXECUTION_CANDLES, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/analysis/execution";
-import { buildTrendSeries, trendStateAt, TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MAX_RISK_ATR, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_MIN_RISK_ATR, TREND_REENTRY_MINUTES, TREND_REENTRY_R, TREND_SR_DAYS, TREND_SR_TOUCHES, TREND_TARGET_R } from "@/lib/analysis/trend";
+import { buildTrendSeries, trendStateAt, TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MAX_RISK_ATR, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_MIN_RISK_ATR, TREND_REENTRY_MINUTES, TREND_REENTRY_R, TREND_SR_DAYS, TREND_SR_TOUCHES, TREND_TARGET_R, TREND_MAX_CANDLE_ATR, TREND_SD_AHEAD_R } from "@/lib/analysis/trend";
 import { fetchScanCandles } from "@/lib/engine/scanner";
 import { fetchCandles } from "@/lib/oanda";
 import { toriChartLines, toriRead, TORI_HISTORY, TORI_SECONDS, TORI_TIMEFRAME } from "@/lib/analysis/tori";
@@ -83,6 +83,12 @@ export async function GET(req: NextRequest) {
         /** support/resistance zones near the price, and the one the last candle closed through */
         zones: t.zones,
         brokeZone: t.brokeZone,
+        /** fresh 1-hour supply and demand zones, and the one ahead that stops a trade */
+        sdZones: t.sdZones.map((z) => ({ kind: z.kind, low: Math.min(z.proximal, z.distal), high: Math.max(z.proximal, z.distal), known: z.known })),
+        sdAhead: t.sdAhead ? { kind: t.sdAhead.kind, low: Math.min(t.sdAhead.proximal, t.sdAhead.distal), high: Math.max(t.sdAhead.proximal, t.sdAhead.distal) } : null,
+        candleAtr: t.candleAtr,
+        maxCandleAtr: TREND_MAX_CANDLE_ATR,
+        sdAheadR: TREND_SD_AHEAD_R,
         srDays: TREND_SR_DAYS,
         srTouches: TREND_SR_TOUCHES,
         holdHours: (TREND_MAX_HOLD_BARS * 900) / 3600,

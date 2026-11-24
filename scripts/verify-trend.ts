@@ -36,6 +36,9 @@ import {
   TREND_SR_WIDTH_ATR,
   srZones,
   zonesAt,
+  supplyDemandZones,
+  TREND_MAX_CANDLE_ATR,
+  TREND_SD_AHEAD_R,
   TREND_STOP_BARS,
   TREND_STOP_BUFFER_ATR,
   TREND_SWING,
@@ -321,8 +324,8 @@ console.log("\nrules, on the generated market");
   check("the entry is the candle's close and the signal is timed at that close", ok((x) => x.s.setup!.entry === m15[x.i].close && x.s.setup!.time === m15[x.i].time + M15 && x.s.setup!.key === `trend:${m15[x.i].time}`));
   check("nothing is signalled while a condition is unmet", states.every((s) => !(s.blocked && s.setup)) && states.every((s) => !s.setup || s.checks.every((c) => c.met)));
   check("no signal before the history has settled", setups.every((x) => x.i >= TREND_MIN_CANDLES && m15[x.i].time + M15 >= h1[TREND_MIN_H1_CANDLES].time + H1));
-  const pending = states.findIndex((s, i) => i > 4 * TREND_MIN_H1_CANDLES + LONGEST && !s.blocked && !s.setup && !s.brokeZone && s.levels.length === TREND_BREAKOUT_BARS.length + 1);
-  check("with the trend confirmed and no entry yet, only the entry is missing", pending > 0 && states[pending].checks.length === 9 && states[pending].checks.filter((c) => !c.met).length === 1 && !states[pending].checks[8].met);
+  const pending = states.findIndex((s, i) => i > 4 * TREND_MIN_H1_CANDLES + LONGEST && !s.blocked && !s.setup && s.checks.slice(0, -1).every((c) => c.met) && s.levels.length === TREND_BREAKOUT_BARS.length + 1);
+  check("with the trend confirmed and no entry yet, only the entry is missing", pending > 0 && states[pending].checks.length === 11 && states[pending].checks.filter((c) => !c.met).length === 1 && !states[pending].checks[10].met);
   const lvl = states[pending];
   check(
     "the levels shown are the ones the NEXT candle has to close beyond: the last swing and each channel",
@@ -392,7 +395,7 @@ console.log("\nsupport and resistance");
       return JSON.stringify(want) === JSON.stringify(got) && got.every((q) => q.touches >= TREND_SR_TOUCHES && q.high - q.low <= TREND_SR_WIDTH_ATR * series.dailyAtr[i] + 1e-9);
     }) && series.h1Swings.every((x) => x.known > x.time)
   );
-  const brokeSignals = states.filter((s) => s.brokeZone != null && s.checks[8].met === false && s.blocked?.startsWith("this candle closed through"));
+  const brokeSignals = states.filter((s) => s.brokeZone != null && s.checks[7].met === false && s.blocked?.startsWith("this candle closed through"));
   check("a candle that has just closed through a zone is not traded, and the panel says why", setups.every((x) => states[x.i].brokeZone == null) && brokeSignals.length > 0, `${brokeSignals.length} entries refused`);
   check(
     "closing through a zone means the candle before closed on the other side of it",
@@ -411,6 +414,40 @@ console.log("\nsupport and resistance");
       }),
     `${zoned.length} stops set by a zone`
   );
+}
+
+// ───────────── supply and demand, oversized candles ─────────────
+console.log("\nsupply and demand, oversized candles");
+{
+  // a hand-built 1-hour series: quiet candles, a two-candle base, then a strong rise out of it
+  const H = 3600;
+  const hand: Candle[] = [];
+  for (let k = 0; k < 20; k++) hand.push({ time: k * H, open: k % 2 ? 100.8 : 99.2, high: 101, low: 99, close: k % 2 ? 99.2 : 100.8, volume: 1 }); // full-bodied: not a base
+  hand.push({ time: 20 * H, open: 100.4, high: 100.9, low: 99.8, close: 100.5, volume: 1 }); // base: small body
+  hand.push({ time: 21 * H, open: 100.5, high: 101, low: 100, close: 100.6, volume: 1 }); // base: small body
+  hand.push({ time: 22 * H, open: 100.6, high: 106.2, low: 100.4, close: 106, volume: 1 }); // leaves the base: big body
+  hand.push({ time: 23 * H, open: 106, high: 106.5, low: 105.5, close: 106.2, volume: 1 });
+  hand.push({ time: 24 * H, open: 106.2, high: 106.3, low: 100.55, close: 101, volume: 1 }); // comes back into it
+  const z = supplyDemandZones(hand).find((q) => q.known === 23 * H);
+  check(
+    "a demand zone is the base a strong candle left: its near edge the top of the base's bodies, its far edge the lowest low, known at that candle's close",
+    !!z && z.kind === "demand" && near(z.proximal, 100.6) && near(z.distal, 99.8) && z.touched === 25 * H && z.broken === Infinity,
+    JSON.stringify(z)
+  );
+  check(
+    "a zone is fresh only until a CLOSED 1-hour candle has come back to it, and gone once a close is beyond its far edge",
+    series.sdZones.every((q) => q.known % 3600 === 0 && (q.touched === Infinity || (q.touched > q.known && q.touched % 3600 === 0)) && (q.broken === Infinity || q.broken > q.known))
+  );
+  const bigOnes = states.filter((s) => s.blocked?.includes("ATR long — no trade"));
+  check(`no trade on a signal candle of ${TREND_MAX_CANDLE_ATR} ATR or more, and the panel says why`, setups.every((x) => (m15[x.i].high - m15[x.i].low) / series.atr[x.i] < TREND_MAX_CANDLE_ATR) && bigOnes.length > 0, `${bigOnes.length} refused`);
+  const into = setups.filter((x) => {
+    const u = x.s.setup!;
+    const d = u.direction === "long" ? 1 : -1;
+    const t = m15[x.i].time + M15;
+    return series.sdZones.some((q) => q.kind === (d === 1 ? "supply" : "demand") && q.known <= t && t < q.expires && q.broken > t && q.touched > t && ((d * (u.entry - q.proximal) >= 0 && d * (q.distal - u.entry) >= 0) || (d * (q.proximal - u.entry) > 0 && d * (q.proximal - u.entry) <= TREND_SD_AHEAD_R * u.risk)));
+  });
+  const refusedSd = states.filter((s) => s.blocked?.includes("is less than 1R ahead"));
+  check(`no buy with a fresh supply zone less than ${TREND_SD_AHEAD_R}R ahead, no sell into fresh demand`, into.length === 0 && refusedSd.length > 0, `${refusedSd.length} refused`);
 }
 
 // ───────────── Tori Trades' trendlines (alerts only) ─────────────

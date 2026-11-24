@@ -13,6 +13,7 @@ import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
 const LAYERS = [
   { id: "trend", label: "Entry levels and swings", color: CHART_COLORS.trend, on: true },
   { id: "zones", label: "Support and resistance", color: CHART_COLORS.zone, on: true },
+  { id: "sd", label: "Supply and demand (1H)", color: CHART_COLORS.demand, on: true },
   { id: "tori", label: "Tori trendlines (4H)", color: CHART_COLORS.tori, on: true },
   { id: "position", label: "Open trades", color: null, on: true },
   { id: "history", label: "Closed trades", color: null, on: true },
@@ -117,6 +118,7 @@ export default function Dashboard() {
       history: layers.history ? history : [],
       zones: layers.zones && trend ? trend.zones : [],
       trendlines: layers.tori && tori ? tori.lines : [],
+      sdZones: layers.sd && trend ? trend.sdZones : [],
       digits: DIGITS,
     };
   }, [trend, tori, layers, pairSignals, candles]);
