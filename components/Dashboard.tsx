@@ -10,13 +10,13 @@ import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
 
 /** What the chart can show on top of the candles. */
 const LAYERS = [
-  { id: "trend", label: "Breakout level", color: CHART_COLORS.trend, on: true },
+  { id: "trend", label: "Breakout levels", color: CHART_COLORS.trend, on: true },
   { id: "position", label: "Open trades", color: null, on: true },
   { id: "history", label: "Closed trades", color: null, on: true },
 ] as const;
 type LayerId = (typeof LAYERS)[number]["id"];
 
-/** The chart runs on this timeframe; the entries are read on 1-hour candles. */
+/** The chart and the entries run on this timeframe. */
 const timeframe: Timeframe = TRADE_TIMEFRAMES[0];
 /** Length of one chart candle in milliseconds. */
 const CANDLE_MS = ({ M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D: 1440 } as Record<string, number>)[timeframe] * 60_000;
@@ -64,7 +64,7 @@ export default function Dashboard() {
 
   const shownOverlay = useMemo<OverlayData>(() => {
     const barAt = (epochSec: number) => [...candles].reverse().find((c) => c.time <= epochSec) ?? candles[0];
-    // at most one trade is open at a time
+    // up to four trades are open together
     const positions: NonNullable<OverlayData["positions"]> = [];
     if (candles.length > 0) {
       for (const open of pairSignals.filter((s) => isLiveSignal(s) && !s.outcome && s.status === "active")) {
@@ -74,7 +74,6 @@ export default function Dashboard() {
           entry: open.entry,
           stopLoss: open.stop_loss,
           takeProfit: open.take_profit,
-          stopNow: open.trail_distance != null ? open.trail_stop : null,
           startTime: barAt(Math.floor(new Date(open.created_at).getTime() / 1000)).time,
           rMultiple: open.r_multiple ?? Math.abs(open.take_profit - open.entry) / Math.abs(open.entry - open.stop_loss),
         });
@@ -99,8 +98,8 @@ export default function Dashboard() {
 
     return {
       trend:
-        layers.trend && trend && trend.breakoutLevel != null && trend.dailyTrend !== 0
-          ? { direction: trend.dailyTrend === 1 ? "long" : "short", level: trend.breakoutLevel, bars: trend.breakoutBars, ready: !trend.blocked }
+        layers.trend && trend && trend.levels.length > 0 && trend.dailyTrend !== 0
+          ? { direction: trend.dailyTrend === 1 ? "long" : "short", levels: trend.levels, ready: !trend.blocked }
           : null,
       positions: layers.position ? positions : [],
       history: layers.history ? history : [],
@@ -115,7 +114,8 @@ export default function Dashboard() {
     const daily = trend.dailyTrend;
     const tone = daily === 1 ? "text-emerald-400" : daily === -1 ? "text-rose-400" : "text-amber-400";
     const allows = daily === 0 ? "no trades until the daily trend is known" : `${daily === 1 ? "buys" : "sells"} only`;
-    return { text: `Daily trend ${arrow(daily)} · 1-hour averages ${arrow(trend.maTrend)}${trend.adx != null ? `, ADX ${trend.adx.toFixed(0)}` : ""} — ${allows}`, tone };
+    const di = trend.plusDi != null && trend.minusDi != null ? ` · +DI ${trend.plusDi.toFixed(0)} / −DI ${trend.minusDi.toFixed(0)}` : "";
+    return { text: `Daily trend ${arrow(daily)} · 1-hour averages ${arrow(trend.maTrend)}${di} — ${allows}`, tone };
   }, [trend]);
 
   async function scanNow() {

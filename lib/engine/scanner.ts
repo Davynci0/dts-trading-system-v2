@@ -1,20 +1,19 @@
 import type { Candle, Pair, SignalDirection } from "@/lib/types";
 import { TREND_KEY_PREFIX, TREND_STRATEGY } from "@/lib/types";
 import { fetchCandles } from "@/lib/oanda";
-import { EXECUTION_BAR_SECONDS, SCAN_HISTORY } from "@/lib/analysis/execution";
+import { EXECUTION_BAR_SECONDS, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/analysis/execution";
 import {
   buildTrendSeries,
   trendStateAt,
-  TREND_ADX_MIN,
-  TREND_BREAKOUT_BARS,
   TREND_DAYS,
   TREND_FAST_EMA,
+  TREND_MAX_HOLD_BARS,
+  TREND_MAX_OPEN,
   TREND_MIN_CANDLES,
-  TREND_RSI_LEVEL,
+  TREND_MIN_H1_CANDLES,
   TREND_SLOW_EMA,
   TREND_STOP_ATR,
   TREND_TARGET_R,
-  TREND_TRAIL_ATR,
 } from "@/lib/analysis/trend";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
 import { sendTrendSignal } from "@/lib/telegram";
@@ -34,13 +33,14 @@ export interface ScanSummary {
   events: ScanEvent[];
 }
 
-/** Share of the account one trade risks. One trade is open at a time and the
- *  backtest's worst losing run was 12 trades — the default is 1%. Override
- *  with RISK_PCT (e.g. 0.005 for half a percent); the older name FIB_RISK_PCT
- *  is still read. */
+/** Share of the account one trade risks. Up to four trades are open together
+ *  and the backtest's worst drawdown was close to 200 times the risk of one
+ *  trade, so the default is a quarter of a percent: four open trades risk 1%
+ *  between them. Override with RISK_PCT (e.g. 0.001 for a tenth of a percent);
+ *  the older name FIB_RISK_PCT is still read. */
 export const RISK_PCT = (() => {
   const raw = Number(process.env.RISK_PCT ?? process.env.FIB_RISK_PCT);
-  return Number.isFinite(raw) && raw > 0 && raw <= 0.05 ? raw : 0.01;
+  return Number.isFinite(raw) && raw > 0 && raw <= 0.05 ? raw : 0.0025;
 })();
 
 /** Account size the position size in a signal is worked out from. Override with ACCOUNT_BALANCE. */
@@ -58,7 +58,7 @@ export const ACCOUNT_BALANCE = (() => {
  *  twice. Override with MAX_ENTRY_AGE_MIN. */
 const MAX_ENTRY_AGE_MIN = Math.max(5, Number(process.env.MAX_ENTRY_AGE_MIN ?? EXECUTION_BAR_SECONDS / 60 + 5));
 
-/** The closed candles the system reads — 1-hour and daily for the entries, 15-minute for the chart — optionally as they stood at `to`. */
+/** The closed candles the system reads — 15-minute for the entries and the chart, 1-hour and daily for the trend — optionally as they stood at `to`. */
 export async function fetchScanCandles(pair: string, to?: string, m15Count: number = SCAN_HISTORY.m15): Promise<{ m15: Candle[]; h1: Candle[]; daily: Candle[] }> {
   const [m15, h1, daily] = await Promise.all([
     fetchCandles({ instrument: pair, granularity: "M15", count: m15Count, to }),
@@ -68,7 +68,7 @@ export async function fetchScanCandles(pair: string, to?: string, m15Count: numb
   return { m15, h1, daily };
 }
 
-/** An earlier trend signal, as far as the send rules need it. */
+/** An earlier signal of the system, as far as the send rules need it. */
 export interface EarlierSignal {
   variant: string | null;
   direction: SignalDirection;
@@ -78,22 +78,25 @@ export interface EarlierSignal {
 
 /**
  * Why a new trade may not be sent, or null when it may:
- *  - a trade is already open (one at a time — so never a buy and a sell together);
- *  - this signal candle has already been traded.
+ *  - this signal candle has already been traded;
+ *  - a trade is open the other way — never a buy and a sell at once;
+ *  - TREND_MAX_OPEN trades are already open.
  */
-export function sendBlock(earlier: EarlierSignal[], trade: { key: string }): string | null {
-  const open = earlier.find((r) => r.status === "active" && r.outcome == null);
-  if (open) return `a ${open.direction === "long" ? "buy" : "sell"} is already open — one trade at a time`;
+export function sendBlock(earlier: EarlierSignal[], trade: { key: string; direction: SignalDirection }): string | null {
   if (earlier.some((r) => r.variant === trade.key)) return "this signal has already been sent";
+  const open = earlier.filter((r) => r.status === "active" && r.outcome == null);
+  if (open.some((r) => r.direction !== trade.direction)) {
+    return `a ${trade.direction === "long" ? "sell" : "buy"} is still open — never a buy and a sell at the same time`;
+  }
+  if (open.length >= TREND_MAX_OPEN) return `${TREND_MAX_OPEN} trades are already open — no more until one closes`;
   return null;
 }
 
 /**
- * One scan: settle the open trades, then read the last closed 1-hour candle of
- * each pair (the trend entries, lib/analysis/trend.ts). A candle that completes
- * every condition of an entry is stored and sent to Telegram — unless the send
- * rules above forbid it or the candle closed too long ago to enter at its
- * price.
+ * One scan: settle the open trades, then read the last closed 15-minute candle
+ * of each pair (lib/analysis/trend.ts). A candle that completes an entry is
+ * stored and sent to Telegram — unless the send rules above forbid it or the
+ * candle closed too long ago to enter at its price.
  */
 export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; sendTelegrams?: boolean; now?: number }): Promise<ScanSummary> {
   const { pairs, accountBalance = ACCOUNT_BALANCE, sendTelegrams = true } = opts;
@@ -108,7 +111,7 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
 
   for (const pair of pairs) {
     units++;
-    const push = (kind: ScanEvent["kind"], detail: string) => events.push({ pair, timeframe: "H1", strategy: TREND_STRATEGY, kind, detail });
+    const push = (kind: ScanEvent["kind"], detail: string) => events.push({ pair, timeframe: EXECUTION_TIMEFRAME, strategy: TREND_STRATEGY, kind, detail });
 
     let data: Awaited<ReturnType<typeof fetchScanCandles>>;
     try {
@@ -156,10 +159,9 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
       return true;
     };
 
-    // ── the trend entries, on the last closed 1-hour candle ──
     try {
-      if (data.h1.length <= TREND_MIN_CANDLES) {
-        push("error", "not enough 1-hour candles returned");
+      if (data.m15.length <= TREND_MIN_CANDLES || data.h1.length <= TREND_MIN_H1_CANDLES) {
+        push("error", "not enough candles returned");
         continue;
       }
       const series = buildTrendSeries(data);
@@ -168,23 +170,21 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
       const setup = state.setup;
       if (!setup) continue;
       const up = setup.direction === "long";
-      const level = up ? series.channelHigh[i] : series.channelLow[i];
+      const c = series.candles[i];
       const parts: string[] = [];
-      if (setup.trigger !== "RSI pullback") parts.push(`a 1-hour close ${up ? "above" : "below"} the ${TREND_BREAKOUT_BARS}-candle ${up ? "high" : "low"} (${level.toFixed(2)})`);
-      if (setup.trigger !== "breakout") parts.push(`RSI back ${up ? "above" : "below"} ${TREND_RSI_LEVEL} after a pullback (${series.rsi[i - 1].toFixed(0)} → ${series.rsi[i].toFixed(0)})`);
+      if (setup.breakoutBars != null) parts.push(`a 15-minute close ${up ? "above" : "below"} the ${up ? "high" : "low"} of the last ${(setup.breakoutBars * EXECUTION_BAR_SECONDS) / 3600} hours`);
+      if (setup.trigger !== "breakout") parts.push(`a ${up ? "rising" : "falling"} candle ${((c.high - c.low) / setup.atr).toFixed(1)} ATR long`);
       const why = parts.join(", and ");
+      const holdHours = (TREND_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS) / 3600;
       const recorded = await record(setup, {
         entry: setup.entry,
         stop_loss: setup.stopLoss,
         take_profit: setup.takeProfit,
         r_multiple: TREND_TARGET_R,
-        trail_distance: setup.trailDistance,
-        trail_stop: setup.stopLoss,
-        trail_checked_at: new Date(now).toISOString(),
-        sl_basis: `${TREND_STOP_ATR} × the 1-hour ATR (${setup.atr.toFixed(2)}), then trailing ${TREND_TRAIL_ATR} × ATR behind the best price`,
-        tp_basis: `${TREND_TARGET_R} × the risk`,
-        confidence: state.checks.filter((c) => c.met).length,
-        confirmations: { ...Object.fromEntries(state.checks.map((c) => [c.label, c.met])), [`Entry: ${setup.trigger}`]: true },
+        sl_basis: `${TREND_STOP_ATR} × the 15-minute ATR (${setup.atr.toFixed(2)})`,
+        tp_basis: `${TREND_TARGET_R} × the risk; closed at market after ${holdHours} hours of trading if neither is hit`,
+        confidence: state.checks.filter((x) => x.met).length,
+        confirmations: { ...Object.fromEntries(state.checks.map((x) => [x.label, x.met])), [`Entry: ${setup.trigger}`]: true },
       });
       if (!recorded) continue;
       if (sendTelegrams) {
@@ -194,13 +194,12 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
           entry: setup.entry,
           stopLoss: setup.stopLoss,
           takeProfit: setup.takeProfit,
-          trailDistance: setup.trailDistance,
           trigger: setup.trigger,
           why,
-          adx: state.adx,
           stopAtr: TREND_STOP_ATR,
-          trailAtr: TREND_TRAIL_ATR,
           targetR: TREND_TARGET_R,
+          holdHours,
+          maxOpen: TREND_MAX_OPEN,
           trendDays: TREND_DAYS,
           fastEma: TREND_FAST_EMA,
           slowEma: TREND_SLOW_EMA,
@@ -208,7 +207,7 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
           riskPct: RISK_PCT,
         }).catch((e) => push("error", `the trade was recorded but Telegram failed: ${(e as Error).message.slice(0, 120)}`));
       }
-      push("signal", `${up ? "buy" : "sell"} at ${setup.entry.toFixed(2)}, stop ${setup.stopLoss.toFixed(2)}, target ${setup.takeProfit.toFixed(2)}, trailing ${setup.trailDistance.toFixed(2)} — ${setup.trigger} (ADX ${state.adx?.toFixed(0) ?? "?"}, needs ${TREND_ADX_MIN})`);
+      push("signal", `${up ? "buy" : "sell"} at ${setup.entry.toFixed(2)}, stop ${setup.stopLoss.toFixed(2)}, target ${setup.takeProfit.toFixed(2)} (${TREND_TARGET_R}R) — ${setup.trigger}`);
     } catch (e) {
       push("error", (e as Error).message.slice(0, 160));
     }

@@ -1,5 +1,7 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { fetchCandles } from "@/lib/oanda";
+import { TREND_MAX_HOLD_BARS } from "@/lib/analysis/trend";
+import { isLiveSignal } from "@/lib/types";
 
 export interface SettleInput {
   direction: "long" | "short";
@@ -21,20 +23,22 @@ export interface Settlement {
 /** Signals are settled on 15-minute candles. `candle.time` is the candle's OPEN;
  *  a candle only predates the signal when it CLOSED before it. */
 const CANDLE_MS = 15 * 60 * 1000;
-/** A trade without a trailing stop is closed at market after this many 15-minute candles (five trading days). */
-const FIXED_MAX_HOLD_BARS = 480;
+/** A trade of a removed strategy that has a fixed stop and target is closed at market after this many 15-minute candles (five trading days). */
+const LEGACY_MAX_HOLD_BARS = 480;
 
 /**
- * Follow a trade with a fixed stop and target — the kind the removed
- * strategies sent; the trend entries trail, see settleTrailing — through the
- * 15-minute candles since it was sent: the first candle to touch the stop is a
- * loss, the first to touch the target a win, and a candle that touches both
- * counts as a loss. A trade that has reached neither after
- * FIXED_MAX_HOLD_BARS candles is closed at that candle's close ("expired",
- * with whatever it made or lost). A gap through the stop fills at the
- * candle's open.
+ * Follow a trade through the 15-minute candles since it was sent, exactly as
+ * the backtest does: the first candle to touch the stop is a loss, the first
+ * to touch the target a win, and a candle that touches both counts as a loss.
+ * A trade that has reached neither after `maxHoldBars` candles is closed at
+ * that candle's close ("expired", with whatever it made or lost). A gap
+ * through the stop fills at the candle's open.
  */
-export function settleSignal(s: SettleInput, candles: { time: number; open: number; high: number; low: number; close: number }[]): Settlement | null {
+export function settleSignal(
+  s: SettleInput,
+  candles: { time: number; open: number; high: number; low: number; close: number }[],
+  maxHoldBars: number = TREND_MAX_HOLD_BARS
+): Settlement | null {
   const long = s.direction === "long";
   const dir = long ? 1 : -1;
   const risk = Math.abs(s.entry - s.stop_loss);
@@ -48,7 +52,7 @@ export function settleSignal(s: SettleInput, candles: { time: number; open: numb
     if (long ? c.high >= s.take_profit : c.low <= s.take_profit) {
       return { outcome: "win", r: risk > 0 ? Math.abs(s.take_profit - s.entry) / risk : 0, hitTime: c.time, hitPrice: s.take_profit };
     }
-    if (held >= FIXED_MAX_HOLD_BARS) {
+    if (held >= maxHoldBars) {
       return { outcome: "expired", r: risk > 0 ? (dir * (c.close - s.entry)) / risk : 0, hitTime: c.time, hitPrice: c.close };
     }
     held++;
@@ -56,7 +60,7 @@ export function settleSignal(s: SettleInput, candles: { time: number; open: numb
   return null;
 }
 
-/** A trend trade as stored: a trailing stop a fixed distance behind the best price. */
+/** A trade of the removed trend systems as stored: a trailing stop a fixed distance behind the best price. */
 export interface TrailInput {
   direction: "long" | "short";
   entry: number;
@@ -72,11 +76,10 @@ export interface TrailInput {
 }
 
 /**
- * Follow a trend trade (lib/analysis/trend.ts) through the 15-minute candles
- * since it was last followed, exactly as the backtest does: the stop is tested
- * first, then the take-profit, then the stop trails behind the candle's best
- * price. Trades of the retired 30-minute trend system that are still open are
- * stored the same way and end the same way.
+ * Follow a trailing-stop trade through the 15-minute candles since it was last
+ * followed: the stop is tested first, then the take-profit, then the stop
+ * trails behind the candle's best price. The system no longer sends such
+ * trades; one left open by the removed trend systems still ends this way.
  */
 export function settleTrailing(
   s: TrailInput,
@@ -108,6 +111,8 @@ export function settleTrailing(
 interface Row extends Omit<SettleInput, "firedAt"> {
   id: string;
   pair: string;
+  strategy: string;
+  variant: string | null;
   created_at: string;
   trail_distance: number | null;
   trail_stop: number | null;
@@ -130,7 +135,7 @@ export async function scoreOpenSignals(
 
   const { data, error } = await supabase
     .from("signals")
-    .select("id, pair, created_at, direction, entry, stop_loss, take_profit, trail_distance, trail_stop, trail_checked_at")
+    .select("id, pair, strategy, variant, created_at, direction, entry, stop_loss, take_profit, trail_distance, trail_stop, trail_checked_at")
     .is("outcome", null)
     .gt("stop_loss", 0)
     .order("created_at", { ascending: true })
@@ -165,7 +170,7 @@ export async function scoreOpenSignals(
           .update({ trail_stop: followed.trailStop, ...(res ? {} : { trail_checked_at: new Date(followed.checkedAt).toISOString() }) })
           .eq("id", r.id);
       } else {
-        res = settleSignal({ ...r, firedAt }, candles);
+        res = settleSignal({ ...r, firedAt }, candles, isLiveSignal(r) ? TREND_MAX_HOLD_BARS : LEGACY_MAX_HOLD_BARS);
       }
       if (!res) continue;
       const { error: upErr } = await supabase

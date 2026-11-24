@@ -29,10 +29,10 @@ async function fetchM15(pair: string, fromMs: number, toMs: number): Promise<Can
 /**
  * POST /api/backtest/run
  *
- * Quick backtest of the trend entries on the last six months, with the
- * scanner's own detection. Stored for the Backtests page. The system trades
- * about three times a month, so six months is some fifteen to twenty trades —
- * a check that the rules run, not evidence about them. The multi-year run lives in scripts/backtest.ts.
+ * Quick backtest of the system on the last six months, with the scanner's own
+ * detection. Stored for the Backtests page. Six months is some three hundred
+ * trades of one market mood — a check that the rules run, not evidence about
+ * them. The multi-year run lives in scripts/backtest.ts.
  */
 export async function POST(req: NextRequest) {
   if (!isAuthorizedMutation(req)) {
@@ -56,6 +56,8 @@ export async function POST(req: NextRequest) {
   }
 
   const cut = (from + 0.7 * (to - from)) / 1000;
+  // several trades are open together: the drawdown follows the order they closed in
+  trades.sort((a, b) => a.exitTime - b.exitTime);
   const scope = (g: TrendTrade[]) => ({
     inSample: computeMetrics(g.filter((t) => t.entryTime < cut)),
     outOfSample: computeMetrics(g.filter((t) => t.entryTime >= cut)),
@@ -75,9 +77,9 @@ export async function POST(req: NextRequest) {
         range_start: new Date(from).toISOString(),
         range_end: new Date(to).toISOString(),
         pairs: [pair],
-        timeframes: ["H1", EXECUTION_TIMEFRAME],
-        config: { system: "trend entries", days: TRADED_DAYS },
-        notes: `Quick run · last ${TRADED_DAYS} days · trend entries (1-hour breakout + RSI pullback, trailing stop)`,
+        timeframes: [EXECUTION_TIMEFRAME],
+        config: { system: "15-minute trend breakouts, 1:3", days: TRADED_DAYS },
+        notes: `Quick run · last ${TRADED_DAYS} days · 15-minute trend breakouts, 1:3 target`,
       })
       .select("id")
       .single();

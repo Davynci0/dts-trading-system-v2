@@ -17,10 +17,10 @@ export interface Signal {
   direction: SignalDirection;
   /** "trend" for the signals the system sends now (see isLiveSignal); older rows keep the strategy that sent them */
   strategy: string;
-  /** the key of the 1-hour signal candle — a candle is traded once */
+  /** the key of the 15-minute signal candle — a candle is traded once */
   variant?: string | null;
   confluence_strategies?: string[] | null;
-  /** trend trades: the trailing distance and where the trailing stop stands */
+  /** trades of the removed trailing-stop systems: the trailing distance and where the stop stands */
   trail_distance?: number | null;
   trail_stop?: number | null;
   entry: number;
@@ -61,12 +61,12 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 export const TRADE_TIMEFRAMES = ["M15"] as const satisfies readonly Timeframe[];
 
 /**
- * How a signal of the 1-hour trend entries is stored. The database only
- * accepts the strategy names in its `signals_strategy_check` constraint, and
- * "trend" is the one that fits. The removed 30-minute trend system used the
- * same name, so the two are told apart by `variant`: these rows carry the key
- * of their signal candle ("trend:<epoch seconds>"), the old ones the name of
- * an entry type ("don30", "ema20pb", …).
+ * How a signal of the system (15-minute trend breakouts) is stored. The
+ * database only accepts the strategy names in its `signals_strategy_check`
+ * constraint, and "trend" is the one that fits. The removed 30-minute trend
+ * system used the same name, so the two are told apart by `variant`: these
+ * rows carry the key of their signal candle ("trend:<epoch seconds>"), the old
+ * ones the name of an entry type ("don30", "ema20pb", …).
  */
 export const TREND_STRATEGY = "trend" as const;
 export const TREND_KEY_PREFIX = "trend:" as const;

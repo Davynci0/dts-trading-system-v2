@@ -2,10 +2,10 @@ import { WebSocket } from "ws";
 (globalThis as unknown as { WebSocket: typeof WebSocket }).WebSocket = WebSocket;
 
 /**
- * Multi-year backtest of the live rules — the trend entries
- * (lib/analysis/trend.ts) — with the scanner's own detection: a signal on a
- * closed 1-hour candle, filled at the next 15-minute candle's open, the full
- * spread + slippage charged once, one trade at a time.
+ * Multi-year backtest of the live rules — 15-minute trend breakouts with a 1:3
+ * target (lib/analysis/trend.ts) — with the scanner's own detection: a signal
+ * on a closed 15-minute candle, filled at the next candle's open, the full
+ * spread + slippage charged once, up to four trades open together.
  *
  * The rules were chosen on the first ten years (DESIGN) and left alone for the
  * last five, which are printed separately; a second pass doubles the costs.
@@ -17,7 +17,7 @@ import { WebSocket } from "ws";
  */
 import { computeMetrics, type ScopedMetrics } from "@/lib/backtest/metrics";
 import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES, type TrendTrade } from "@/lib/backtest/trend";
-import { TREND_ADX_MIN, TREND_BREAKOUT_BARS, TREND_DAYS, TREND_FAST_EMA, TREND_RSI_LEVEL, TREND_SLOW_EMA, TREND_STOP_ATR, TREND_TARGET_R, TREND_TRAIL_ATR } from "@/lib/analysis/trend";
+import { TREND_BREAKOUT_BARS, TREND_DAYS, TREND_FAST_EMA, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MOMENTUM_ATR, TREND_SLOW_EMA, TREND_STOP_ATR, TREND_TARGET_R } from "@/lib/analysis/trend";
 import { EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -53,7 +53,8 @@ function weeklyT(trades: T[], from: number, to: number): number {
 }
 
 function line(name: string, trades: T[], from = START, to = END): string {
-  const m = computeMetrics(trades);
+  // several trades are open together: the drawdown follows the order they closed in
+  const m = computeMetrics([...trades].sort((a, b) => a.exitTime - b.exitTime));
   if (m.trades === 0) return `${name.padEnd(26)}    0 trades`;
   const weeks = (to - from) / (7 * 86400);
   return `${name.padEnd(26)} ${String(m.trades).padStart(4)} trades ${(m.trades / weeks).toFixed(2)}/week  win ${(m.winRate * 100).toFixed(0).padStart(2)}%  pf ${m.profitFactor.toFixed(2)}  avgR ${m.avgR.toFixed(3).padStart(6)}  total ${m.totalR.toFixed(1).padStart(6)}R  maxDD ${m.maxDrawdownR.toFixed(1).padStart(5)}R  weekly t ${weeklyT(trades, from, to).toFixed(1)}`;
@@ -87,21 +88,21 @@ async function save(trades: T[]): Promise<void> {
       range_start: new Date(START * 1000).toISOString(),
       range_end: new Date(END * 1000).toISOString(),
       pairs: [PAIR],
-      timeframes: ["H1", EXECUTION_TIMEFRAME],
-      notes: `${YEARS} year${YEARS > 1 ? "s" : ""} · trend entries (1-hour breakout + RSI pullback, trailing stop) · XAU/USD`,
+      timeframes: [EXECUTION_TIMEFRAME],
+      notes: `${YEARS} year${YEARS > 1 ? "s" : ""} · 15-minute trend breakouts, 1:3 target, up to ${TREND_MAX_OPEN} open · XAU/USD`,
       config: {
         engine: ENGINE_VERSION,
         years: YEARS,
-        system: "trend entries",
+        system: "15-minute trend breakouts, 1:3",
         trend: {
           emas: [TREND_FAST_EMA, TREND_SLOW_EMA],
-          adxMin: TREND_ADX_MIN,
           trendDays: TREND_DAYS,
-          breakoutBars: TREND_BREAKOUT_BARS,
-          rsiLevel: TREND_RSI_LEVEL,
+          breakoutBars: [...TREND_BREAKOUT_BARS],
+          momentumAtr: TREND_MOMENTUM_ATR,
           stopAtr: TREND_STOP_ATR,
-          trailAtr: TREND_TRAIL_ATR,
           targetR: TREND_TARGET_R,
+          maxHoldBars: TREND_MAX_HOLD_BARS,
+          maxOpen: TREND_MAX_OPEN,
         },
         costs: "full spread + slippage per trade",
       },
@@ -123,7 +124,7 @@ async function main() {
   const base = run(1);
   const stressed = run(2);
 
-  console.log(`\nTrend entries (1-hour breakout + RSI pullback, followed on ${EXECUTION_TIMEFRAME} candles), ${YEARS} year${YEARS > 1 ? "s" : ""} to ${new Date(END * 1000).toISOString().slice(0, 10)}, R multiples after full spread + slippage`);
+  console.log(`\nTrend breakouts on ${EXECUTION_TIMEFRAME} candles, 1:${TREND_TARGET_R} target, up to ${TREND_MAX_OPEN} open, ${YEARS} year${YEARS > 1 ? "s" : ""} to ${new Date(END * 1000).toISOString().slice(0, 10)}, R multiples after full spread + slippage`);
   console.log(line("  ALL", base));
   console.log(line("  COSTS ×2", stressed));
   if (START < DESIGN_END) {
@@ -132,7 +133,7 @@ async function main() {
   }
 
   const count = (o: T["outcome"]) => base.filter((t) => t.outcome === o).length;
-  console.log(`\nexits: stop ${count("stop")}, trailing stop ${count("trail")}, take-profit ${count("target")}, still open ${count("open")}`);
+  console.log(`\nexits: stop ${count("stop")}, take-profit ${count("target")}, time limit ${count("time")}, still open ${count("open")}`);
 
   console.log("\nby year (oldest first)");
   for (let k = 0; k < YEARS; k++) console.log(line(`  ${new Date((START + k * YEAR_S) * 1000).toISOString().slice(0, 7)} →`, base.filter(inYear(k)), START + k * YEAR_S, START + (k + 1) * YEAR_S));

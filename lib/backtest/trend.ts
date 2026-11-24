@@ -1,14 +1,14 @@
 import type { Candle } from "@/lib/types";
 import { tradeCost } from "@/lib/analysis/instruments";
-import { buildTrendSeries, trendStateAt, TREND_MIN_CANDLES, type TrendTrigger } from "@/lib/analysis/trend";
+import { buildTrendSeries, trendStateAt, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MIN_CANDLES, type TrendTrigger } from "@/lib/analysis/trend";
 
 /**
- * Backtest of the trend entries (lib/analysis/trend.ts) with the scanner's own
- * detection: a signal on a CLOSED 1-hour candle, filled at the open of the
- * next 15-minute candle, the full spread + slippage charged once. The open
- * position is then followed on 15-minute candles exactly as the live system
- * settles it: the stop is tested first, then the take-profit, then the stop
- * trails behind the candle's best price. One trend trade at a time.
+ * Backtest of the system (lib/analysis/trend.ts) with the scanner's own
+ * detection: a signal on a CLOSED 15-minute candle, filled at the next
+ * candle's open, the full spread + slippage charged once. Each trade is then
+ * followed candle by candle exactly as the live system settles it: the stop is
+ * tested first, then the take-profit, then the time limit. Up to
+ * TREND_MAX_OPEN trades are open together and never a buy and a sell at once.
  */
 export interface TrendTrade {
   direction: "long" | "short";
@@ -16,27 +16,26 @@ export interface TrendTrade {
   entryTime: number;
   exitTime: number;
   entry: number;
-  /** the initial stop — 1R is the distance from the entry to it */
   stopLoss: number;
   takeProfit: number;
   exitPrice: number;
   /** result in R after costs */
   rAchieved: number;
-  /** stop = the initial stop; trail = the trailing stop, in profit or not; target = the take-profit */
-  outcome: "target" | "stop" | "trail" | "open";
+  /** time = closed at market at the time limit */
+  outcome: "target" | "stop" | "time" | "open";
   trigger: TrendTrigger;
 }
 
 /** The two entries, as the results are grouped. */
-export const TREND_ENTRY_TYPES = ["Breakout", "RSI pullback"] as const;
+export const TREND_ENTRY_TYPES = ["Breakout", "Momentum candle"] as const;
 /** Which entry a trade counts under — a candle that is both counts as a breakout. */
-export const entryTypeOf = (t: { trigger: TrendTrigger }): (typeof TREND_ENTRY_TYPES)[number] => (t.trigger === "RSI pullback" ? "RSI pullback" : "Breakout");
+export const entryTypeOf = (t: { trigger: TrendTrigger }): (typeof TREND_ENTRY_TYPES)[number] => (t.trigger === "momentum candle" ? "Momentum candle" : "Breakout");
 
 export function runTrendBacktest(opts: {
   pair: string;
   /** closed candles, oldest first, with history before `from` for the indicators */
-  h1: Candle[];
   m15: Candle[];
+  h1: Candle[];
   daily: Candle[];
   /** only trades entered at or after this time are kept (epoch seconds) */
   from?: number;
@@ -46,32 +45,30 @@ export function runTrendBacktest(opts: {
   const s = buildTrendSeries(opts);
   const cost = tradeCost(pair) * Math.max(0, costMultiplier);
   const trades: TrendTrade[] = [];
-  /** nothing new until the open trade has closed */
-  let freeAt = 0;
-  let p = 0;
+  /** the trades still open: the candle each one closes on, and its side */
+  let open: { exitIndex: number; dir: number }[] = [];
 
-  for (let i = TREND_MIN_CANDLES; i < s.n; i++) {
-    const closeTime = s.candles[i].time + 3600;
-    if (closeTime < freeAt) continue;
+  for (let i = TREND_MIN_CANDLES; i < s.n - 1; i++) {
+    if (m15[i + 1].time < from) continue;
     // cheap gate before the full read
-    if (s.dailyTrend[i] === 0 || !(s.adx[i] > 0)) continue;
-    while (p < m15.length && m15[p].time < closeTime) p++;
-    if (p >= m15.length) break;
-    if (m15[p].time < from) continue;
-    const setup = trendStateAt(s, i, pair, m15[p].open).setup;
+    if (s.dailyTrend[i] === 0) continue;
+    const setup = trendStateAt(s, i, pair, m15[i + 1].open).setup;
     if (!setup) continue;
-
     const dir = setup.direction === "long" ? 1 : -1;
-    let stop = setup.stopLoss;
+    // a trade that closed on or before the signal candle has been settled by the time the signal is read
+    open = open.filter((t) => t.exitIndex > i);
+    if (open.length >= TREND_MAX_OPEN || open.some((t) => t.dir !== dir)) continue;
+
+    const e = i + 1;
     let exitPrice = NaN;
     let outcome: TrendTrade["outcome"] = "open";
-    let k = p;
-    for (; k < m15.length; k++) {
+    let k = e;
+    for (; k < s.n; k++) {
       const c = m15[k];
-      if (dir === 1 ? c.low <= stop : c.high >= stop) {
+      if (dir === 1 ? c.low <= setup.stopLoss : c.high >= setup.stopLoss) {
         // a gap through the stop fills at the open, not at the stop
-        exitPrice = dir === 1 ? Math.min(stop, c.open) : Math.max(stop, c.open);
-        outcome = stop === setup.stopLoss ? "stop" : "trail";
+        exitPrice = dir === 1 ? Math.min(setup.stopLoss, c.open) : Math.max(setup.stopLoss, c.open);
+        outcome = "stop";
         break;
       }
       if (dir === 1 ? c.high >= setup.takeProfit : c.low <= setup.takeProfit) {
@@ -79,16 +76,19 @@ export function runTrendBacktest(opts: {
         outcome = "target";
         break;
       }
-      const next = (dir === 1 ? c.high : c.low) - dir * setup.trailDistance;
-      stop = dir === 1 ? Math.max(stop, next) : Math.min(stop, next);
+      if (k - e >= TREND_MAX_HOLD_BARS) {
+        exitPrice = c.close;
+        outcome = "time";
+        break;
+      }
     }
-    if (k >= m15.length) {
-      k = m15.length - 1;
+    if (k >= s.n) {
+      k = s.n - 1;
       exitPrice = m15[k].close;
     }
     trades.push({
       direction: setup.direction,
-      entryTime: m15[p].time,
+      entryTime: m15[e].time,
       exitTime: m15[k].time + 900,
       entry: setup.entry,
       stopLoss: setup.stopLoss,
@@ -98,7 +98,7 @@ export function runTrendBacktest(opts: {
       outcome,
       trigger: setup.trigger,
     });
-    freeAt = m15[k].time + 900;
+    open.push({ exitIndex: outcome === "open" ? Infinity : k, dir });
   }
   return trades;
 }

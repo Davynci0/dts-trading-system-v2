@@ -12,16 +12,15 @@ interface RenderTarget {
 }
 
 export interface OverlayData {
-  /** the trend entries' read: the level a 1-hour close has to break for the breakout entry */
+  /** the system's read: the levels a 15-minute close has to break for a breakout entry */
   trend?: {
     direction: "long" | "short";
-    level: number;
-    /** how many 1-hour candles the level is the high/low of */
-    bars: number;
-    /** false while the trend readings do not all agree or the trend is too weak */
+    /** one per channel length; `armed` is false while price is already beyond the level */
+    levels: { bars: number; price: number; armed: boolean }[];
+    /** false while the trend readings do not all agree */
     ready: boolean;
   } | null;
-  /** the open trade's plan (entry/SL/TP), drawn as a position tool — the system holds one at a time */
+  /** the open trades' plans (entry/SL/TP), drawn as position tools — up to four at a time */
   positions?: {
     /** the trade's name as shown on the chart */
     label: string;
@@ -52,7 +51,7 @@ export const EMPTY_OVERLAY: OverlayData = {};
 
 /** One colour per idea, used the same way on the chart and in the panels: blue for the trend entries, green/red for direction and results. */
 export const CHART_COLORS = {
-  trend: "56,189,248", // sky blue — the breakout level
+  trend: "56,189,248", // sky blue — the breakout levels
   muted: "100,116,139",
   ink: "229,231,235",
   win: "38,166,154",
@@ -69,13 +68,14 @@ interface PaneSource {
 }
 
 /**
- * Draws the trend entries' breakout level, the open trade and the closed
- * trades on the candle pane. The visual rules:
+ * Draws the breakout levels, the open trades and the closed trades on the
+ * candle pane. The visual rules:
  *
- *  - a LEVEL is a line with a tag; the breakout level is muted while the
- *    trend is not confirmed;
+ *  - a LEVEL is a line with a tag; the breakout levels are muted while the
+ *    trend is not confirmed, and channels of different lengths that share a
+ *    level are drawn once;
  *  - an open trade is its entry, stop and target lines over a soft
- *    profit/loss shading, with the trailing stop where it stands now;
+ *    profit/loss shading;
  *  - labels never overprint each other: one that finds no room is dropped.
  *
  * All coordinates come straight from the detection engine.
@@ -146,14 +146,24 @@ class OverlayPaneView implements IPrimitivePaneView {
             tag(`${h.direction === "long" ? "BUY" : "SELL"} ${result}`, xB + 7, yB - 3, rgb, "left", 4, { small: true });
           }
 
-          // ── the trend entries: the level a 1-hour close has to break ──────
+          // ── the breakout levels: what a 15-minute close has to break ──────
           if (data.trend) {
             const t = data.trend;
-            const y = Y(t.level);
-            if (y != null) {
-              const up = t.direction === "long";
-              line(0, W, y, C.trend, t.ready ? 0.75 : 0.35, 1, [8, 4]);
-              tag(`TREND · ${side(t.direction)} on a 1-hour close ${up ? "above" : "below"} ${fmt(t.level)} (${t.bars}-candle ${up ? "high" : "low"})${t.ready ? "" : " · trend not confirmed"}`, 8, y + (up ? -3 : 13), C.trend, "left", 3, { dim: !t.ready });
+            const up = t.direction === "long";
+            // channels of different lengths often share a high/low: one line, the lengths listed together
+            const byPrice = new Map<number, { hours: number[]; armed: boolean }>();
+            for (const l of t.levels) {
+              const g = byPrice.get(l.price) ?? { hours: [], armed: false };
+              g.hours.push((l.bars * 15) / 60);
+              g.armed = g.armed || l.armed;
+              byPrice.set(l.price, g);
+            }
+            for (const [price, g] of byPrice) {
+              const y = Y(price);
+              if (y == null) continue;
+              const live = t.ready && g.armed;
+              line(0, W, y, C.trend, live ? 0.7 : 0.3, 1, [8, 4]);
+              tag(`${side(t.direction)} on a 15-min close ${up ? "above" : "below"} ${fmt(price)} (${g.hours.join("/")}-hour ${up ? "high" : "low"})${t.ready ? (g.armed ? "" : " · already beyond") : " · trend not confirmed"}`, 8, y + (up ? -3 : 13), C.trend, "left", 3, { small: true, dim: !live });
             }
           }
 

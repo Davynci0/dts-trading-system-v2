@@ -1,7 +1,7 @@
 /**
  * Telegram is the system's communication channel: it carries the trade signal
- * — entry, stop loss, take profit and trailing stop — once every condition of
- * a trend entry is met. Everything else stays in the dashboard feed.
+ * — entry, stop loss and take profit — once every condition of an entry is
+ * met. Everything else stays in the dashboard feed.
  * Credentials come from TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID env vars only.
  */
 export async function sendTelegramMessage(text: string): Promise<void> {
@@ -44,9 +44,9 @@ function sizeLine(risk: number, accountBalance: number, riskPct: number): string
 }
 
 /**
- * A trend signal: entry, stop loss, take profit and the trailing stop one per
- * line, then which entry fired, what the trend readings were and how big the
- * trade may be.
+ * A signal: entry, stop loss and take profit one per line, so the order can be
+ * placed straight from it, then which entry fired, what the trend readings
+ * were and how big the trade may be.
  */
 export async function sendTrendSignal(opts: {
   pair: string;
@@ -54,15 +54,15 @@ export async function sendTrendSignal(opts: {
   entry: number;
   stopLoss: number;
   takeProfit: number;
-  /** the trailing stop's distance behind the best price, in price */
-  trailDistance: number;
   trigger: string;
-  /** what the entry was, in a few words (the level broken, the RSI reading) */
+  /** what the entry was, in a few words (the high broken, the candle's length) */
   why: string;
-  adx: number | null;
   stopAtr: number;
-  trailAtr: number;
   targetR: number;
+  /** hours of trading after which an undecided trade is closed at market */
+  holdHours: number;
+  /** trades that may be open together */
+  maxOpen: number;
   trendDays: number;
   fastEma: number;
   slowEma: number;
@@ -73,19 +73,16 @@ export async function sendTrendSignal(opts: {
   const risk = Math.abs(opts.entry - opts.stopLoss);
   const reward = Math.abs(opts.takeProfit - opts.entry);
   const up = opts.direction === "long";
-  // the trailing stop only passes the stop loss once price has moved this far
-  const takesOver = opts.trailDistance - risk;
   await sendTelegramMessage(
     [
-      `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (Trend — ${opts.trigger})`,
+      `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (15-minute ${opts.trigger})`,
       `*Entry:* \`${px(opts.entry)}\` (at market)`,
-      `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(risk)} away (${opts.stopAtr} × the 1-hour ATR)`,
-      `*Take profit:* \`${px(opts.takeProfit)}\` — ${px(reward)} away (${opts.targetR}R)`,
-      `*Trailing stop:* ${px(opts.trailDistance)} behind the best price (${opts.trailAtr} × ATR). It takes over from the stop loss once price has moved ${px(takesOver)} your way, and it is what closes most winners.`,
+      `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(risk)} away (${opts.stopAtr} × the 15-minute ATR)`,
+      `*Take profit:* \`${px(opts.takeProfit)}\` — ${px(reward)} away (1:${opts.targetR})`,
       `Entry: ${opts.why}`,
-      `Trend: daily ${up ? "above" : "below"} its ${opts.trendDays}-day average, 1-hour ${opts.fastEma} EMA ${up ? "above" : "below"} the ${opts.slowEma} EMA, ${up ? "+DI above −DI" : "−DI above +DI"}${opts.adx != null ? `, ADX ${opts.adx.toFixed(0)}` : ""}`,
+      `Trend: daily ${up ? "above" : "below"} its ${opts.trendDays}-day average, 1-hour ${opts.fastEma} EMA ${up ? "above" : "below"} the ${opts.slowEma} EMA, ${up ? "+DI above −DI" : "−DI above +DI"}`,
       sizeLine(risk, opts.accountBalance, opts.riskPct),
-      `About one trade in three wins; the winners are several times the size of the losers.`,
+      `If neither level is hit in ${opts.holdHours} hours of trading, close the trade at market. Up to ${opts.maxOpen} trades can be open together; about one in three wins.`,
       `_Signal only — review and execute manually._`,
     ].join("\n")
   );

@@ -2,68 +2,70 @@ import { TREND_KEY_PREFIX, type Candle, type SignalDirection } from "@/lib/types
 import { tradeCost } from "./instruments";
 
 /**
- * The trend entries — trend trading as the textbooks describe it, on the
- * 1-hour chart with the daily chart above it:
+ * The system: trend breakouts on the 15-minute chart with a fixed 1:3 target.
  *
- *  - THE TREND is read three ways and all three have to agree. Daily: the last
- *    closed day against its 50-day average. Moving averages: the 1-hour 50 EMA
- *    above the 200 EMA for buys, below it for sells. Directional movement:
- *    +DI above −DI for buys, below for sells.
- *  - THE TREND MUST BE STRONG: the 1-hour ADX at 25 or more.
- *  - TWO ENTRIES, each on the close of a 1-hour candle, with the trend:
- *      breakout       the first close beyond the high/low of the last 240
- *                     candles (ten trading days)
- *      RSI pullback   the 14-period RSI coming back through 50 after a dip
- *                     against the trend — the retracement is over
- *  - ONE EXIT for both: a stop 2.5 ATR from the entry (that distance is 1R), a
- *    trailing stop 6 ATR behind the best price, and a take-profit at 8R. The
- *    trailing stop is what closes the winners; the take-profit only banks an
- *    exceptional run.
+ *  - THE TREND is read three ways above the chart and all three have to agree.
+ *    Daily: the last closed day against its 50-day average. Moving averages:
+ *    the 1-hour 50 EMA above the 200 EMA for buys, below it for sells.
+ *    Directional movement: the 1-hour +DI above −DI for buys, below for sells.
+ *  - TWO ENTRIES, each on the close of a 15-minute candle, with the trend:
+ *      breakout          the first close beyond the high/low of the previous
+ *                        12, 24, 48 or 96 candles (3, 6, 12 and 24 hours)
+ *      momentum candle   a candle at least 1.5 ATR long that closes in the
+ *                        outer quarter of its range, in the trend's direction
+ *  - ONE EXIT: a stop 2.5 ATR from the entry (that distance is 1R), a
+ *    take-profit at 3R, and a time limit — a trade that has reached neither
+ *    after 96 candles (24 hours of trading) is closed at market.
+ *  - UP TO FOUR TRADES open together, one per signal candle, never a buy and a
+ *    sell at once.
  *
- * One trend trade at a time. Every number was chosen on 2011–2021 gold data
- * and left alone for 2021–2026 (scripts/backtest.ts prints both). On that
- * data the same rules lost on 15- and 30-minute candles, fixed targets of 2R
- * and 3R lost on every chart, and range trading (RSI 30/70 while ADX is low)
- * earned nothing.
+ * It is built to trade often — about 13 times a week — and that is what it
+ * costs: the edge per trade is thin (about a tenth of the risk before costs),
+ * and it only clears the spread while gold's 15-minute candles are several
+ * dollars long. See the README for what 15 years of data say about it.
  */
 
 export const TREND_FAST_EMA = 50;
 export const TREND_SLOW_EMA = 200;
-/** The 1-hour ADX must be at least this for a trend to count as one. */
-export const TREND_ADX_MIN = 25;
 /** Days in the daily trend average. */
 export const TREND_DAYS = 50;
-/** The breakout entry: a close beyond the high/low of this many earlier 1-hour candles. */
-export const TREND_BREAKOUT_BARS = 240;
-/** The pullback entry: RSI coming back through this level with the trend. */
-export const TREND_RSI_LEVEL = 50;
-/** Initial stop and trailing distance in 1-hour ATR, and the take-profit in R. */
+/** The breakout entry: a close beyond the high/low of this many earlier 15-minute candles, for each length. */
+export const TREND_BREAKOUT_BARS = [12, 24, 48, 96] as const;
+/** The momentum entry: the candle's range in ATR, and how close to its end it has to close (share of the range). */
+export const TREND_MOMENTUM_ATR = 1.5;
+export const TREND_MOMENTUM_CLOSE = 0.25;
+/** Stop in 15-minute ATR, take-profit in R. */
 export const TREND_STOP_ATR = 2.5;
-export const TREND_TRAIL_ATR = 6;
-export const TREND_TARGET_R = 8;
+export const TREND_TARGET_R = 3;
+/** A trade that has reached neither level after this many 15-minute candles is closed at market. */
+export const TREND_MAX_HOLD_BARS = 96;
+/** Trades that may be open together. */
+export const TREND_MAX_OPEN = 4;
 /** No trade when the spread and slippage are more than this share of the risk. */
 export const TREND_MAX_COST_SHARE = 0.1;
-/** 1-hour candles needed before the slow EMA has settled. */
-export const TREND_MIN_CANDLES = 2 * TREND_SLOW_EMA;
+/** 1-hour candles needed before the slow EMA has settled, and 15-minute candles before the ATR and the longest channel have. */
+export const TREND_MIN_H1_CANDLES = 2 * TREND_SLOW_EMA;
+export const TREND_MIN_CANDLES = 120;
 
+const M15 = 900;
 const H1 = 3600;
 const DAY = 86400;
 const PERIOD = 14;
 
 export interface TrendSeries {
   n: number;
-  /** closed 1-hour candles, oldest first */
+  /** closed 15-minute candles, oldest first */
   candles: Candle[];
+  /** 15-minute ATR (Wilder, 14) */
   atr: Float64Array;
-  adx: Float64Array;
-  plusDi: Float64Array;
-  minusDi: Float64Array;
-  rsi: Float64Array;
+  /** per breakout length: highest high / lowest low of that many candles BEFORE each candle */
+  channelHigh: Float64Array[];
+  channelLow: Float64Array[];
+  /** the 1-hour readings as they stood when each 15-minute candle closed (last CLOSED 1-hour candle) */
   emaFast: Float64Array;
   emaSlow: Float64Array;
-  /** highest high / lowest low of the TREND_BREAKOUT_BARS candles BEFORE each candle */
-  channelHigh: Float64Array;
-  channelLow: Float64Array;
+  plusDi: Float64Array;
+  minusDi: Float64Array;
   /** +1 / −1 / 0 from the last CLOSED daily candle, and the average it was read against */
   dailyTrend: Int8Array;
   dailyAverage: Float64Array;
@@ -87,86 +89,99 @@ function ema(close: Float64Array, period: number): Float64Array {
   return out;
 }
 
-/**
- * Everything the trend entries read, aligned to the 1-hour candles. Both
- * series are CLOSED candles, oldest first; a daily candle is used only once it
- * has closed. ATR, ADX, ±DI and RSI are Wilder's, 14 periods.
- */
-export function buildTrendSeries(input: { h1: Candle[]; daily: Candle[] }): TrendSeries {
-  const candles = input.h1;
+/** Wilder's ATR and ±DI, 14 periods. */
+function wilder(candles: Candle[]): { atr: Float64Array; plusDi: Float64Array; minusDi: Float64Array } {
   const n = candles.length;
-  const h = Float64Array.from(candles, (c) => c.high);
-  const l = Float64Array.from(candles, (c) => c.low);
-  const c = Float64Array.from(candles, (x) => x.close);
-  const s: TrendSeries = {
-    n,
-    candles,
-    atr: new Float64Array(n).fill(NaN),
-    adx: new Float64Array(n).fill(NaN),
-    plusDi: new Float64Array(n).fill(NaN),
-    minusDi: new Float64Array(n).fill(NaN),
-    rsi: new Float64Array(n).fill(NaN),
-    emaFast: ema(c, TREND_FAST_EMA),
-    emaSlow: ema(c, TREND_SLOW_EMA),
-    channelHigh: new Float64Array(n).fill(NaN),
-    channelLow: new Float64Array(n).fill(NaN),
-    dailyTrend: new Int8Array(n),
-    dailyAverage: new Float64Array(n).fill(NaN),
-  };
-
+  const atrOut = new Float64Array(n).fill(NaN);
+  const plusDi = new Float64Array(n).fill(NaN);
+  const minusDi = new Float64Array(n).fill(NaN);
   const P = PERIOD;
   let trSum = 0;
   let plusSum = 0;
   let minusSum = 0;
-  let adx = 0;
   let atr = 0;
-  let gain = 0;
-  let loss = 0;
   for (let i = 1; i < n; i++) {
-    const up = h[i] - h[i - 1];
-    const down = l[i - 1] - l[i];
+    const c = candles[i];
+    const p = candles[i - 1];
+    const up = c.high - p.high;
+    const down = p.low - c.low;
     const plus = up > down && up > 0 ? up : 0;
     const minus = down > up && down > 0 ? down : 0;
-    const tr = Math.max(h[i] - l[i], Math.abs(h[i] - c[i - 1]), Math.abs(l[i] - c[i - 1]));
-    const change = c[i] - c[i - 1];
+    const tr = Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
     if (i <= P) {
       trSum += tr;
       plusSum += plus;
       minusSum += minus;
       atr += tr / P;
-      gain += Math.max(change, 0) / P;
-      loss += Math.max(-change, 0) / P;
     } else {
       trSum = trSum - trSum / P + tr;
       plusSum = plusSum - plusSum / P + plus;
       minusSum = minusSum - minusSum / P + minus;
       atr = (atr * (P - 1) + tr) / P;
-      gain = (gain * (P - 1) + Math.max(change, 0)) / P;
-      loss = (loss * (P - 1) + Math.max(-change, 0)) / P;
     }
     if (i >= P) {
-      s.atr[i] = atr;
-      s.rsi[i] = loss === 0 ? 100 : 100 - 100 / (1 + gain / loss);
-      const pdi = (100 * plusSum) / trSum;
-      const mdi = (100 * minusSum) / trSum;
-      s.plusDi[i] = pdi;
-      s.minusDi[i] = mdi;
-      const dx = pdi + mdi === 0 ? 0 : (100 * Math.abs(pdi - mdi)) / (pdi + mdi);
-      adx = i < 2 * P ? adx + dx / P : (adx * (P - 1) + dx) / P;
-      if (i >= 2 * P - 1) s.adx[i] = adx;
+      atrOut[i] = atr;
+      plusDi[i] = (100 * plusSum) / trSum;
+      minusDi[i] = (100 * minusSum) / trSum;
     }
   }
+  return { atr: atrOut, plusDi, minusDi };
+}
 
-  const B = TREND_BREAKOUT_BARS;
-  for (let i = B; i < n; i++) {
-    let hi = -Infinity;
-    let lo = Infinity;
-    for (let k = i - B; k < i; k++) {
-      if (h[k] > hi) hi = h[k];
-      if (l[k] < lo) lo = l[k];
+/**
+ * Everything the system reads, aligned to the 15-minute candles. All three
+ * series are CLOSED candles, oldest first; a 1-hour or daily candle is used
+ * only once it has closed.
+ */
+export function buildTrendSeries(input: { m15: Candle[]; h1: Candle[]; daily: Candle[] }): TrendSeries {
+  const candles = input.m15;
+  const n = candles.length;
+  const s: TrendSeries = {
+    n,
+    candles,
+    atr: wilder(candles).atr,
+    channelHigh: [],
+    channelLow: [],
+    emaFast: new Float64Array(n).fill(NaN),
+    emaSlow: new Float64Array(n).fill(NaN),
+    plusDi: new Float64Array(n).fill(NaN),
+    minusDi: new Float64Array(n).fill(NaN),
+    dailyTrend: new Int8Array(n),
+    dailyAverage: new Float64Array(n).fill(NaN),
+  };
+
+  for (const bars of TREND_BREAKOUT_BARS) {
+    const hi = new Float64Array(n).fill(NaN);
+    const lo = new Float64Array(n).fill(NaN);
+    for (let i = bars; i < n; i++) {
+      let h = -Infinity;
+      let l = Infinity;
+      for (let k = i - bars; k < i; k++) {
+        if (candles[k].high > h) h = candles[k].high;
+        if (candles[k].low < l) l = candles[k].low;
+      }
+      hi[i] = h;
+      lo[i] = l;
     }
-    s.channelHigh[i] = hi;
-    s.channelLow[i] = lo;
+    s.channelHigh.push(hi);
+    s.channelLow.push(lo);
+  }
+
+  // the 1-hour readings, carried to each 15-minute candle from the last 1-hour candle closed by then
+  const h1 = input.h1;
+  const close = Float64Array.from(h1, (c) => c.close);
+  const fast = ema(close, TREND_FAST_EMA);
+  const slow = ema(close, TREND_SLOW_EMA);
+  const di = wilder(h1);
+  let j = -1;
+  for (let i = 0; i < n; i++) {
+    const now = candles[i].time + M15;
+    while (j + 1 < h1.length && h1[j + 1].time + H1 <= now) j++;
+    if (j < 0) continue;
+    s.emaFast[i] = fast[j];
+    s.emaSlow[i] = slow[j];
+    s.plusDi[i] = di.plusDi[j];
+    s.minusDi[i] = di.minusDi[j];
   }
 
   const daily = input.daily.filter((d) => !isWeekendCandle(d));
@@ -179,7 +194,7 @@ export function buildTrendSeries(input: { h1: Candle[]; daily: Candle[] }): Tren
   }
   let d = -1;
   for (let i = 0; i < n; i++) {
-    const now = candles[i].time + H1;
+    const now = candles[i].time + M15;
     while (d + 1 < daily.length && daily[d + 1].time + DAY <= now) d++;
     if (d >= TREND_DAYS - 1) {
       s.dailyTrend[i] = daily[d].close > avg[d] ? 1 : daily[d].close < avg[d] ? -1 : 0;
@@ -189,18 +204,19 @@ export function buildTrendSeries(input: { h1: Candle[]; daily: Candle[] }): Tren
   return s;
 }
 
-export type TrendTrigger = "breakout" | "RSI pullback" | "breakout and RSI pullback";
+export type TrendTrigger = "breakout" | "momentum candle" | "breakout and momentum candle";
 
 export interface TrendSetup {
   direction: SignalDirection;
   trigger: TrendTrigger;
+  /** the longest channel the candle closed beyond, in 15-minute candles; null for a momentum candle alone */
+  breakoutBars: number | null;
   /** entry at market: the close of the signal candle (the next candle's open) */
   entry: number;
   stopLoss: number;
   takeProfit: number;
-  /** the initial stop distance (1R) and the trailing distance, in price */
+  /** the stop distance (1R), in price */
   risk: number;
-  trailDistance: number;
   atr: number;
   /** when the signal candle closed (epoch seconds) */
   time: number;
@@ -211,19 +227,18 @@ export interface TrendSetup {
 export interface TrendState {
   dailyTrend: 1 | -1 | 0;
   dailyAverage: number | null;
-  /** +1 when the fast EMA is above the slow one, −1 below */
+  /** +1 when the 1-hour fast EMA is above the slow one, −1 below */
   maTrend: 1 | -1 | 0;
   emaFast: number | null;
   emaSlow: number | null;
-  adx: number | null;
   plusDi: number | null;
   minusDi: number | null;
-  rsi: number | null;
   atr: number | null;
-  /** the side every trend reading agrees on (ADX aside), or null */
+  /** the side every trend reading agrees on, or null */
   side: SignalDirection | null;
-  /** the level the NEXT 1-hour candle has to close beyond for the breakout entry, on the trend's side */
-  breakoutLevel: number | null;
+  /** the levels the NEXT candle has to close beyond for a breakout, on the daily trend's side.
+   *  `armed` is false while price is already beyond the level (only the FIRST close beyond counts). */
+  levels: { bars: number; price: number; armed: boolean }[];
   /** the conditions, in the order they have to be met; the last one is the entry */
   checks: { label: string; met: boolean }[];
   /** why there is nothing to wait for right now, or null when only the entry is missing */
@@ -233,48 +248,56 @@ export interface TrendState {
 
 const finite = (x: number) => (Number.isFinite(x) ? x : null);
 const sign = (x: number): 1 | -1 | 0 => (x > 0 ? 1 : x < 0 ? -1 : 0);
+const hours = (bars: number) => `${(bars * M15) / H1}`;
 
 /**
- * The trend entries' read of 1-hour candle `i`: the three trend readings, the
- * trend's strength, and — when the candle is a breakout or an RSI pullback
- * with the trend — the trade. `entry` overrides the entry price (the backtest
- * fills at the next candle's open).
+ * The system's read of 15-minute candle `i`: the three trend readings and —
+ * when the candle is a breakout or a momentum candle with the trend — the
+ * trade. `entry` overrides the entry price (the backtest fills at the next
+ * candle's open).
  */
 export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?: number): TrendState {
   const c = s.candles[i];
   const daily = s.dailyTrend[i] as 1 | -1 | 0;
   const ma = Number.isFinite(s.emaSlow[i]) ? sign(s.emaFast[i] - s.emaSlow[i]) : 0;
   const di = Number.isFinite(s.plusDi[i]) ? sign(s.plusDi[i] - s.minusDi[i]) : 0;
-  const adx = s.adx[i];
-  const strong = adx >= TREND_ADX_MIN;
   const agreed = daily !== 0 && daily === ma && daily === di;
   const side: SignalDirection | null = agreed ? (daily === 1 ? "long" : "short") : null;
   const dir = daily === -1 ? -1 : 1;
   const word = (t: number) => (t === 1 ? "up" : t === -1 ? "down" : "unclear");
+  const atr = s.atr[i];
 
-  let breakout = false;
-  let pullback = false;
-  if (i >= 1 && side && strong) {
+  let breakoutBars: number | null = null;
+  let momentum = false;
+  if (i >= 1 && side) {
     const prev = s.candles[i - 1];
-    breakout =
-      dir === 1
-        ? c.close > s.channelHigh[i] && prev.close <= s.channelHigh[i - 1]
-        : c.close < s.channelLow[i] && prev.close >= s.channelLow[i - 1];
-    pullback =
-      dir === 1
-        ? s.rsi[i - 1] < TREND_RSI_LEVEL && s.rsi[i] >= TREND_RSI_LEVEL
-        : s.rsi[i - 1] > 100 - TREND_RSI_LEVEL && s.rsi[i] <= 100 - TREND_RSI_LEVEL;
+    TREND_BREAKOUT_BARS.forEach((bars, b) => {
+      const broke =
+        dir === 1
+          ? c.close > s.channelHigh[b][i] && prev.close <= s.channelHigh[b][i - 1]
+          : c.close < s.channelLow[b][i] && prev.close >= s.channelLow[b][i - 1];
+      if (broke) breakoutBars = bars;
+    });
+    const range = c.high - c.low;
+    momentum =
+      range >= TREND_MOMENTUM_ATR * atr &&
+      (dir === 1 ? c.close >= c.high - TREND_MOMENTUM_CLOSE * range && c.close > c.open : c.close <= c.low + TREND_MOMENTUM_CLOSE * range && c.close < c.open);
   }
-  const trigger: TrendTrigger | null = breakout && pullback ? "breakout and RSI pullback" : breakout ? "breakout" : pullback ? "RSI pullback" : null;
+  const trigger: TrendTrigger | null = breakoutBars != null && momentum ? "breakout and momentum candle" : breakoutBars != null ? "breakout" : momentum ? "momentum candle" : null;
 
-  // the level the next candle has to close beyond: this candle now counts towards the channel
-  let breakoutLevel: number | null = null;
-  if (daily !== 0 && i + 1 >= TREND_BREAKOUT_BARS) {
-    let m = dir === 1 ? -Infinity : Infinity;
-    for (let k = i + 1 - TREND_BREAKOUT_BARS; k <= i; k++) m = dir === 1 ? Math.max(m, s.candles[k].high) : Math.min(m, s.candles[k].low);
-    breakoutLevel = m;
+  // the levels the next candle has to close beyond: this candle now counts towards each channel
+  const levels: TrendState["levels"] = [];
+  if (daily !== 0) {
+    TREND_BREAKOUT_BARS.forEach((bars, b) => {
+      if (i + 1 < bars) return;
+      let m = dir === 1 ? -Infinity : Infinity;
+      for (let k = i + 1 - bars; k <= i; k++) m = dir === 1 ? Math.max(m, s.candles[k].high) : Math.min(m, s.candles[k].low);
+      const now = dir === 1 ? s.channelHigh[b][i] : s.channelLow[b][i];
+      levels.push({ bars, price: m, armed: Number.isFinite(now) && (dir === 1 ? c.close <= now : c.close >= now) });
+    });
   }
 
+  const lengths = TREND_BREAKOUT_BARS.map(hours).join(", ");
   const checks = [
     { label: `Daily trend ${word(daily)} (close vs ${TREND_DAYS}-day average)`, met: daily !== 0 },
     {
@@ -282,39 +305,37 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
       met: daily !== 0 && ma === daily,
     },
     {
-      label: `+DI ${Number.isFinite(s.plusDi[i]) ? s.plusDi[i].toFixed(0) : "?"} / −DI ${Number.isFinite(s.minusDi[i]) ? s.minusDi[i].toFixed(0) : "?"}${daily !== 0 && di !== 0 && di !== daily ? " — against the daily trend" : ""}`,
+      label: `1-hour +DI ${Number.isFinite(s.plusDi[i]) ? s.plusDi[i].toFixed(0) : "?"} / −DI ${Number.isFinite(s.minusDi[i]) ? s.minusDi[i].toFixed(0) : "?"}${daily !== 0 && di !== 0 && di !== daily ? " — against the daily trend" : ""}`,
       met: agreed,
     },
-    { label: `Trend strength: ADX ${Number.isFinite(adx) ? adx.toFixed(0) : "?"} (needs ${TREND_ADX_MIN} or more)`, met: strong },
     {
-      label: `Entry: a 1-hour close ${dir === 1 ? "above" : "below"} the ${TREND_BREAKOUT_BARS}-candle ${dir === 1 ? "high" : "low"}, or RSI back ${dir === 1 ? "above" : "below"} ${TREND_RSI_LEVEL} (now ${Number.isFinite(s.rsi[i]) ? s.rsi[i].toFixed(0) : "?"})`,
+      label: `Entry: a 15-minute close ${dir === 1 ? "above" : "below"} the ${dir === 1 ? "high" : "low"} of the last ${lengths} hours, or a ${dir === 1 ? "rising" : "falling"} candle of ${TREND_MOMENTUM_ATR} ATR or more`,
       met: trigger != null,
     },
   ];
 
   let blocked: string | null = null;
-  if (i < TREND_MIN_CANDLES || !Number.isFinite(s.emaSlow[i])) blocked = "not enough 1-hour history yet";
+  if (i < TREND_MIN_CANDLES || !(atr > 0)) blocked = "not enough 15-minute history yet";
+  else if (!Number.isFinite(s.emaSlow[i])) blocked = "not enough 1-hour history yet";
   else if (daily === 0) blocked = "the daily trend is not known yet";
   else if (ma !== daily) blocked = `the 1-hour moving averages point ${word(ma)}, against the daily trend (${word(daily)})`;
-  else if (di !== daily) blocked = `directional movement (+DI/−DI) points ${word(di)}, against the trend (${word(daily)})`;
-  else if (!strong) blocked = `the trend is too weak — ADX ${Number.isFinite(adx) ? adx.toFixed(0) : "?"}, it needs ${TREND_ADX_MIN}`;
+  else if (di !== daily) blocked = `1-hour directional movement (+DI/−DI) points ${word(di)}, against the trend (${word(daily)})`;
 
   let setup: TrendSetup | null = null;
-  const atr = s.atr[i];
-  if (!blocked && side && trigger && atr > 0) {
+  if (!blocked && side && trigger) {
     const risk = TREND_STOP_ATR * atr;
     if (tradeCost(pair) / risk <= TREND_MAX_COST_SHARE) {
       const price = entry ?? c.close;
       setup = {
         direction: side,
         trigger,
+        breakoutBars,
         entry: price,
         stopLoss: price - dir * risk,
         takeProfit: price + dir * TREND_TARGET_R * risk,
         risk,
-        trailDistance: TREND_TRAIL_ATR * atr,
         atr,
-        time: c.time + H1,
+        time: c.time + M15,
         key: `${TREND_KEY_PREFIX}${c.time}`,
       };
     }
@@ -326,13 +347,11 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
     maTrend: ma,
     emaFast: finite(s.emaFast[i]),
     emaSlow: finite(s.emaSlow[i]),
-    adx: finite(adx),
     plusDi: finite(s.plusDi[i]),
     minusDi: finite(s.minusDi[i]),
-    rsi: finite(s.rsi[i]),
     atr: finite(atr),
     side,
-    breakoutLevel,
+    levels,
     checks,
     blocked,
     setup,
