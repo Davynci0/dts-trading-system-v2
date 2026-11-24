@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { EXECUTION_CANDLES, EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
+import { EXECUTION_CANDLES, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/analysis/execution";
 import { buildTrendSeries, trendStateAt, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_STOP_ATR, TREND_TARGET_R } from "@/lib/analysis/trend";
 import { fetchScanCandles } from "@/lib/engine/scanner";
 
@@ -29,11 +29,12 @@ export async function GET(req: NextRequest) {
   }
 
   try {
-    const data = await fetchScanCandles(instrument, to, count);
-    const candles = data.m15;
+    // the read always uses the scanner's own window, however few candles the chart asked for
+    const data = await fetchScanCandles(instrument, to, Math.max(count, SCAN_HISTORY.m15));
+    const candles = data.m15.slice(-count);
 
     let trend = null;
-    if (candles.length > TREND_MIN_CANDLES && data.h1.length > TREND_MIN_H1_CANDLES) {
+    if (data.m15.length > TREND_MIN_CANDLES && data.h1.length > TREND_MIN_H1_CANDLES) {
       const ts = buildTrendSeries(data);
       const t = trendStateAt(ts, ts.n - 1, instrument);
       trend = {
