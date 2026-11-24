@@ -61,7 +61,7 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 export const TRADE_TIMEFRAMES = ["M15"] as const satisfies readonly Timeframe[];
 
 /**
- * How a signal of the system (15-minute trend breakouts) is stored. The
+ * How a signal of the system (the 15-minute market-structure scalp) is stored. The
  * database only accepts the strategy names in its `signals_strategy_check`
  * constraint, and "trend" is the one that fits. The removed 30-minute trend
  * system used the same name, so the two are told apart by `variant`: these

@@ -10,7 +10,7 @@ import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
 
 /** What the chart can show on top of the candles. */
 const LAYERS = [
-  { id: "trend", label: "Breakout levels", color: CHART_COLORS.trend, on: true },
+  { id: "trend", label: "Entry levels and swings", color: CHART_COLORS.trend, on: true },
   { id: "position", label: "Open trades", color: null, on: true },
   { id: "history", label: "Closed trades", color: null, on: true },
 ] as const;
@@ -64,7 +64,7 @@ export default function Dashboard() {
 
   const shownOverlay = useMemo<OverlayData>(() => {
     const barAt = (epochSec: number) => [...candles].reverse().find((c) => c.time <= epochSec) ?? candles[0];
-    // several trades are open together
+    // one trade is open at a time
     const positions: NonNullable<OverlayData["positions"]> = [];
     if (candles.length > 0) {
       for (const open of pairSignals.filter((s) => isLiveSignal(s) && !s.outcome && s.status === "active")) {
@@ -99,7 +99,13 @@ export default function Dashboard() {
     return {
       trend:
         layers.trend && trend && trend.levels.length > 0 && trend.dailyTrend !== 0
-          ? { direction: trend.dailyTrend === 1 ? "long" : "short", levels: trend.levels, ready: !trend.blocked }
+          ? {
+              direction: trend.dailyTrend === 1 ? "long" : "short",
+              levels: trend.levels,
+              ready: !trend.blocked,
+              // the level a new trade's stop would go beyond
+              stopSwing: trend.stopLevel,
+            }
           : null,
       positions: layers.position ? positions : [],
       history: layers.history ? history : [],
@@ -114,8 +120,8 @@ export default function Dashboard() {
     const daily = trend.dailyTrend;
     const tone = daily === 1 ? "text-emerald-400" : daily === -1 ? "text-rose-400" : "text-amber-400";
     const allows = daily === 0 ? "no trades until the daily trend is known" : `${daily === 1 ? "buys" : "sells"} only`;
-    const di = trend.plusDi != null && trend.minusDi != null ? ` · +DI ${trend.plusDi.toFixed(0)} / −DI ${trend.minusDi.toFixed(0)}${trend.adx != null ? ` · ADX ${trend.adx.toFixed(0)}` : ""}` : "";
-    return { text: `Daily trend ${arrow(daily)} · 1-hour averages ${arrow(trend.maTrend)}${di} — ${allows}`, tone };
+    const shape = (t: number) => (t === 1 ? "bullish" : t === -1 ? "bearish" : "not known");
+    return { text: `Daily trend ${arrow(daily)} · 1-hour structure ${shape(trend.h1Trend)} · 15-minute structure ${shape(trend.structure)} — ${allows}`, tone };
   }, [trend]);
 
   async function scanNow() {

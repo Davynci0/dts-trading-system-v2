@@ -1,22 +1,15 @@
 # DTS — Gold Trading System
 
-Signal-only gold (XAU/USD) trading system. It trades **breakouts with the trend on the 15-minute
-chart**, with a fixed **1:3** risk-to-reward target — about **2.5 times a trading day** while
-gold is as active as it is now.
-
-| Entry | In one line |
-| --- | --- |
-| **Breakout** | the first 15-minute close beyond the high/low of the last 3, 6, 12 or 24 hours, with the trend |
-| **Momentum candle** | a 15-minute candle of 1.2 ATR or more that closes in the outer quarter of its range, with the trend |
+Signal-only gold (XAU/USD) trading system: a **market-structure scalp on the 15-minute chart**.
+One trade at a time, a **1:3** target, every trade closed within **five hours**, about **2.5
+trades a trading day**.
 
 The scanner reads the chart every 15 minutes; when a candle completes an entry, the trade —
 entry, stop loss and take profit — is sent to Telegram. The user reviews each signal and
 executes manually — the system never places trades.
 
-Expect about **13 signals a week**, in bursts: none on about half of all days, five or so on
-the others. Up to eight trades are open together. Four trades in ten win. **Read
-[the backtest results](#backtesting) before trusting it** — most of what it made, it made in
-the last three years.
+The owner's standing requirements for the system and for how it is tested are in
+[SOUL.md](SOUL.md). **Read [the backtest results](#backtesting) before trusting it.**
 
 **Stack:** Next.js (App Router, single deployable on Vercel) · OANDA v20 (data) ·
 Supabase (auth + persistence) · Telegram Bot API (alerts).
@@ -36,9 +29,9 @@ database needs the files in `supabase/migrations/` that it has not had yet).
 
 | Timeframe | Job |
 | --- | --- |
-| Daily | the trend: the 50-day average, and the 20-, 60- and 250-day returns (time-series momentum) |
-| 1-hour | the trend again — the 50 EMA against the 200 EMA, +DI against −DI — and whether it is exhausted (ADX) |
-| 15-minute (`EXECUTION_TIMEFRAME`) | the chart, the entries, the stop (from its ATR) and the candles every open trade is followed on |
+| Daily | the bias: last closed day above its 50-day average → buys only; below → sells only |
+| 1-hour | the trend: its market structure (bullish or bearish) has to agree with the daily bias |
+| 15-minute (`EXECUTION_TIMEFRAME`) | the chart, the entries, the stop and the candles the open trade is followed on |
 
 A higher-timeframe candle is only read once it has closed.
 
@@ -46,92 +39,71 @@ A higher-timeframe candle is only read once it has closed.
 
 All of it is in `lib/analysis/trend.ts`, shared by the scanner, the backtest and the chart.
 
-**Six conditions, then an entry:**
+**Market structure**, as it is usually taught: a *swing high* is a high with three lower highs
+on each side, a *swing low* a low with three higher lows. A candle that **closes** below the
+last swing low makes the structure bearish; a close above the last swing high makes it bullish.
+It stays that way until the other side is broken. A wick through a swing is not a break.
+
+**Three conditions, then an entry:**
 
 | # | Condition | Rule |
 | --- | --- | --- |
-| 1 | Daily trend | close of the last day on one side of its 50-day average |
-| 2 | Daily momentum | at least two of the 20-, 60- and 250-day returns point the same way |
-| 3 | Moving averages | the 1-hour 50 EMA on the same side of the 200 EMA |
-| 4 | Directional movement | the 1-hour +DI above −DI for buys, below for sells (14 periods) |
-| 5 | Trend not exhausted | the 1-hour ADX under 40 |
-| 6 | Costs | spread + slippage at most 6% of the trade's risk |
-| 7 | Entry | **breakout**: the first 15-minute close beyond the high/low of the previous 12, 24, 48 or 96 candles — or **momentum candle**: a candle at least 1.2 × ATR long, closing in the top quarter of its range for a buy (bottom quarter for a sell) |
+| 1 | Daily bias | close of the last day on one side of its 50-day average |
+| 2 | 1-hour structure | bullish for buys, bearish for sells |
+| 3 | Costs | spread + slippage at most 6% of the trade's risk |
+| 4 | Entry, on a 15-minute close, with the trend | **break of structure**: price pulls back, then closes beyond the last swing — in a downtrend it comes up a little, makes a lower high and closes below the last swing low · **breakout**: the first close beyond the high/low of the last 3, 6, 12 or 24 hours · **momentum candle**: a candle at least 1.2 × ATR long that closes in the outer quarter of its range |
 
 **The trade:**
 
 | | Rule |
 | --- | --- |
 | Entry | at market, at the close of the 15-minute candle |
-| Stop loss | 2.5 × the 15-minute ATR from the entry — this distance is 1R |
+| Stop loss | just beyond the high of the last two candles for a sell (their low for a buy) — the small pullback the trade is leaving behind — plus 0.2 ATR. Never closer than 0.75 ATR or further than 2 ATR. The distance is 1R |
 | Take profit | 3 × the risk (1:3) |
-| Time limit | closed at market after 96 fifteen-minute candles (24 hours of trading) if neither is hit |
-| Positions | up to eight open together, one per signal candle, never a buy and a sell at once |
-| Size | 0.125% of the account per trade (`RISK_PCT`, `ACCOUNT_BALANCE`, default $500) — eight open trades risk 1% between them |
+| Time limit | closed at market at the close of the 20th candle — five hours |
+| Positions | **one trade at a time**; no new signal until it has closed |
+| Size | 0.5% of the account per trade (`RISK_PCT`, `ACCOUNT_BALANCE`, default $500) |
 
 ### Where the rules come from
 
-The brief: the 15-minute chart, a 1:3 target, at least 2.5 trades a day.
+The brief (SOUL.md): the 15-minute chart, one trade at a time, 1 to 5 hours a trade, about 1:3,
+about 2.5 trades a day, with market structure deciding the trade and its risk. Each method was
+looked up first and built the way it is taught, then run on five years of gold — about 13,700
+rule sets in four passes. Every result is judged on the first two and the last three years
+separately, and again with costs doubled.
 
-**1. What can trade that often.** 44,928 rule sets holding one trade at a time (breakouts,
-RSI and moving-average pullbacks, engulfing and pin candles, momentum candles): the more often
-a rule traded, the less each trade made, and none of the 714 that traded 2.5 times a day beat
-its costs. What does reach that frequency is taking every breakout in the trend's direction
-and holding several at once.
+1. **The textbook pullback entry** — retrace 38%, 50% or 62% of the leg, confirmation candle,
+   stop above the pullback or above the leg (5,184 variations). Weak: 13% made money in both
+   parts, the best traded about four times a week, and none of the ten that traded 2.5 times a
+   day made money in both.
+2. **Entering on the continuation instead** — the break of structure after the pullback, and
+   breakouts and momentum candles — with a trend filter (5,184 variations). Half made money in
+   both parts. Without a trend filter, 6% did.
+3. **The trend filter that keeps the frequency** is the 1-hour structure with the daily bias.
+   Adding +DI/−DI and an ADX ceiling is better per trade (+216R, a 21R drawdown, 46% winners)
+   but trades 1.8 times a day, under the brief.
+4. **The stop.** Placed beyond the last full swing it was too far away: with a sensible cap,
+   88% of stops landed on the cap, not on the swing, and with a wide cap the trades ran into
+   the five-hour limit and two or three of the five years lost. Placed beyond the last two candles —
+   the nearest piece of structure — 55% of stops are set by the candles and the rest by the
+   2-ATR limit, the median trade lasts 3¼ hours, and no year loses more than half an R.
+5. **Its neighbours.** Twenty-four variations of the final rules (swing size, limits, buffer,
+   time limit, target, entries, sessions) all made money over the five years, and all of them
+   with costs doubled as well — the weakest only just.
 
-**2. Why its trades lost.** The first version of that (three trend readings, up to four trades
-open) lost 116R in its first twelve years. Its 6,928 trades were sorted by what the market
-looked like at each entry — session, weekday, cost, ADX, extension, daily momentum, volatility,
-the dollar, bonds, how long the trend had lasted, how many trades were open. Before costs it
-made 0.05R a trade in 2011–2021 and paid 0.07R in costs. Three conditions lost in the first
-ten years *and* in the last five:
-
-| Condition | R per trade before costs, 2011–2021 / 2021–2026 |
-| --- | --- |
-| Costs above 8% of the risk (against under 4%) | 0.03 / 0.01 (against 0.11 / 0.29) |
-| 1-hour ADX 40 or more — an exhausted trend | −0.06 / −0.13 |
-| Fewer than two of the 20/60/250-day returns with the trade | −0.06 / −0.06 |
-
-**3. The fixes, checked as a family.** With those three removed (and +DI/−DI kept — without
-it 97% of variations lose), 2,520 variations of trend definition, entries, stop and number of
-open trades were run: **99% made money in 2011–2021 after costs, 82% with costs doubled.** The
-live rules are one of the members that trade 2.5 times a day at today's volatility.
-
-**4. The losing trades again.** Sorted the same way, the new version's trades show no
-condition that loses in both periods, so no further filter was added — each extra one would
-only fit the past.
-
-**What was tested and not used:**
-
-- **A dollar and bond-yield filter** (a dollar index from six pairs and the US 10-year note,
-  each against its 50-day average). In 2011–2021 trades with neither on their side lost 0.11R
-  and trades with both made 0.11R; in 2021–2026 it reversed (0.23R against 0.12R) — gold rose
-  against a firm dollar and rising yields. Not robust enough to trade on.
-- **Position sizing.** Larger size on later trades of a run, smaller size as more are open,
-  size by cost, and a volatility target on the system's own results: none improved on the same
-  risk for every trade in every period. The stop is already a multiple of ATR, so each trade's
-  size is scaled to volatility.
-- **Time-series momentum instead of the 50-day average** works about as well; the two together
-  were the most consistent.
-
-### What was removed
-
-The 1-hour trend entries (a 240-candle breakout and an RSI pullback with a trailing stop, three
-trades a month) ran until 23 November 2026: +175R on 504 trades in fifteen years, 13 of 15
-years positive. They were removed because they trade too rarely for the brief. Before them: a
-Fibonacci retracement entry, a 30-minute trend system and several pattern strategies. Their
-signals stay in the feed, marked as removed.
+**Tried and not used:** a target of 2R (worse), a break-even stop (worse), London and New York
+hours only (worse), structure breaks as the only entry (too few trades, +33R).
 
 ## Scanning
 
 - A scheduler (cron-job.org) calls `/api/scan` every 15 minutes with
-  `Authorization: Bearer $CRON_SECRET`. Each scan first settles the open trades on 15-minute
+  `Authorization: Bearer $CRON_SECRET`. Each scan first settles the open trade on 15-minute
   candles, then reads the last closed 15-minute candle.
 - A signal is only sent within 20 minutes of its candle's close (`MAX_ENTRY_AGE_MIN`). A scan
   that runs later — after an outage, or at the weekend — does not send a trade at a price that
   is no longer there.
-- Up to eight trades are open together; a signal candle that has been traded once is not
-  traded again; **never a buy and a sell at the same time**.
+- One trade at a time: nothing is sent while a trade is open. A signal candle that has been
+  traded once is not traded again.
 - Trades left open by a removed strategy are still followed to their stop, target or time
   limit; they do not block new signals.
 - `vercel.json` keeps one daily cron as a fallback (Vercel's Hobby plan allows one run per
@@ -143,68 +115,72 @@ signals stay in the feed, marked as removed.
 ## Backtesting
 
 ```bash
-npx tsx --env-file=.env.local scripts/backtest.ts            # 15 years: totals, year by year, by entry and side
+npx tsx --env-file=.env.local scripts/backtest.ts            # five years, with the last three next to them
 npx tsx --env-file=.env.local scripts/backtest.ts --save     # …and stored for the Backtests page
-npx tsx --env-file=.env.local scripts/backtest.ts --years=3  # a shorter window
 ```
 
-The backtest uses the scanner's own detection: a signal on a closed 15-minute candle fills at
-the next candle's open, the full spread + slippage ($0.35 per ounce) is charged once, and each
-open trade is followed candle by candle — stop first, then the target, then the time limit.
-Candles are cached in `.cache/` (the first run of a day downloads fifteen years of history).
-The `/backtests` page shows stored runs and its **Quick run** button backtests the last six
-months on the server.
+The window is always the same — **five years, with the last three shown next to them** — and
+so are the costs and the measures. The backtest uses the scanner's own detection: a signal on a
+closed 15-minute candle fills at the next candle's open, the full spread + slippage ($0.35 per
+ounce) is charged once, and the open trade is followed candle by candle — stop first, then the
+target, then the time limit. Candles are cached in `.cache/`. The `/backtests` page shows the
+stored runs of the live rules and its **Quick run** button backtests the last six months on
+the server.
 
-XAU/USD, 15 years to 2026-11-24, in R (1R = the risk of one trade):
+XAU/USD, to 2026-11-24, in R (1R = the risk of one trade):
 
-| | Trades | A week | Win rate | Total | Costs doubled | Worst drawdown |
-| --- | --- | --- | --- | --- | --- | --- |
-| 2011–2021 (ten years) | 1,203 | 2.3 | 37% | **+162.3R** | +105.8R | 55R |
-| 2021–2023 (two years) | 559 | 5.4 | 33% | **+22.0R** | −3.6R | 39R |
-| 2023–2026 (three years) | 1,977 | 12.6 | 41% | **+925.3R** | +865.6R | 49R |
-| **All 15 years** | **3,739** | **4.8** | **39%** | **+1,109.6R** | **+967.8R** | **55R** |
+| | Trades | A week | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **5 years** | **1,636** | **6.3** | **42%** | **+141.3R** | **+82.0R** | **40.6R** | **12** |
+| **Last 3 years** | 1,430 | 9.1 | 41% | +130.4R | +81.5R | 40.6R | 12 |
 
-Eleven of the 15 years made money; the four that lost, lost 0.3R, 6.5R, 8.6R and 19.2R. 2,198
-trades ended at the stop, 985 at the take-profit and 556 at the time limit. Breakouts made
-+632R and momentum candles +478R; buys +900R and sells +210R. In the last twelve months: 717
-trades (2.76 a trading day), 44% won, +406R.
+| Year from | Trades | A week | Win rate | Total |
+| --- | --- | --- | --- | --- |
+| Nov 2021 | 107 | 2.1 | 47% | +11.3R |
+| Nov 2022 | 99 | 1.9 | 46% | −0.5R |
+| Nov 2023 | 217 | 4.2 | 43% | +18.9R |
+| Nov 2024 | 531 | 10.2 | 42% | +43.0R |
+| Nov 2025 | 682 | 13.1 | 40% | +68.5R |
+
+- **How trades end:** 826 at the stop, 176 at the 1:3 target, 634 at the five-hour limit (510
+  of those in profit, +0.76R on average).
+- **How long they last:** a quarter are over within an hour, a quarter last 1 to 3 hours, half
+  last 3 to 5 hours. None is held longer than five.
+- **By entry:** breakouts +77.5R (295 trades), momentum candles +43.2R (859), breaks of
+  structure +20.6R (482). Buys +92.6R, sells +48.7R.
+- **The last twelve months:** 682 trades — 2.6 a trading day, on 215 of about 260 trading
+  days, usually three on a day that has any.
 
 **Read this before trusting it.**
 
+- **The edge is thin.** It averages 0.09R a trade — 0.05R with costs doubled. Six trades in
+  ten lose, the longest losing run was 12, and the worst drawdown was 41 times the risk of one
+  trade. Most of the profit comes from the five-hour exits, not from the 1:3 target, which is
+  reached about one trade in nine.
 - **It trades 2.5 times a day only while gold is this active.** The cost limit keeps it out
-  when 15-minute candles are small: 2.3 trades a week in 2011–2021 (five trades in the twelve
-  months from November 2017), 12.6 a week in the last three years. If gold goes quiet it will go quiet too —
-  that is the limit doing its job, not a fault.
-- **Five-sixths of the profit came in the last three years**, while gold went from $2,000 to
-  over $4,000. The ten years before made 162R, the two after them 22R. Plan on those, not on
-  the last three.
-- **No part of the data is untouched any more.** The three filters were found by looking at
-  the losing trades of all fifteen years. They are few, they lost in both halves, and nearly
-  every variation of them works — but a rule chosen with the answers in view always looks
-  better than it trades. Expect less than the table.
-- **Six losses for every four wins, in long runs.** The longest losing run was 27 trades (24
-  in the last twelve months). The worst drawdown was 55 times the risk of one trade: at
-  0.125% a trade that is 7% of the account, at 1% it is more than half.
-- **Trades come in bursts and are not independent.** Up to eight are open in the same
-  direction at once and they tend to win or lose together. Sells did far worse than buys
-  (+210R with a 122R drawdown).
-- **A $500 account cannot size it on a standard account.** In the last twelve months the stop
-  was $7 to $85 an ounce, $21 in the middle. The usual minimum trade (0.01 lot = 1 oz) then
-  risks about 4% of $500 per trade and a third of the account with eight open. At 0.125% a
-  trade is a few hundredths of an ounce, which needs a micro or cent account. The Telegram
-  message gives the size for both.
-- **Check the spread you actually pay.** Everything above assumes $0.35 an ounce a trade.
+  when 15-minute candles are small: two trades a week in the first two years, thirteen a week
+  in the last. If gold goes quiet, it will too.
+- **Most of the evidence is two years old or less.** 1,213 of the 1,636 trades, and four-fifths
+  of the profit, are from the last two years. Five years is a short test for a system with an
+  edge this small; expect less than the table.
+- **Check the spread you actually pay.** Everything above assumes $0.35 an ounce a trade. At
+  twice that the five-year result falls from +141R to +82R.
+- **Size.** In the last twelve months the stop was $6 to $98 an ounce, $15 in the middle. The
+  usual minimum trade (0.01 lot = 1 oz) then risks about 3% of a $500 account per trade — six
+  times the 0.5% the system assumes. At 0.5% a trade, $500 became $973 over the five years with
+  a worst drop of 19%; at 1% it became $1,748 with a worst drop of 34%. The Telegram message
+  gives the size for both.
 
 ## Verification
 
 ```bash
-npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # indicators, trend readings, filters, entries, backtest, settlement, send rules
+npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, entries, stop, backtest, settlement, send rules
 ```
 
 ## Routes
 
-- `/` — dashboard: the 15-minute chart with the levels a breakout has to close beyond, the open trades and past results; the panel shows each condition and what is missing. `/?asOf=2026-10-27T16:30Z` shows the chart as it stood at that moment
-- `/backtests` — stored backtest runs and the quick run
+- `/` — dashboard: the 15-minute chart with the levels an entry has to close beyond, the level a stop would go beyond, the open trade and past results; the panel shows each condition and what is missing. `/?asOf=2026-10-27T16:30Z` shows the chart as it stood at that moment
+- `/backtests` — stored backtest runs of the live rules and the quick run
 - `/login` — Supabase auth
 - `/api/candles` — OANDA candle proxy (key stays server-side)
 - `/api/analysis` — everything the chart draws, from the same code the scanner runs (`&to=<ISO time>` for a past moment)

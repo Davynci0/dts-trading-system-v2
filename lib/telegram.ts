@@ -45,8 +45,8 @@ function sizeLine(risk: number, accountBalance: number, riskPct: number): string
 
 /**
  * A signal: entry, stop loss and take profit one per line, so the order can be
- * placed straight from it, then which entry fired, what the trend readings
- * were and how big the trade may be.
+ * placed straight from it, then which entry fired, where the stop comes from
+ * and how big the trade may be.
  */
 export async function sendTrendSignal(opts: {
   pair: string;
@@ -55,22 +55,14 @@ export async function sendTrendSignal(opts: {
   stopLoss: number;
   takeProfit: number;
   trigger: string;
-  /** what the entry was, in a few words (the high broken, the candle's length) */
+  /** what the entry was, in a few words */
   why: string;
-  stopAtr: number;
+  /** where the stop comes from: the swing it sits beyond, or the limit it was set at */
+  stopWhy: string;
   targetR: number;
-  /** hours of trading after which an undecided trade is closed at market */
+  /** hours after which an undecided trade is closed at market */
   holdHours: number;
-  /** trades that may be open together */
-  maxOpen: number;
   trendDays: number;
-  /** the 1-hour ADX and the level at which the system stops trading */
-  adx: number | null;
-  adxMax: number;
-  /** how many of the three daily momentum horizons point the trade's way */
-  momentumAgree: number;
-  fastEma: number;
-  slowEma: number;
   accountBalance: number;
   riskPct: number;
 }): Promise<void> {
@@ -82,12 +74,12 @@ export async function sendTrendSignal(opts: {
     [
       `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (15-minute ${opts.trigger})`,
       `*Entry:* \`${px(opts.entry)}\` (at market)`,
-      `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(risk)} away (${opts.stopAtr} × the 15-minute ATR)`,
+      `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(risk)} away, ${opts.stopWhy}`,
       `*Take profit:* \`${px(opts.takeProfit)}\` — ${px(reward)} away (1:${opts.targetR})`,
       `Entry: ${opts.why}`,
-      `Trend: daily ${up ? "above" : "below"} its ${opts.trendDays}-day average with ${opts.momentumAgree} of 3 momentum readings, 1-hour ${opts.fastEma} EMA ${up ? "above" : "below"} the ${opts.slowEma} EMA, ${up ? "+DI above −DI" : "−DI above +DI"}${opts.adx != null ? `, ADX ${opts.adx.toFixed(0)} (under ${opts.adxMax})` : ""}`,
+      `Trend: 1-hour structure ${up ? "bullish (higher highs)" : "bearish (lower lows)"}, daily ${up ? "above" : "below"} its ${opts.trendDays}-day average`,
       sizeLine(risk, opts.accountBalance, opts.riskPct),
-      `If neither level is hit in ${opts.holdHours} hours of trading, close the trade at market. Up to ${opts.maxOpen} trades can be open together; about one in three wins.`,
+      `Close the trade at market if neither level is hit within ${opts.holdHours} hours. One trade at a time: no new signal until this one is closed. About four in ten win.`,
       `_Signal only — review and execute manually._`,
     ].join("\n")
   );

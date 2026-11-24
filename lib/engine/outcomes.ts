@@ -30,8 +30,8 @@ const LEGACY_MAX_HOLD_BARS = 480;
  * Follow a trade through the 15-minute candles since it was sent, exactly as
  * the backtest does: the first candle to touch the stop is a loss, the first
  * to touch the target a win, and a candle that touches both counts as a loss.
- * A trade that has reached neither after `maxHoldBars` candles is closed at
- * that candle's close ("expired", with whatever it made or lost). A gap
+ * A trade that has reached neither by the close of its `maxHoldBars`-th candle
+ * is closed at that close ("expired", with whatever it made or lost). A gap
  * through the stop fills at the candle's open.
  */
 export function settleSignal(
@@ -52,7 +52,8 @@ export function settleSignal(
     if (long ? c.high >= s.take_profit : c.low <= s.take_profit) {
       return { outcome: "win", r: risk > 0 ? Math.abs(s.take_profit - s.entry) / risk : 0, hitTime: c.time, hitPrice: s.take_profit };
     }
-    if (held >= maxHoldBars) {
+    // the close of the last candle the trade may be held for
+    if (held + 1 >= maxHoldBars) {
       return { outcome: "expired", r: risk > 0 ? (dir * (c.close - s.entry)) / risk : 0, hitTime: c.time, hitPrice: c.close };
     }
     held++;

@@ -7,8 +7,8 @@ import { buildTrendSeries, trendStateAt, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TR
  * detection: a signal on a CLOSED 15-minute candle, filled at the next
  * candle's open, the full spread + slippage charged once. Each trade is then
  * followed candle by candle exactly as the live system settles it: the stop is
- * tested first, then the take-profit, then the time limit. Up to
- * TREND_MAX_OPEN trades are open together and never a buy and a sell at once.
+ * tested first, then the take-profit, then the time limit. One trade at a time
+ * (TREND_MAX_OPEN).
  */
 export interface TrendTrade {
   direction: "long" | "short";
@@ -21,15 +21,18 @@ export interface TrendTrade {
   exitPrice: number;
   /** result in R after costs */
   rAchieved: number;
+  /** 15-minute candles the trade was held for, the entry candle included */
+  bars: number;
   /** time = closed at market at the time limit */
   outcome: "target" | "stop" | "time" | "open";
   trigger: TrendTrigger;
 }
 
 /** The two entries, as the results are grouped. */
-export const TREND_ENTRY_TYPES = ["Breakout", "Momentum candle"] as const;
-/** Which entry a trade counts under — a candle that is both counts as a breakout. */
-export const entryTypeOf = (t: { trigger: TrendTrigger }): (typeof TREND_ENTRY_TYPES)[number] => (t.trigger === "momentum candle" ? "Momentum candle" : "Breakout");
+export const TREND_ENTRY_TYPES = ["Break of structure", "Breakout", "Momentum candle"] as const;
+/** Which entry a trade counts under — a candle that is both a breakout and a momentum candle counts as a breakout. */
+export const entryTypeOf = (t: { trigger: TrendTrigger }): (typeof TREND_ENTRY_TYPES)[number] =>
+  t.trigger === "break of structure" ? "Break of structure" : t.trigger === "momentum candle" ? "Momentum candle" : "Breakout";
 
 export function runTrendBacktest(opts: {
   pair: string;
@@ -47,11 +50,13 @@ export function runTrendBacktest(opts: {
   const trades: TrendTrade[] = [];
   /** the trades still open: the candle each one closes on, and its side */
   let open: { exitIndex: number; dir: number }[] = [];
+  /** nothing can be entered while the limit is full, so those candles need no read */
+  let busyUntil = 0;
 
   for (let i = TREND_MIN_CANDLES; i < s.n - 1; i++) {
-    if (m15[i + 1].time < from) continue;
+    if (m15[i + 1].time < from || i < busyUntil) continue;
     // cheap gate before the full read
-    if (s.dailyTrend[i] === 0) continue;
+    if (s.dailyTrend[i] === 0 || s.dailyTrend[i] !== s.h1Trend[i]) continue;
     const setup = trendStateAt(s, i, pair, m15[i + 1].open).setup;
     if (!setup) continue;
     const dir = setup.direction === "long" ? 1 : -1;
@@ -76,7 +81,8 @@ export function runTrendBacktest(opts: {
         outcome = "target";
         break;
       }
-      if (k - e >= TREND_MAX_HOLD_BARS) {
+      // the close of the last candle the trade may be held for
+      if (k - e + 1 >= TREND_MAX_HOLD_BARS) {
         exitPrice = c.close;
         outcome = "time";
         break;
@@ -94,11 +100,13 @@ export function runTrendBacktest(opts: {
       stopLoss: setup.stopLoss,
       takeProfit: setup.takeProfit,
       exitPrice,
+      bars: k - e + 1,
       rAchieved: (dir * (exitPrice - setup.entry) - cost) / setup.risk,
       outcome,
       trigger: setup.trigger,
     });
     open.push({ exitIndex: outcome === "open" ? Infinity : k, dir });
+    if (open.length >= TREND_MAX_OPEN) busyUntil = Math.min(...open.map((t) => t.exitIndex));
   }
   return trades;
 }

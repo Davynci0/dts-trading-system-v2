@@ -5,15 +5,13 @@ import { EXECUTION_BAR_SECONDS, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/
 import {
   buildTrendSeries,
   trendStateAt,
-  TREND_ADX_MAX,
   TREND_DAYS,
-  TREND_FAST_EMA,
   TREND_MAX_HOLD_BARS,
   TREND_MAX_OPEN,
+  TREND_MAX_RISK_ATR,
   TREND_MIN_CANDLES,
   TREND_MIN_H1_CANDLES,
-  TREND_SLOW_EMA,
-  TREND_STOP_ATR,
+  TREND_MIN_RISK_ATR,
   TREND_TARGET_R,
 } from "@/lib/analysis/trend";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
@@ -34,14 +32,14 @@ export interface ScanSummary {
   events: ScanEvent[];
 }
 
-/** Share of the account one trade risks. Up to eight trades are open together
- *  and the backtest's worst drawdown was 55 times the risk of one trade, so
- *  the default is an eighth of a percent: eight open trades risk 1% between
- *  them. Override with RISK_PCT (e.g. 0.0025 for a quarter of a percent); the
- *  older name FIB_RISK_PCT is still read. */
+/** Share of the account one trade risks. One trade is open at a time; the
+ *  five-year backtest's worst drawdown was 41 times the risk of one trade and
+ *  its longest losing run 12 trades, so the default is half a percent.
+ *  Override with RISK_PCT (e.g. 0.01 for one percent); the older name
+ *  FIB_RISK_PCT is still read. */
 export const RISK_PCT = (() => {
   const raw = Number(process.env.RISK_PCT ?? process.env.FIB_RISK_PCT);
-  return Number.isFinite(raw) && raw > 0 && raw <= 0.05 ? raw : 0.00125;
+  return Number.isFinite(raw) && raw > 0 && raw <= 0.05 ? raw : 0.005;
 })();
 
 /** Account size the position size in a signal is worked out from. Override with ACCOUNT_BALANCE. */
@@ -80,16 +78,12 @@ export interface EarlierSignal {
 /**
  * Why a new trade may not be sent, or null when it may:
  *  - this signal candle has already been traded;
- *  - a trade is open the other way — never a buy and a sell at once;
- *  - TREND_MAX_OPEN trades are already open.
+ *  - a trade is already open — the system holds one at a time.
  */
-export function sendBlock(earlier: EarlierSignal[], trade: { key: string; direction: SignalDirection }): string | null {
+export function sendBlock(earlier: EarlierSignal[], trade: { key: string }): string | null {
   if (earlier.some((r) => r.variant === trade.key)) return "this signal has already been sent";
   const open = earlier.filter((r) => r.status === "active" && r.outcome == null);
-  if (open.some((r) => r.direction !== trade.direction)) {
-    return `a ${trade.direction === "long" ? "sell" : "buy"} is still open — never a buy and a sell at the same time`;
-  }
-  if (open.length >= TREND_MAX_OPEN) return `${TREND_MAX_OPEN} trades are already open — no more until one closes`;
+  if (open.length >= TREND_MAX_OPEN) return `a ${open[0].direction === "long" ? "buy" : "sell"} is already open — one trade at a time`;
   return null;
 }
 
@@ -172,18 +166,32 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
       if (!setup) continue;
       const up = setup.direction === "long";
       const c = series.candles[i];
-      const parts: string[] = [];
-      if (setup.breakoutBars != null) parts.push(`a 15-minute close ${up ? "above" : "below"} the ${up ? "high" : "low"} of the last ${(setup.breakoutBars * EXECUTION_BAR_SECONDS) / 3600} hours`);
-      if (setup.trigger !== "breakout") parts.push(`a ${up ? "rising" : "falling"} candle ${((c.high - c.low) / setup.atr).toFixed(1)} ATR long`);
-      const why = parts.join(", and ");
-      const holdHours = (TREND_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS) / 3600;
+      const hoursOf = (bars: number) => (bars * EXECUTION_BAR_SECONDS) / 3600;
+      const why =
+        setup.trigger === "break of structure"
+          ? `the pullback ended — a 15-minute close ${up ? "above the last swing high" : "below the last swing low"}`
+          : [
+              setup.breakoutBars != null ? `a 15-minute close ${up ? "above" : "below"} the ${up ? "high" : "low"} of the last ${hoursOf(setup.breakoutBars)} hours` : null,
+              setup.trigger !== "breakout" ? `a ${up ? "rising" : "falling"} candle ${((c.high - c.low) / setup.atr).toFixed(1)} ATR long` : null,
+            ]
+              .filter(Boolean)
+              .join(", and ");
+      // where the stop comes from, in words
+      const swingName = `the ${up ? "low" : "high"} of the last two candles (${setup.swing.toFixed(2)})`;
+      const stopWhy =
+        setup.stopBasis === "swing"
+          ? `just beyond ${swingName}`
+          : setup.stopBasis === "nearest"
+            ? `${TREND_MIN_RISK_ATR} ATR away — ${swingName} is closer than that`
+            : `${TREND_MAX_RISK_ATR} ATR away — ${swingName} is further than that`;
+      const holdHours = hoursOf(TREND_MAX_HOLD_BARS);
       const recorded = await record(setup, {
         entry: setup.entry,
         stop_loss: setup.stopLoss,
         take_profit: setup.takeProfit,
         r_multiple: TREND_TARGET_R,
-        sl_basis: `${TREND_STOP_ATR} × the 15-minute ATR (${setup.atr.toFixed(2)})`,
-        tp_basis: `${TREND_TARGET_R} × the risk; closed at market after ${holdHours} hours of trading if neither is hit`,
+        sl_basis: stopWhy,
+        tp_basis: `${TREND_TARGET_R} × the risk; closed at market after ${holdHours} hours if neither is hit`,
         confidence: state.checks.filter((x) => x.met).length,
         confirmations: { ...Object.fromEntries(state.checks.map((x) => [x.label, x.met])), [`Entry: ${setup.trigger}`]: true },
       });
@@ -197,16 +205,10 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
           takeProfit: setup.takeProfit,
           trigger: setup.trigger,
           why,
-          stopAtr: TREND_STOP_ATR,
+          stopWhy,
           targetR: TREND_TARGET_R,
           holdHours,
-          maxOpen: TREND_MAX_OPEN,
           trendDays: TREND_DAYS,
-          adx: state.adx,
-          adxMax: TREND_ADX_MAX,
-          momentumAgree: state.momentumAgree,
-          fastEma: TREND_FAST_EMA,
-          slowEma: TREND_SLOW_EMA,
           accountBalance,
           riskPct: RISK_PCT,
         }).catch((e) => push("error", `the trade was recorded but Telegram failed: ${(e as Error).message.slice(0, 120)}`));

@@ -11,6 +11,7 @@ interface RunRow {
   pairs: string[];
   timeframes: string[];
   notes: string | null;
+  config?: { years?: number; recentYears?: number } | null;
 }
 interface ResultRow {
   scope: string;
@@ -76,8 +77,8 @@ function MetricTable({ rows, segment }: { rows: ResultRow[]; segment: Segment })
 
 /**
  * Backtest results: stored runs of the system that sends live signals (the
- * 15-minute trend breakouts), with the whole run next to its first 70% and
- * last 30%.
+ * 15-minute market-structure scalp) — five years, with the first two and the
+ * last three next to it.
  */
 export default function BacktestsPage() {
   const [run, setRun] = useState<RunRow | null>(null);
@@ -130,6 +131,12 @@ export default function BacktestsPage() {
     ["Buys and sells", rowsOf("pair:"), true],
   ];
   const hasAll = results.some((r) => r.metrics.all);
+  // the five-year run splits at its last three years; the quick run at its last 30%
+  const years = run?.config?.years ?? null;
+  const recent = run?.config?.recentYears ?? null;
+  const wholeLabel = years ? `All ${years} years` : "Whole run";
+  const firstLabel = years && recent ? `First ${years - recent} years` : "First 70%";
+  const lastLabel = years && recent ? `Last ${recent} years` : "Last 30%";
 
   return (
     <div className="flex-1 space-y-6 p-6">
@@ -137,10 +144,10 @@ export default function BacktestsPage() {
         <div>
           <h1 className="text-lg font-semibold text-neutral-100">Backtest Results</h1>
           <p className="mt-1 max-w-3xl text-xs text-neutral-500">
-            The 15-minute trend breakouts (1:3 target, several trades open together) replayed on history with the
-            scanner&apos;s own detection: a signal on a closed 15-minute candle fills at the next candle&apos;s open,
-            the full spread + slippage is charged once, and a candle that touches both the stop and the target counts
-            as a loss. Older runs in the list belong to earlier versions of the system.
+            The market-structure scalp (15-minute chart, 1:3 target, one trade at a time, closed within five hours)
+            replayed on five years of gold with the scanner&apos;s own detection: a signal on a closed 15-minute candle
+            fills at the next candle&apos;s open, the full spread + slippage is charged once, and a candle that touches
+            both the stop and the target counts as a loss.
           </p>
         </div>
         <button
@@ -189,18 +196,18 @@ export default function BacktestsPage() {
                 <h2 className="border-b border-neutral-800 px-4 py-3 text-sm font-semibold text-neutral-200">{title}</h2>
                 {hasAll && (
                   <div>
-                    {split && <h3 className="px-4 pt-3 text-xs font-medium text-neutral-500">Whole run</h3>}
+                    {split && <h3 className="px-4 pt-3 text-xs font-medium text-neutral-500">{wholeLabel}</h3>}
                     <MetricTable rows={rows} segment="all" />
                   </div>
                 )}
                 {split && (
                   <div className="grid gap-0 xl:grid-cols-2">
                     <div>
-                      <h3 className="px-4 pt-3 text-xs font-medium text-neutral-500">First 70%</h3>
+                      <h3 className="px-4 pt-3 text-xs font-medium text-neutral-500">{firstLabel}</h3>
                       <MetricTable rows={rows} segment="inSample" />
                     </div>
                     <div>
-                      <h3 className="px-4 pt-3 text-xs font-medium text-neutral-500">Last 30%</h3>
+                      <h3 className="px-4 pt-3 text-xs font-medium text-neutral-500">{lastLabel}</h3>
                       <MetricTable rows={rows} segment="outOfSample" />
                     </div>
                   </div>
@@ -209,8 +216,7 @@ export default function BacktestsPage() {
             )
           )}
           <p className="text-xs text-neutral-600">
-            R is the risk of one trade: the distance from its entry to its stop. Where shown, the 4/6 and
-            5–6/6 columns belong to runs of the earlier pattern strategies.
+            R is the risk of one trade: the distance from its entry to its stop.
           </p>
         </>
       )}

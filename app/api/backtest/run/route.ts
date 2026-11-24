@@ -5,6 +5,7 @@ import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES, type TrendTrade } fro
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAuthorizedMutation } from "@/lib/apiGuard";
 import { EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
+import { ENGINE_VERSION } from "@/lib/engine/version";
 import type { Candle } from "@/lib/types";
 
 export const maxDuration = 300;
@@ -13,7 +14,7 @@ const DAY_MS = 86_400_000;
 /** Days of trades the quick run covers; the candles before them only warm up the indicators. */
 const TRADED_DAYS = 180;
 const WARMUP_DAYS = 20;
-/** 1-hour candles read: the 180 traded days (about 4,300) and the ones before them that settle the 200 EMA. */
+/** 1-hour candles read: the 180 traded days (about 4,300) and the ones before them that settle the 1-hour structure. */
 const H1_COUNT = 5000;
 
 /** 15-minute candles for a date range, paged — OANDA returns at most 5000 a request. */
@@ -30,9 +31,9 @@ async function fetchM15(pair: string, fromMs: number, toMs: number): Promise<Can
  * POST /api/backtest/run
  *
  * Quick backtest of the system on the last six months, with the scanner's own
- * detection. Stored for the Backtests page. Six months is some three hundred
- * trades of one market mood — a check that the rules run, not evidence about
- * them. The multi-year run lives in scripts/backtest.ts.
+ * detection. Stored for the Backtests page. Six months is one market mood — a
+ * check that the rules run, not evidence about them. The five-year run lives
+ * in scripts/backtest.ts. The multi-year run lives in scripts/backtest.ts.
  */
 export async function POST(req: NextRequest) {
   if (!isAuthorizedMutation(req)) {
@@ -47,8 +48,7 @@ export async function POST(req: NextRequest) {
     const [m15, h1, daily] = await Promise.all([
       fetchM15(pair, from - WARMUP_DAYS * DAY_MS, to),
       fetchCandles({ instrument: pair, granularity: "H1", count: H1_COUNT }),
-      // 250 trading days of momentum before the first traded day
-      fetchCandles({ instrument: pair, granularity: "D", count: 700 }),
+      fetchCandles({ instrument: pair, granularity: "D", count: 400 }),
     ]);
     if (m15.length < 1000) throw new Error("not enough candles returned");
     trades = runTrendBacktest({ pair, m15, h1, daily, from: from / 1000 });
@@ -57,8 +57,6 @@ export async function POST(req: NextRequest) {
   }
 
   const cut = (from + 0.7 * (to - from)) / 1000;
-  // several trades are open together: the drawdown follows the order they closed in
-  trades.sort((a, b) => a.exitTime - b.exitTime);
   const scope = (g: TrendTrade[]) => ({
     inSample: computeMetrics(g.filter((t) => t.entryTime < cut)),
     outOfSample: computeMetrics(g.filter((t) => t.entryTime >= cut)),
@@ -79,8 +77,8 @@ export async function POST(req: NextRequest) {
         range_end: new Date(to).toISOString(),
         pairs: [pair],
         timeframes: [EXECUTION_TIMEFRAME],
-        config: { system: "15-minute trend breakouts, 1:3", days: TRADED_DAYS },
-        notes: `Quick run · last ${TRADED_DAYS} days · 15-minute trend breakouts, 1:3 target`,
+        config: { engine: ENGINE_VERSION, system: "market-structure scalp", days: TRADED_DAYS },
+        notes: `Quick run · last ${TRADED_DAYS} days · market-structure scalp, 1:3, one trade at a time`,
       })
       .select("id")
       .single();

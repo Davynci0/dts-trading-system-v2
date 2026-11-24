@@ -12,9 +12,8 @@ export const EXECUTION_CANDLES = 500;
 
 /**
  * Closed candles of each timeframe a scan reads: enough 15-minute candles for
- * the ATR and the 24-hour channel to be the same on every scan, enough 1-hour
- * history for the 200 EMA to have settled, and the daily candles behind the
- * 50-day average and the 250-day return (weekend candles are dropped, so 400
- * leaves room).
+ * the ATR, the 24-hour channel and the swings to be the same on every scan,
+ * enough 1-hour history for the structure to be the real one, and the daily
+ * candles behind the 50-day average.
  */
-export const SCAN_HISTORY = { m15: 500, h1: 1500, daily: 400 } as const;
+export const SCAN_HISTORY = { m15: 500, h1: 1000, daily: 150 } as const;

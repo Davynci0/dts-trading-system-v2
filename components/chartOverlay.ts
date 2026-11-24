@@ -12,15 +12,17 @@ interface RenderTarget {
 }
 
 export interface OverlayData {
-  /** the system's read: the levels a 15-minute close has to break for a breakout entry */
+  /** the system's read: the levels a 15-minute close has to break for an entry, and the swing a stop would go beyond */
   trend?: {
     direction: "long" | "short";
-    /** one per channel length; `armed` is false while price is already beyond the level */
-    levels: { bars: number; price: number; armed: boolean }[];
-    /** false while the trend readings do not all agree */
+    /** the last swing and each channel; `armed` is false while price is already beyond the level */
+    levels: { label: string; price: number; armed: boolean }[];
+    /** false while the trend readings do not agree */
     ready: boolean;
+    /** the high (sell) / low (buy) of the last two candles: a new trade's stop goes just beyond it */
+    stopSwing?: number | null;
   } | null;
-  /** the open trades' plans (entry/SL/TP), drawn as position tools — several at a time */
+  /** the open trade's plan (entry/SL/TP), drawn as a position tool — the system holds one at a time */
   positions?: {
     /** the trade's name as shown on the chart */
     label: string;
@@ -68,12 +70,11 @@ interface PaneSource {
 }
 
 /**
- * Draws the breakout levels, the open trades and the closed trades on the
- * candle pane. The visual rules:
+ * Draws the entry levels, the level a stop would sit beyond, the open trade
+ * and the closed trades on the candle pane. The visual rules:
  *
- *  - a LEVEL is a line with a tag; the breakout levels are muted while the
- *    trend is not confirmed, and channels of different lengths that share a
- *    level are drawn once;
+ *  - a LEVEL is a line with a tag; the entry levels are muted while the trend
+ *    is not confirmed, and levels that share a price are drawn once;
  *  - an open trade is its entry, stop and target lines over a soft
  *    profit/loss shading;
  *  - labels never overprint each other: one that finds no room is dropped.
@@ -146,15 +147,15 @@ class OverlayPaneView implements IPrimitivePaneView {
             tag(`${h.direction === "long" ? "BUY" : "SELL"} ${result}`, xB + 7, yB - 3, rgb, "left", 4, { small: true });
           }
 
-          // ── the breakout levels: what a 15-minute close has to break ──────
+          // ── the entry levels: what a 15-minute close has to break ─────────
           if (data.trend) {
             const t = data.trend;
             const up = t.direction === "long";
-            // channels of different lengths often share a high/low: one line, the lengths listed together
-            const byPrice = new Map<number, { hours: number[]; armed: boolean }>();
+            // the last swing and the channels often share a high/low: one line, the names listed together
+            const byPrice = new Map<number, { names: string[]; armed: boolean }>();
             for (const l of t.levels) {
-              const g = byPrice.get(l.price) ?? { hours: [], armed: false };
-              g.hours.push((l.bars * 15) / 60);
+              const g = byPrice.get(l.price) ?? { names: [], armed: false };
+              g.names.push(l.label);
               g.armed = g.armed || l.armed;
               byPrice.set(l.price, g);
             }
@@ -163,7 +164,13 @@ class OverlayPaneView implements IPrimitivePaneView {
               if (y == null) continue;
               const live = t.ready && g.armed;
               line(0, W, y, C.trend, live ? 0.7 : 0.3, 1, [8, 4]);
-              tag(`${side(t.direction)} on a 15-min close ${up ? "above" : "below"} ${fmt(price)} (${g.hours.join("/")}-hour ${up ? "high" : "low"})${t.ready ? (g.armed ? "" : " · already beyond") : " · trend not confirmed"}`, 8, y + (up ? -3 : 13), C.trend, "left", 3, { small: true, dim: !live });
+              tag(`${side(t.direction)} on a 15-min close ${up ? "above" : "below"} ${fmt(price)} (${g.names.join(", ")})${t.ready ? (g.armed ? "" : " · already beyond") : " · trend not confirmed"}`, 8, y + (up ? -3 : 13), C.trend, "left", 3, { small: true, dim: !live });
+            }
+            // the last two candles' extreme on the other side: where a new trade's stop would go
+            const yS = t.stopSwing != null ? Y(t.stopSwing) : null;
+            if (yS != null && !data.positions?.length) {
+              line(0, W, yS, C.loss, t.ready ? 0.45 : 0.25, 1, [2, 4]);
+              tag(`${up ? "low" : "high"} of the last two candles ${fmt(t.stopSwing!)} · a new trade's stop goes beyond it`, 8, yS + (up ? 13 : -3), C.loss, "left", 6, { small: true, dim: true });
             }
           }
 
