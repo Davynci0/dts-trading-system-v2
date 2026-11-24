@@ -7,7 +7,8 @@ import { buildTrendSeries, trendStateAt, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TR
  * detection: a signal on a CLOSED 15-minute candle, filled at the next
  * candle's open, the full spread + slippage charged once. Each trade is then
  * followed candle by candle exactly as the live system settles it: the stop is
- * tested first, then the take-profit, then the time limit. One trade at a time
+ * tested first, then the take-profit, then the profit lock moves the stop for
+ * the candles that follow, then the time limit. One trade at a time
  * (TREND_MAX_OPEN).
  */
 export interface TrendTrade {
@@ -23,8 +24,8 @@ export interface TrendTrade {
   rAchieved: number;
   /** 15-minute candles the trade was held for, the entry candle included */
   bars: number;
-  /** time = closed at market at the time limit */
-  outcome: "target" | "stop" | "time" | "open";
+  /** stop = the first stop · lock = the stop after the profit lock moved it · time = closed at market at the time limit */
+  outcome: "target" | "stop" | "lock" | "time" | "open";
   trigger: TrendTrigger;
 }
 
@@ -65,15 +66,16 @@ export function runTrendBacktest(opts: {
     if (open.length >= TREND_MAX_OPEN || open.some((t) => t.dir !== dir)) continue;
 
     const e = i + 1;
+    let stop = setup.stopLoss;
     let exitPrice = NaN;
     let outcome: TrendTrade["outcome"] = "open";
     let k = e;
     for (; k < s.n; k++) {
       const c = m15[k];
-      if (dir === 1 ? c.low <= setup.stopLoss : c.high >= setup.stopLoss) {
+      if (dir === 1 ? c.low <= stop : c.high >= stop) {
         // a gap through the stop fills at the open, not at the stop
-        exitPrice = dir === 1 ? Math.min(setup.stopLoss, c.open) : Math.max(setup.stopLoss, c.open);
-        outcome = "stop";
+        exitPrice = dir === 1 ? Math.min(stop, c.open) : Math.max(stop, c.open);
+        outcome = stop === setup.stopLoss ? "stop" : "lock";
         break;
       }
       if (dir === 1 ? c.high >= setup.takeProfit : c.low <= setup.takeProfit) {
@@ -81,6 +83,8 @@ export function runTrendBacktest(opts: {
         outcome = "target";
         break;
       }
+      // the profit lock: a candle that reaches the trigger moves the stop for the candles after it
+      if (dir === 1 ? c.high >= setup.lockTrigger : c.low <= setup.lockTrigger) stop = setup.lockStop;
       // the close of the last candle the trade may be held for
       if (k - e + 1 >= TREND_MAX_HOLD_BARS) {
         exitPrice = c.close;

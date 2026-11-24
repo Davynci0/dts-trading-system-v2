@@ -20,8 +20,9 @@ export interface Signal {
   /** the key of the 15-minute signal candle — a candle is traded once */
   variant?: string | null;
   confluence_strategies?: string[] | null;
-  /** trades of the removed trailing-stop systems: the trailing distance and where the stop stands */
+  /** trades of the removed trailing-stop systems: the trailing distance */
   trail_distance?: number | null;
+  /** where the stop stands once it has been moved — by the profit lock, or by a trailing stop of a removed system */
   trail_stop?: number | null;
   entry: number;
   stop_loss: number;

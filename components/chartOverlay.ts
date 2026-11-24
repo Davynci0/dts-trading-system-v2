@@ -30,7 +30,7 @@ export interface OverlayData {
     entry: number;
     stopLoss: number;
     takeProfit: number;
-    /** where a trailing stop stands now, when it has moved past the stop loss */
+    /** where the stop stands now, once the profit lock has moved it */
     stopNow?: number | null;
     startTime: number;
     rMultiple: number;
@@ -186,7 +186,7 @@ class OverlayPaneView implements IPrimitivePaneView {
             const dash: number[] = [];
             line(x0, W, yT, C.win, 0.95, 1.5, dash);
             line(x0, W, yE, C.ink, 0.95, 1.5, dash);
-            // once a trailing stop has moved, it is the stop that counts; the first one fades
+            // once the stop has been moved, it is the one that counts; the first one fades
             const trailed = p.stopNow != null && p.stopNow !== p.stopLoss;
             line(x0, W, yS, C.loss, trailed ? 0.4 : 0.95, trailed ? 1 : 1.5, trailed ? [4, 4] : dash);
             tag(`TARGET ${fmt(p.takeProfit)} · +${p.rMultiple.toFixed(p.rMultiple % 1 ? 2 : 0)}R`, W - 4, yT - 3, C.win, "right", 0);
@@ -195,7 +195,7 @@ class OverlayPaneView implements IPrimitivePaneView {
             const yN = trailed ? Y(p.stopNow!) : null;
             if (yN != null) {
               line(x0, W, yN, C.loss, 0.95, 1.5, dash);
-              tag(`STOP NOW ${fmt(p.stopNow!)} (trailing)`, W - 4, yN - 3, C.loss, "right", 0);
+              tag(`STOP NOW ${fmt(p.stopNow!)} (moved — profit locked)`, W - 4, yN - 3, C.loss, "right", 0);
             }
           }
 

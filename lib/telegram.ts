@@ -60,6 +60,11 @@ export async function sendTrendSignal(opts: {
   /** where the stop comes from: the swing it sits beyond, or the limit it was set at */
   stopWhy: string;
   targetR: number;
+  /** the profit lock: when price reaches `lockTrigger`, the stop is moved to `lockStop` */
+  lockTrigger: number;
+  lockStop: number;
+  lockAtR: number;
+  lockToR: number;
   /** hours after which an undecided trade is closed at market */
   holdHours: number;
   trendDays: number;
@@ -76,11 +81,25 @@ export async function sendTrendSignal(opts: {
       `*Entry:* \`${px(opts.entry)}\` (at market)`,
       `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(risk)} away, ${opts.stopWhy}`,
       `*Take profit:* \`${px(opts.takeProfit)}\` — ${px(reward)} away (1:${opts.targetR})`,
+      `*Profit lock:* when price reaches \`${px(opts.lockTrigger)}\` (+${opts.lockAtR}R), move the stop to \`${px(opts.lockStop)}\` (+${opts.lockToR}R). You will get a message when it does.`,
       `Entry: ${opts.why}`,
       `Trend: 1-hour structure ${up ? "bullish (higher highs)" : "bearish (lower lows)"}, daily ${up ? "above" : "below"} its ${opts.trendDays}-day average`,
       sizeLine(risk, opts.accountBalance, opts.riskPct),
-      `Close the trade at market if neither level is hit within ${opts.holdHours} hours. One trade at a time: no new signal until this one is closed. About four in ten win.`,
+      `Close the trade at market if neither level is hit within ${opts.holdHours} hours. One trade at a time: no new signal until this one is closed. About two in three close in profit — half of them at the moved stop, with a small gain.`,
       `_Signal only — review and execute manually._`,
+    ].join("\n")
+  );
+}
+
+/** The profit lock has been reached: the stop of the open trade is to be moved into profit. */
+export async function sendStopMoved(opts: { pair: string; direction: "long" | "short"; entry: number; stop: number; takeProfit: number; lockedR: number }): Promise<void> {
+  const px = (n: number) => n.toFixed(2);
+  await sendTelegramMessage(
+    [
+      `🔒 *MOVE YOUR STOP: ${pairLabel(opts.pair)} ${opts.direction === "long" ? "BUY" : "SELL"}* from \`${px(opts.entry)}\``,
+      `*New stop loss:* \`${px(opts.stop)}\` — ${px(Math.abs(opts.stop - opts.entry))} in profit (+${opts.lockedR}R)`,
+      `Take profit stays at \`${px(opts.takeProfit)}\`.`,
+      `If price is already back beyond the new stop, close the trade at market.`,
     ].join("\n")
   );
 }

@@ -17,8 +17,11 @@ import { WebSocket } from "ws";
 import { computeMetrics, type ScopedMetrics } from "@/lib/backtest/metrics";
 import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES, type TrendTrade } from "@/lib/backtest/trend";
 import {
+  TREND_ADX_MAX,
   TREND_BREAKOUT_BARS,
   TREND_DAYS,
+  TREND_LOCK_AT_R,
+  TREND_LOCK_TO_R,
   TREND_MAX_COST_SHARE,
   TREND_MAX_HOLD_BARS,
   TREND_MAX_OPEN,
@@ -99,7 +102,7 @@ async function save(trades: T[]): Promise<void> {
       range_end: new Date(END * 1000).toISOString(),
       pairs: [PAIR],
       timeframes: [EXECUTION_TIMEFRAME],
-      notes: `${BACKTEST_YEARS} years · market-structure scalp, 1:${TREND_TARGET_R}, one trade at a time · XAU/USD`,
+      notes: `${BACKTEST_YEARS} years · market-structure scalp, 1:${TREND_TARGET_R} with a profit lock, one trade at a time · XAU/USD`,
       config: {
         engine: ENGINE_VERSION,
         years: BACKTEST_YEARS,
@@ -112,6 +115,8 @@ async function save(trades: T[]): Promise<void> {
           momentumAtr: TREND_MOMENTUM_ATR,
           riskAtr: [TREND_MIN_RISK_ATR, TREND_MAX_RISK_ATR],
           targetR: TREND_TARGET_R,
+          lock: [TREND_LOCK_AT_R, TREND_LOCK_TO_R],
+          adxMax: TREND_ADX_MAX,
           maxHoldBars: TREND_MAX_HOLD_BARS,
           maxOpen: TREND_MAX_OPEN,
           maxCostShare: TREND_MAX_COST_SHARE,
@@ -143,7 +148,11 @@ async function main() {
   console.log(line("  …costs doubled", stressed.filter(between(RECENT, END)), RECENT, END));
 
   const count = (o: T["outcome"]) => base.filter((t) => t.outcome === o).length;
-  console.log(`\nexits: stop ${count("stop")}, take-profit ${count("target")}, five-hour limit ${count("time")}, still open ${count("open")}`);
+  console.log(`\nexits: first stop ${count("stop")}, moved stop (profit locked) ${count("lock")}, take-profit ${count("target")}, five-hour limit ${count("time")}, still open ${count("open")}`);
+  const wins = base.filter((t) => t.rAchieved > 0);
+  const losses = base.filter((t) => t.rAchieved <= 0);
+  const mean = (g: T[]) => (g.length ? g.reduce((sum, t) => sum + t.rAchieved, 0) / g.length : 0);
+  console.log(`average win ${mean(wins).toFixed(2)}R, average loss ${mean(losses).toFixed(2)}R`);
   // in trading hours: a trade open over the weekend is not held for the hours the market is shut
   const held = base.map((t) => t.bars / 4).sort((a, b) => a - b);
   if (held.length) console.log(`trading hours held: median ${held[Math.floor(held.length / 2)].toFixed(2)}, longest ${held[held.length - 1].toFixed(2)}`);

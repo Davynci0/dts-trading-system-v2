@@ -28,7 +28,16 @@ import { tradeCost } from "./instruments";
  *  - THE EXIT: the stop, a take-profit at 3 times the risk, or the clock — a
  *    trade that has reached neither after 20 candles (five hours) is closed
  *    at market.
+ *  - THE PROFIT LOCK: once price has gone 0.4R the trade's way, the stop is
+ *    moved to 0.2R in profit. Half of all trades end there with a small gain
+ *    instead of coming back to the stop; the ones that keep going still have
+ *    the 1:3 target.
  *  - NO TRADE when the spread and slippage would be more than 6% of the risk.
+ *  - FOUR CONDITIONS THAT COME FROM THE LOSING TRADES — each lost in both
+ *    halves of the test: an exhausted trend (1-hour ADX 40 or more), the
+ *    London morning (07:00–12:00 UTC), an entry in the wrong half of the last
+ *    24 hours' range, and a price within 1% of the 50-day average (no real
+ *    daily trend).
  *
  * Tested on five years of gold (scripts/backtest.ts); see the README for what
  * was tried and what the numbers are.
@@ -53,6 +62,18 @@ export const TREND_MAX_RISK_ATR = 2;
 export const TREND_TARGET_R = 3;
 /** A trade that has reached neither level by the close of this many 15-minute candles (five hours) is closed at market. */
 export const TREND_MAX_HOLD_BARS = 20;
+/** Profit lock: once price has gone this many R the trade's way, the stop is moved to this many R in profit. */
+export const TREND_LOCK_AT_R = 0.4;
+export const TREND_LOCK_TO_R = 0.2;
+/** No new trade once the 1-hour ADX is at or above this — the move is exhausted. */
+export const TREND_ADX_MAX = 40;
+/** No new trade on a candle that closes in these UTC hours, from the first up to the second: the London morning. */
+export const TREND_QUIET_HOURS_UTC = [7, 12] as const;
+/** The entry has to be in the trend's half of the range of this many last candles (24 hours). */
+export const TREND_RANGE_BARS = 96;
+export const TREND_RANGE_MIN = 0.5;
+/** Price has to be at least this far beyond the 50-day average on the trend's side, in percent. */
+export const TREND_MIN_DISTANCE_PCT = 1;
 /** Trades that may be open together. */
 export const TREND_MAX_OPEN = 1;
 /** No trade when the spread and slippage are more than this share of the risk. */
@@ -157,8 +178,12 @@ export interface TrendSeries {
   /** per breakout length: highest high / lowest low of that many candles BEFORE each candle */
   channelHigh: Float64Array[];
   channelLow: Float64Array[];
-  /** the 1-hour structure as it stood when each 15-minute candle closed (last CLOSED 1-hour candle) */
+  /** highest high / lowest low of the TREND_RANGE_BARS candles BEFORE each candle */
+  rangeHigh: Float64Array;
+  rangeLow: Float64Array;
+  /** the 1-hour structure and ADX as they stood when each 15-minute candle closed (last CLOSED 1-hour candle) */
   h1Trend: Int8Array;
+  h1Adx: Float64Array;
   /** +1 / −1 / 0 from the last CLOSED daily candle, and the average it was read against */
   dailyTrend: Int8Array;
   dailyAverage: Float64Array;
@@ -185,6 +210,43 @@ function wilderAtr(candles: Candle[]): Float64Array {
   return out;
 }
 
+/** Wilder's ADX, 14 periods. */
+function wilderAdx(candles: Candle[]): Float64Array {
+  const n = candles.length;
+  const out = new Float64Array(n).fill(NaN);
+  const P = PERIOD;
+  let trSum = 0;
+  let plusSum = 0;
+  let minusSum = 0;
+  let adx = 0;
+  for (let i = 1; i < n; i++) {
+    const c = candles[i];
+    const p = candles[i - 1];
+    const up = c.high - p.high;
+    const down = p.low - c.low;
+    const plus = up > down && up > 0 ? up : 0;
+    const minus = down > up && down > 0 ? down : 0;
+    const tr = Math.max(c.high - c.low, Math.abs(c.high - p.close), Math.abs(c.low - p.close));
+    if (i <= P) {
+      trSum += tr;
+      plusSum += plus;
+      minusSum += minus;
+    } else {
+      trSum = trSum - trSum / P + tr;
+      plusSum = plusSum - plusSum / P + plus;
+      minusSum = minusSum - minusSum / P + minus;
+    }
+    if (i >= P) {
+      const pdi = (100 * plusSum) / trSum;
+      const mdi = (100 * minusSum) / trSum;
+      const dx = pdi + mdi === 0 ? 0 : (100 * Math.abs(pdi - mdi)) / (pdi + mdi);
+      adx = i < 2 * P ? adx + dx / P : (adx * (P - 1) + dx) / P;
+      if (i >= 2 * P - 1) out[i] = adx;
+    }
+  }
+  return out;
+}
+
 /**
  * Everything the system reads, aligned to the 15-minute candles. All three
  * series are CLOSED candles, oldest first; a 1-hour or daily candle is used
@@ -200,7 +262,10 @@ export function buildTrendSeries(input: { m15: Candle[]; h1: Candle[]; daily: Ca
     structure: readStructure(candles),
     channelHigh: [],
     channelLow: [],
+    rangeHigh: new Float64Array(n).fill(NaN),
+    rangeLow: new Float64Array(n).fill(NaN),
     h1Trend: new Int8Array(n),
+    h1Adx: new Float64Array(n).fill(NaN),
     dailyTrend: new Int8Array(n),
     dailyAverage: new Float64Array(n).fill(NaN),
   };
@@ -222,13 +287,27 @@ export function buildTrendSeries(input: { m15: Candle[]; h1: Candle[]; daily: Ca
     s.channelLow.push(lo);
   }
 
-  // the 1-hour structure, carried to each 15-minute candle from the last 1-hour candle closed by then
+  for (let i = TREND_RANGE_BARS; i < n; i++) {
+    let h = -Infinity;
+    let l = Infinity;
+    for (let k = i - TREND_RANGE_BARS; k < i; k++) {
+      if (candles[k].high > h) h = candles[k].high;
+      if (candles[k].low < l) l = candles[k].low;
+    }
+    s.rangeHigh[i] = h;
+    s.rangeLow[i] = l;
+  }
+
+  // the 1-hour structure and ADX, carried to each 15-minute candle from the last 1-hour candle closed by then
   const h1 = input.h1;
   const hourly = readStructure(h1);
+  const adx = wilderAdx(h1);
   let j = -1;
   for (let i = 0; i < n; i++) {
     const now = candles[i].time + M15;
     while (j + 1 < h1.length && h1[j + 1].time + H1 <= now) j++;
+    if (j < 0) continue;
+    s.h1Adx[i] = adx[j];
     // not before there is enough 1-hour history for the structure to be the real one
     if (j >= TREND_MIN_H1_CANDLES) s.h1Trend[i] = hourly.dir[j];
   }
@@ -266,6 +345,9 @@ export interface TrendSetup {
   takeProfit: number;
   /** the stop distance (1R), in price */
   risk: number;
+  /** the profit lock: once price reaches `lockTrigger`, the stop is moved to `lockStop` */
+  lockTrigger: number;
+  lockStop: number;
   /** the level the stop is set beyond: the high (sell) or low (buy) of the last two candles */
   swing: number;
   /** "swing" when the stop sits just beyond that level; "nearest" / "furthest" when the level was closer or further than the limits and the stop was set at the limit */
@@ -289,6 +371,12 @@ export interface TrendState {
   swingLow: number | null;
   /** the level a new trade's stop would go beyond right now, on the daily trend's side */
   stopLevel: number | null;
+  /** the 1-hour ADX */
+  adx: number | null;
+  /** where the close sits in the last 24 hours' range, 0–1, measured in the daily trend's direction (1 = at the extreme) */
+  rangePosition: number | null;
+  /** how far price is beyond the 50-day average on the daily trend's side, in percent (negative = on the wrong side) */
+  distancePct: number | null;
   atr: number | null;
   /** spread + slippage as a share of the widest stop a new trade can have — above the limit, no trade is possible */
   costShare: number | null;
@@ -327,6 +415,17 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
   // costs against the widest stop a trade may have: above the limit there, no trade is possible at all
   const costShare = atr > 0 ? tradeCost(pair) / (TREND_MAX_RISK_ATR * atr) : NaN;
   const affordable = costShare <= TREND_MAX_COST_SHARE;
+  // the four conditions from the losing trades
+  const adx = s.h1Adx[i];
+  const fresh = adx < TREND_ADX_MAX;
+  const hour = new Date((c.time + M15) * 1000).getUTCHours();
+  const quiet = hour >= TREND_QUIET_HOURS_UTC[0] && hour < TREND_QUIET_HOURS_UTC[1];
+  const top = Math.max(s.rangeHigh[i], c.high);
+  const bottom = Math.min(s.rangeLow[i], c.low);
+  const rangePosition = top > bottom ? (dir === 1 ? (c.close - bottom) / (top - bottom) : (top - c.close) / (top - bottom)) : NaN;
+  const placed = rangePosition >= TREND_RANGE_MIN;
+  const distancePct = (dir * (c.close - s.dailyAverage[i])) / c.close * 100;
+  const clear = distancePct >= TREND_MIN_DISTANCE_PCT;
 
   // which entry, if any, this candle is
   const broke = i >= 1 && st.leg[i] !== st.leg[i - 1] ? st.dir[i] : 0;
@@ -393,11 +492,20 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
   }
 
   const pct = (x: number) => (Number.isFinite(x) ? `${(x * 100).toFixed(1)}%` : "?");
+  const two = (h: number) => `${String(h).padStart(2, "0")}:00`;
+  const quietHours = `${two(TREND_QUIET_HOURS_UTC[0])}–${two(TREND_QUIET_HOURS_UTC[1])}`;
   const checks = [
     { label: `Daily trend ${word(daily)} (close vs ${TREND_DAYS}-day average)`, met: daily !== 0 },
     {
       label: `1-hour structure ${shape(hourly)}${daily !== 0 && hourly !== 0 && hourly !== daily ? " — against the daily trend" : ""}`,
       met: agreed,
+    },
+    { label: `Trend not exhausted: 1-hour ADX ${Number.isFinite(adx) ? adx.toFixed(0) : "?"} (must be under ${TREND_ADX_MAX})`, met: fresh },
+    { label: `A real daily trend: price ${Number.isFinite(distancePct) ? Math.max(distancePct, 0).toFixed(1) : "?"}% ${dir === 1 ? "above" : "below"} the ${TREND_DAYS}-day average (needs ${TREND_MIN_DISTANCE_PCT}%)`, met: clear },
+    { label: `Not the London morning (${quietHours} UTC)`, met: !quiet },
+    {
+      label: `In the ${dir === 1 ? "upper" : "lower"} half of the last 24 hours' range (now ${Number.isFinite(rangePosition) ? (rangePosition * 100).toFixed(0) : "?"}% of the way ${dir === 1 ? "up" : "down"})`,
+      met: placed,
     },
     { label: `Costs ${pct(costShare)} of the widest stop (limit ${TREND_MAX_COST_SHARE * 100}%)`, met: affordable },
     {
@@ -411,6 +519,11 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
   else if (daily === 0) blocked = "the daily trend is not known yet";
   else if (hourly === 0) blocked = "not enough 1-hour history yet";
   else if (hourly !== daily) blocked = `the 1-hour structure is ${shape(hourly)}, against the daily trend (${word(daily)})`;
+  else if (!Number.isFinite(adx)) blocked = "not enough 1-hour history yet";
+  else if (!fresh) blocked = `the trend is exhausted — 1-hour ADX ${adx.toFixed(0)}, no new trade at ${TREND_ADX_MAX} or more`;
+  else if (!clear) blocked = `no real daily trend — price is ${Math.max(distancePct, 0).toFixed(1)}% ${dir === 1 ? "above" : "below"} the ${TREND_DAYS}-day average, it needs ${TREND_MIN_DISTANCE_PCT}%`;
+  else if (quiet) blocked = `the London morning (${quietHours} UTC) — no new trade`;
+  else if (!placed) blocked = `price is in the ${dir === 1 ? "lower" : "upper"} half of the last 24 hours' range — ${dir === 1 ? "buys" : "sells"} wait for the ${dir === 1 ? "upper" : "lower"} half`;
   else if (!affordable) blocked = `the candles are too small — costs would be ${pct(costShare)} of even the widest stop (limit ${TREND_MAX_COST_SHARE * 100}%)`;
 
   let setup: TrendSetup | null = null;
@@ -424,6 +537,8 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
       stopLoss: price - dir * plan.risk,
       takeProfit: price + dir * TREND_TARGET_R * plan.risk,
       risk: plan.risk,
+      lockTrigger: price + dir * TREND_LOCK_AT_R * plan.risk,
+      lockStop: price + dir * TREND_LOCK_TO_R * plan.risk,
       swing: plan.swing,
       stopBasis: plan.basis,
       atr,
@@ -440,6 +555,9 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
     swingHigh: finite(st.swingHigh[i]),
     swingLow: finite(st.swingLow[i]),
     stopLevel: daily !== 0 ? finite(stopLevel) : null,
+    adx: finite(adx),
+    rangePosition: finite(rangePosition),
+    distancePct: finite(distancePct),
     atr: finite(atr),
     costShare: finite(costShare),
     side,

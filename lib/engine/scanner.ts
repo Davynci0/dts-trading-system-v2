@@ -6,6 +6,8 @@ import {
   buildTrendSeries,
   trendStateAt,
   TREND_DAYS,
+  TREND_LOCK_AT_R,
+  TREND_LOCK_TO_R,
   TREND_MAX_HOLD_BARS,
   TREND_MAX_OPEN,
   TREND_MAX_RISK_ATR,
@@ -33,8 +35,8 @@ export interface ScanSummary {
 }
 
 /** Share of the account one trade risks. One trade is open at a time; the
- *  five-year backtest's worst drawdown was 41 times the risk of one trade and
- *  its longest losing run 12 trades, so the default is half a percent.
+ *  five-year backtest's worst drawdown was 27 times the risk of one trade and
+ *  its longest losing run 7 trades, so the default is half a percent.
  *  Override with RISK_PCT (e.g. 0.01 for one percent); the older name
  *  FIB_RISK_PCT is still read. */
 export const RISK_PCT = (() => {
@@ -191,7 +193,7 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
         take_profit: setup.takeProfit,
         r_multiple: TREND_TARGET_R,
         sl_basis: stopWhy,
-        tp_basis: `${TREND_TARGET_R} × the risk; closed at market after ${holdHours} hours if neither is hit`,
+        tp_basis: `${TREND_TARGET_R} × the risk; the stop moves to +${TREND_LOCK_TO_R}R once price reaches +${TREND_LOCK_AT_R}R (${setup.lockTrigger.toFixed(2)}); closed at market after ${holdHours} hours if neither is hit`,
         confidence: state.checks.filter((x) => x.met).length,
         confirmations: { ...Object.fromEntries(state.checks.map((x) => [x.label, x.met])), [`Entry: ${setup.trigger}`]: true },
       });
@@ -207,6 +209,10 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
           why,
           stopWhy,
           targetR: TREND_TARGET_R,
+          lockTrigger: setup.lockTrigger,
+          lockStop: setup.lockStop,
+          lockAtR: TREND_LOCK_AT_R,
+          lockToR: TREND_LOCK_TO_R,
           holdHours,
           trendDays: TREND_DAYS,
           accountBalance,

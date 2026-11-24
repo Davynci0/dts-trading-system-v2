@@ -14,6 +14,9 @@ export interface TrendSummary {
   swingLow: number | null;
   /** the level a new trade's stop would go beyond right now */
   stopLevel: number | null;
+  adx: number | null;
+  rangePosition: number | null;
+  distancePct: number | null;
   atr: number | null;
   costShare: number | null;
   side: "long" | "short" | null;
@@ -24,10 +27,13 @@ export interface TrendSummary {
   minRiskAtr: number;
   maxRiskAtr: number;
   targetR: number;
+  /** the profit lock, in R: at `lockAtR` in favour the stop moves to `lockToR` in profit */
+  lockAtR: number;
+  lockToR: number;
   maxOpen: number;
   holdHours: number;
   readAt: number;
-  setup: { direction: "long" | "short"; entry: number; stopLoss: number; takeProfit: number; trigger: string } | null;
+  setup: { direction: "long" | "short"; entry: number; stopLoss: number; takeProfit: number; trigger: string; lockTrigger: number; lockStop: number } | null;
 }
 
 const when = (iso: string) => new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
@@ -43,7 +49,7 @@ export default function TrendTracker({ trend, signals, price, digits = 2 }: { tr
   const px = (n: number) => n.toFixed(digits);
   const open = signals.find((s) => isLiveSignal(s) && !s.outcome && s.status === "active");
   const met = trend ? trend.checks.filter((c) => c.met).length : 0;
-  const total = trend?.checks.length ?? 4;
+  const total = trend?.checks.length ?? 8;
   const headline = !trend
     ? null
     : open
@@ -86,8 +92,16 @@ export default function TrendTracker({ trend, signals, price, digits = 2 }: { tr
                 <span className="text-[10px] text-neutral-500">since {when(open.created_at)}</span>
               </div>
               <div className="mt-1 font-mono text-neutral-300">
-                SL {px(open.stop_loss)} · TP {px(open.take_profit)}
+                SL {px(open.trail_stop ?? open.stop_loss)} · TP {px(open.take_profit)}
               </div>
+              {open.trail_stop != null ? (
+                <div className="mt-0.5 font-mono text-emerald-300">Stop moved from {px(open.stop_loss)} — profit locked</div>
+              ) : (
+                <div className="mt-0.5 text-[10px] text-neutral-400">
+                  At {px(open.entry + (open.direction === "long" ? 1 : -1) * trend.lockAtR * Math.abs(open.entry - open.stop_loss))} the stop moves to{" "}
+                  {px(open.entry + (open.direction === "long" ? 1 : -1) * trend.lockToR * Math.abs(open.entry - open.stop_loss))}
+                </div>
+              )}
               <div className="mt-0.5 text-[10px] text-neutral-400">
                 {price != null && `Now ${px(price)} · ${(((open.direction === "long" ? 1 : -1) * (price - open.entry)) / Math.abs(open.entry - open.stop_loss)).toFixed(2)}R · `}
                 closes at market by {clock(new Date(open.created_at).getTime() + trend.holdHours * 3600_000)} if neither is hit
@@ -127,7 +141,7 @@ export default function TrendTracker({ trend, signals, price, digits = 2 }: { tr
           </ul>
           <p className="mt-3 text-[10px] leading-relaxed text-neutral-600">
             Read on the 15-minute candle that closed at {clock(trend.readAt * 1000)}. The stop goes just beyond the {up ? "low" : "high"} of the last two candles
-            {stopSwing != null ? ` (${px(stopSwing)})` : ""}, never closer than {trend.minRiskAtr} ATR or further than {trend.maxRiskAtr} ATR. Take-profit 1:{trend.targetR}; closed at market after {trend.holdHours} hours. One trade at a time; about four in ten win.
+            {stopSwing != null ? ` (${px(stopSwing)})` : ""}, never closer than {trend.minRiskAtr} ATR or further than {trend.maxRiskAtr} ATR. Take-profit 1:{trend.targetR}; at +{trend.lockAtR}R the stop moves to +{trend.lockToR}R; closed at market after {trend.holdHours} hours. One trade at a time; about two in three close in profit.
           </p>
         </>
       )}

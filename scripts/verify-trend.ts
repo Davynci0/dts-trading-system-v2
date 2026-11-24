@@ -11,17 +11,24 @@ import {
   buildTrendSeries,
   readStructure,
   trendStateAt,
+  TREND_ADX_MAX,
   TREND_BREAKOUT_BARS,
   TREND_DAYS,
+  TREND_LOCK_AT_R,
+  TREND_LOCK_TO_R,
   TREND_MAX_COST_SHARE,
   TREND_MAX_HOLD_BARS,
   TREND_MAX_OPEN,
   TREND_MAX_RISK_ATR,
   TREND_MIN_CANDLES,
+  TREND_MIN_DISTANCE_PCT,
   TREND_MIN_H1_CANDLES,
   TREND_MIN_RISK_ATR,
   TREND_MOMENTUM_ATR,
   TREND_MOMENTUM_CLOSE,
+  TREND_QUIET_HOURS_UTC,
+  TREND_RANGE_BARS,
+  TREND_RANGE_MIN,
   TREND_STOP_BARS,
   TREND_STOP_BUFFER_ATR,
   TREND_SWING,
@@ -29,7 +36,7 @@ import {
 } from "../lib/analysis/trend";
 import { tradeCost } from "../lib/analysis/instruments";
 import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES } from "../lib/backtest/trend";
-import { settleSignal } from "../lib/engine/outcomes";
+import { followTrade, LIVE_LOCK, settleSignal } from "../lib/engine/outcomes";
 import { sendBlock, type EarlierSignal } from "../lib/engine/scanner";
 import { isLiveSignal, TREND_STRATEGY, type Candle } from "../lib/types";
 
@@ -221,6 +228,28 @@ console.log("\nrules, on the generated market");
     if (series.h1Trend[i] !== hourly.dir[j]) carried = false;
   }
   check("a 1-hour candle is only read once it has closed", carried);
+
+  // the four conditions that come from the losing trades
+  check(`never once the 1-hour ADX is ${TREND_ADX_MAX} or more`, TREND_ADX_MAX === 40 && ok((x) => series.h1Adx[x.i] < 40) && states.some((s) => s.blocked?.startsWith("the trend is exhausted")));
+  const closeHour = (i: number) => new Date((m15[i].time + M15) * 1000).getUTCHours();
+  check("never on a candle that closes in the London morning, 07:00 to 12:00 UTC", TREND_QUIET_HOURS_UTC.join() === "7,12" && ok((x) => closeHour(x.i) < 7 || closeHour(x.i) >= 12) && states.some((s) => s.blocked?.startsWith("the London morning")));
+  check(
+    "only in the trend's half of the last 24 hours' range",
+    TREND_RANGE_BARS === 96 &&
+      TREND_RANGE_MIN === 0.5 &&
+      ok((x, d) => {
+        const window = m15.slice(x.i - 96, x.i + 1);
+        const top = Math.max(...window.map((c) => c.high));
+        const bottom = Math.min(...window.map((c) => c.low));
+        const pos = d === 1 ? (m15[x.i].close - bottom) / (top - bottom) : (top - m15[x.i].close) / (top - bottom);
+        return pos >= 0.5 && near(pos, x.s.rangePosition!, 1e-9);
+      }) &&
+      states.some((s) => s.blocked?.startsWith("price is in the"))
+  );
+  check(
+    `only with price at least ${TREND_MIN_DISTANCE_PCT}% beyond the 50-day average, on the trend's side`,
+    TREND_MIN_DISTANCE_PCT === 1 && ok((x, d) => (d * (m15[x.i].close - series.dailyAverage[x.i])) / m15[x.i].close >= 0.01) && states.some((s) => s.blocked?.startsWith("no real daily trend"))
+  );
   check(
     "a break of structure is the candle that closes beyond the last swing, in the trend's direction",
     setups.filter((x) => x.s.setup!.trigger === "break of structure").every(({ i, s }) => {
@@ -275,13 +304,17 @@ console.log("\nrules, on the generated market");
       basis("nearest").every((x) => near(x.s.setup!.risk, 0.75 * series.atr[x.i])) &&
       basis("furthest").every((x) => near(x.s.setup!.risk, 2 * series.atr[x.i]))
   );
+  check(
+    "the profit lock: the trigger is 0.4R beyond the entry and the moved stop 0.2R beyond it",
+    TREND_LOCK_AT_R === 0.4 && TREND_LOCK_TO_R === 0.2 && ok((x, d) => near(x.s.setup!.lockTrigger, x.s.setup!.entry + d * 0.4 * x.s.setup!.risk) && near(x.s.setup!.lockStop, x.s.setup!.entry + d * 0.2 * x.s.setup!.risk))
+  );
   check("the stop is the risk away from the entry and the take-profit three times that", TREND_TARGET_R === 3 && ok((x, d) => near(x.s.setup!.stopLoss, x.s.setup!.entry - d * x.s.setup!.risk) && near(x.s.setup!.takeProfit, x.s.setup!.entry + d * 3 * x.s.setup!.risk)));
   check(`costs are never more than ${TREND_MAX_COST_SHARE * 100}% of the risk`, TREND_MAX_COST_SHARE === 0.06 && ok((x) => tradeCost("XAU_USD") / x.s.setup!.risk <= 0.06));
   check("the entry is the candle's close and the signal is timed at that close", ok((x) => x.s.setup!.entry === m15[x.i].close && x.s.setup!.time === m15[x.i].time + M15 && x.s.setup!.key === `trend:${m15[x.i].time}`));
   check("nothing is signalled while a condition is unmet", states.every((s) => !(s.blocked && s.setup)) && states.every((s) => !s.setup || s.checks.every((c) => c.met)));
   check("no signal before the history has settled", setups.every((x) => x.i >= TREND_MIN_CANDLES && m15[x.i].time + M15 >= h1[TREND_MIN_H1_CANDLES].time + H1));
   const pending = states.findIndex((s, i) => i > 4 * TREND_MIN_H1_CANDLES + LONGEST && !s.blocked && !s.setup && s.levels.length === TREND_BREAKOUT_BARS.length + 1);
-  check("with the trend confirmed and no entry yet, only the entry is missing", pending > 0 && states[pending].checks.length === 4 && states[pending].checks.filter((c) => !c.met).length === 1 && !states[pending].checks[3].met);
+  check("with the trend confirmed and no entry yet, only the entry is missing", pending > 0 && states[pending].checks.length === 8 && states[pending].checks.filter((c) => !c.met).length === 1 && !states[pending].checks[7].met);
   const lvl = states[pending];
   check(
     "the levels shown are the ones the NEXT candle has to close beyond: the last swing and each channel",
@@ -329,7 +362,7 @@ console.log("\nrules, on the generated market");
   const small = trendStateAt(buildTrendSeries({ m15: tenth(m15.slice(0, one.i + 1)), h1: tenth(h1.filter((c) => c.time + H1 <= end)), daily: tenth(daily) }), one.i);
   check(
     "when costs are more than 6% of even the widest stop there is no trade, and the panel says why",
-    near(small.costShare!, 10 * states[one.i].costShare!, 1e-9) && small.costShare! > 0.06 && small.setup == null && !!small.blocked?.startsWith("the candles are too small") && small.checks[2].met === false
+    near(small.costShare!, 10 * states[one.i].costShare!, 1e-9) && small.costShare! > 0.06 && small.setup == null && !!small.blocked?.startsWith("the candles are too small") && small.checks[6].met === false && small.checks.slice(0, 6).every((c) => c.met)
   );
 }
 
@@ -357,7 +390,33 @@ const trades = runTrendBacktest({ pair: "XAU_USD", m15, h1, daily });
     "the result is the price move less the full spread + slippage, in units of the stop",
     trades.every((t) => near(t.rAchieved, ((t.direction === "long" ? 1 : -1) * (t.exitPrice - t.entry) - cost) / Math.abs(t.entry - t.stopLoss), 1e-9))
   );
-  check("a stopped trade loses 1R plus costs, or more on a gap", trades.filter((t) => t.outcome === "stop").every((t) => t.rAchieved <= -1 - cost / Math.abs(t.entry - t.stopLoss) + 1e-9));
+  check("a trade stopped at its first stop loses 1R plus costs, or more on a gap", trades.some((t) => t.outcome === "stop") && trades.filter((t) => t.outcome === "stop").every((t) => t.rAchieved <= -1 - cost / Math.abs(t.entry - t.stopLoss) + 1e-9));
+  const locked = trades.filter((t) => t.outcome === "lock");
+  check(
+    "the profit lock: a trade stopped at the moved stop first reached +0.4R on an EARLIER candle, and makes 0.2R less costs (less on a gap)",
+    locked.length > 10 &&
+      locked.every((t) => {
+        const e = m15.findIndex((x) => x.time === t.entryTime);
+        const d = t.direction === "long" ? 1 : -1;
+        const risk = Math.abs(t.entry - t.stopLoss);
+        const trigger = t.entry + d * 0.4 * risk;
+        const before = m15.slice(e, e + t.bars - 1);
+        const reached = before.some((c) => (d === 1 ? c.high >= trigger : c.low <= trigger));
+        return reached && t.rAchieved <= 0.2 - cost / risk + 1e-9 && d * (t.exitPrice - (t.entry + d * 0.2 * risk)) <= 1e-9;
+      }),
+    `${locked.length} locked`
+  );
+  check(
+    "a trade that never reached +0.4R keeps its first stop",
+    trades.filter((t) => t.outcome === "stop").every((t) => {
+      const e = m15.findIndex((x) => x.time === t.entryTime);
+      const d = t.direction === "long" ? 1 : -1;
+      const trigger = t.entry + d * 0.4 * Math.abs(t.entry - t.stopLoss);
+      return !m15.slice(e, e + t.bars - 1).some((c) => (d === 1 ? c.high >= trigger : c.low <= trigger));
+    })
+  );
+  const won = trades.filter((t) => t.rAchieved > 0).length / trades.length;
+  check("more trades close in profit than at a loss", won > 0.5, `${(won * 100).toFixed(0)}%`);
   check("a take-profit pays 3R less costs", trades.some((t) => t.outcome === "target") && trades.filter((t) => t.outcome === "target").every((t) => near(t.rAchieved, 3 - cost / Math.abs(t.entry - t.stopLoss), 1e-9)));
   const timed = trades.filter((t) => t.outcome === "time");
   check(
@@ -388,8 +447,9 @@ console.log("\nsettlement");
   const closed = trades.filter((t) => t.outcome !== "open");
   for (const t of closed) {
     // the signal is stored a few seconds after its candle closed, which is when the entry candle opens
-    const res = settleSignal({ direction: t.direction, entry: t.entry, stop_loss: t.stopLoss, take_profit: t.takeProfit, firedAt: (t.entryTime + 8) * 1000 }, m15.filter((c) => c.time >= t.entryTime - 4 * M15 && c.time < t.exitTime + 4 * M15));
-    const kind = res?.outcome === "expired" ? "time" : res && near(res.hitPrice!, t.takeProfit, 1e-9) ? "target" : "stop";
+    const followed = followTrade({ direction: t.direction, entry: t.entry, stop_loss: t.stopLoss, take_profit: t.takeProfit, firedAt: (t.entryTime + 8) * 1000 }, m15.filter((c) => c.time >= t.entryTime - 4 * M15 && c.time < t.exitTime + 4 * M15), { lock: LIVE_LOCK });
+    const res = followed.settlement;
+    const kind = res?.outcome === "expired" ? "time" : res && near(res.hitPrice!, t.takeProfit, 1e-9) ? "target" : followed.stop !== t.stopLoss ? "lock" : "stop";
     if (res && near(res.hitPrice!, t.exitPrice, 1e-9) && res.hitTime === t.exitTime - M15 && kind === t.outcome) agree++;
   }
   check("every closed backtest trade settles at the same candle, price and outcome when followed live", closed.length > 0 && agree === closed.length, `${agree} of ${closed.length}`);
@@ -407,6 +467,16 @@ console.log("\nsettlement");
   const late = settleSignal(buy, quiet);
   check("a trade that reaches neither level is closed at market at the close of its 20th candle", late?.outcome === "expired" && late.hitTime === quiet[TREND_MAX_HOLD_BARS - 1].time && near(late.r, 0.3));
   check("…and is still open one candle before that", settleSignal(buy, quiet.slice(0, TREND_MAX_HOLD_BARS - 1)) == null);
+  // the profit lock on the same buy: the trigger is 104 (+0.4R), the moved stop 102 (+0.2R)
+  const reach = followTrade(buy, [bar(0, 100, 105, 101, 104.5)], { lock: LIVE_LOCK });
+  check("a candle that reaches +0.4R moves the stop to +0.2R — for the candles after it, not for itself", reach.settlement == null && near(reach.stop, 102));
+  const lockedOut = followTrade(buy, [bar(0, 100, 105, 99, 104.5), bar(1, 104.5, 104.8, 101.5, 103)], { lock: LIVE_LOCK });
+  check("the next candle that comes back to the moved stop closes the trade there, in profit", lockedOut.settlement?.outcome === "win" && lockedOut.settlement.hitPrice === 102 && near(lockedOut.settlement.r, 0.2));
+  const gapped = followTrade(buy, [bar(0, 100, 105, 99, 100.5), bar(1, 99, 99.5, 98, 99)], { lock: LIVE_LOCK });
+  check("if price is already back beyond the moved stop, the trade closes at the open — here at a small loss", gapped.settlement?.outcome === "loss" && gapped.settlement.hitPrice === 99 && near(gapped.settlement.r, -0.1));
+  check("a trade that has not reached +0.4R keeps its first stop", near(followTrade(buy, [bar(0, 100, 103.9, 99, 103)], { lock: LIVE_LOCK }).stop, 90));
+  const run = followTrade(buy, [bar(0, 100, 105, 99, 104.5), bar(1, 104.5, 131, 104, 130)], { lock: LIVE_LOCK });
+  check("a locked trade that keeps going still reaches the 1:3 target", run.settlement?.outcome === "win" && run.settlement.hitPrice === 130 && near(run.settlement.r, 3));
 }
 
 // ───────────── what may be sent ─────────────

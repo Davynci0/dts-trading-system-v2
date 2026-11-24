@@ -1,6 +1,7 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { fetchCandles } from "@/lib/oanda";
-import { TREND_MAX_HOLD_BARS } from "@/lib/analysis/trend";
+import { TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS } from "@/lib/analysis/trend";
+import { sendStopMoved } from "@/lib/telegram";
 import { isLiveSignal } from "@/lib/types";
 
 export interface SettleInput {
@@ -26,39 +27,69 @@ const CANDLE_MS = 15 * 60 * 1000;
 /** A trade of a removed strategy that has a fixed stop and target is closed at market after this many 15-minute candles (five trading days). */
 const LEGACY_MAX_HOLD_BARS = 480;
 
+/** The profit lock, in R: once price has gone `at` the trade's way, the stop is moved to `to` in profit. */
+export interface ProfitLock {
+  at: number;
+  to: number;
+}
+/** The lock the live rules use. */
+export const LIVE_LOCK: ProfitLock = { at: TREND_LOCK_AT_R, to: TREND_LOCK_TO_R };
+
 /**
  * Follow a trade through the 15-minute candles since it was sent, exactly as
- * the backtest does: the first candle to touch the stop is a loss, the first
- * to touch the target a win, and a candle that touches both counts as a loss.
- * A trade that has reached neither by the close of its `maxHoldBars`-th candle
- * is closed at that close ("expired", with whatever it made or lost). A gap
- * through the stop fills at the candle's open.
+ * the backtest does. In each candle, in this order: the stop (a gap through it
+ * fills at the candle's open), then the target — so a candle that touches both
+ * counts as the stop — then the profit lock, which moves the stop for the
+ * candles that FOLLOW, then the time limit: a trade that has reached neither
+ * level by the close of its `maxHoldBars`-th candle is closed at that close
+ * ("expired", with whatever it made or lost).
+ *
+ * Returns the settlement, or null while the trade is open, and where the stop
+ * stands now. It reads every candle since the signal each time, so it needs no
+ * stored state.
  */
-export function settleSignal(
+export function followTrade(
   s: SettleInput,
   candles: { time: number; open: number; high: number; low: number; close: number }[],
-  maxHoldBars: number = TREND_MAX_HOLD_BARS
-): Settlement | null {
+  opts: { maxHoldBars?: number; lock?: ProfitLock | null } = {}
+): { settlement: Settlement | null; stop: number } {
+  const maxHoldBars = opts.maxHoldBars ?? TREND_MAX_HOLD_BARS;
   const long = s.direction === "long";
   const dir = long ? 1 : -1;
   const risk = Math.abs(s.entry - s.stop_loss);
+  const lockTrigger = opts.lock ? s.entry + dir * opts.lock.at * risk : NaN;
+  const lockStop = opts.lock ? s.entry + dir * opts.lock.to * risk : NaN;
+  let stop = s.stop_loss;
   let held = 0;
   for (const c of candles) {
     if (c.time * 1000 + CANDLE_MS <= s.firedAt) continue;
-    if (long ? c.low <= s.stop_loss : c.high >= s.stop_loss) {
-      const price = long ? Math.min(s.stop_loss, c.open) : Math.max(s.stop_loss, c.open);
-      return { outcome: "loss", r: risk > 0 ? (dir * (price - s.entry)) / risk : -1, hitTime: c.time, hitPrice: price };
+    if (long ? c.low <= stop : c.high >= stop) {
+      const price = long ? Math.min(stop, c.open) : Math.max(stop, c.open);
+      const r = risk > 0 ? (dir * (price - s.entry)) / risk : -1;
+      // a stop that the lock moved into profit closes the trade as a win
+      return { settlement: { outcome: r > 0 ? "win" : "loss", r, hitTime: c.time, hitPrice: price }, stop };
     }
     if (long ? c.high >= s.take_profit : c.low <= s.take_profit) {
-      return { outcome: "win", r: risk > 0 ? Math.abs(s.take_profit - s.entry) / risk : 0, hitTime: c.time, hitPrice: s.take_profit };
+      return { settlement: { outcome: "win", r: risk > 0 ? Math.abs(s.take_profit - s.entry) / risk : 0, hitTime: c.time, hitPrice: s.take_profit }, stop };
     }
+    if (opts.lock && (long ? c.high >= lockTrigger : c.low <= lockTrigger)) stop = lockStop;
     // the close of the last candle the trade may be held for
     if (held + 1 >= maxHoldBars) {
-      return { outcome: "expired", r: risk > 0 ? (dir * (c.close - s.entry)) / risk : 0, hitTime: c.time, hitPrice: c.close };
+      return { settlement: { outcome: "expired", r: risk > 0 ? (dir * (c.close - s.entry)) / risk : 0, hitTime: c.time, hitPrice: c.close }, stop };
     }
     held++;
   }
-  return null;
+  return { settlement: null, stop };
+}
+
+/** The settlement alone (see followTrade). Without a lock this is a trade with a fixed stop and target. */
+export function settleSignal(
+  s: SettleInput,
+  candles: { time: number; open: number; high: number; low: number; close: number }[],
+  maxHoldBars: number = TREND_MAX_HOLD_BARS,
+  lock: ProfitLock | null = null
+): Settlement | null {
+  return followTrade(s, candles, { maxHoldBars, lock }).settlement;
 }
 
 /** A trade of the removed trend systems as stored: a trailing stop a fixed distance behind the best price. */
@@ -128,7 +159,7 @@ let lastRun = 0;
  */
 export async function scoreOpenSignals(
   supabase: ReturnType<typeof createAdminClient>,
-  opts: { force?: boolean } = {}
+  opts: { force?: boolean; /** false = do not send the "stop moved" message */ notify?: boolean } = {}
 ): Promise<number> {
   if (!supabase) return 0;
   if (!opts.force && Date.now() - lastRun < 60_000) return 0;
@@ -170,8 +201,18 @@ export async function scoreOpenSignals(
           .from("signals")
           .update({ trail_stop: followed.trailStop, ...(res ? {} : { trail_checked_at: new Date(followed.checkedAt).toISOString() }) })
           .eq("id", r.id);
+      } else if (isLiveSignal(r)) {
+        const followed = followTrade({ ...r, firedAt }, candles, { maxHoldBars: TREND_MAX_HOLD_BARS, lock: LIVE_LOCK });
+        res = followed.settlement;
+        // the profit lock has moved the stop of a trade that is still open: record it once, and say so once
+        if (!res && followed.stop !== r.stop_loss && r.trail_stop == null) {
+          const { data: marked } = await supabase.from("signals").update({ trail_stop: followed.stop }).eq("id", r.id).is("trail_stop", null).select("id");
+          if (marked?.length && opts.notify !== false) {
+            await sendStopMoved({ pair: r.pair, direction: r.direction, entry: r.entry, stop: followed.stop, takeProfit: r.take_profit, lockedR: TREND_LOCK_TO_R }).catch(() => undefined);
+          }
+        }
       } else {
-        res = settleSignal({ ...r, firedAt }, candles, isLiveSignal(r) ? TREND_MAX_HOLD_BARS : LEGACY_MAX_HOLD_BARS);
+        res = settleSignal({ ...r, firedAt }, candles, LEGACY_MAX_HOLD_BARS);
       }
       if (!res) continue;
       const { error: upErr } = await supabase

@@ -74,6 +74,8 @@ export default function Dashboard() {
           entry: open.entry,
           stopLoss: open.stop_loss,
           takeProfit: open.take_profit,
+          // where the profit lock has moved the stop to, once it has
+          stopNow: open.trail_stop ?? null,
           startTime: barAt(Math.floor(new Date(open.created_at).getTime() / 1000)).time,
           rMultiple: open.r_multiple ?? Math.abs(open.take_profit - open.entry) / Math.abs(open.entry - open.stop_loss),
         });

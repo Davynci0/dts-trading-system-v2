@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { EXECUTION_CANDLES, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/analysis/execution";
-import { buildTrendSeries, trendStateAt, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MAX_RISK_ATR, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_MIN_RISK_ATR, TREND_TARGET_R } from "@/lib/analysis/trend";
+import { buildTrendSeries, trendStateAt, TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MAX_RISK_ATR, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_MIN_RISK_ATR, TREND_TARGET_R } from "@/lib/analysis/trend";
 import { fetchScanCandles } from "@/lib/engine/scanner";
 
 export const maxDuration = 60;
@@ -44,6 +44,9 @@ export async function GET(req: NextRequest) {
         swingHigh: t.swingHigh,
         swingLow: t.swingLow,
         stopLevel: t.stopLevel,
+        adx: t.adx,
+        rangePosition: t.rangePosition,
+        distancePct: t.distancePct,
         atr: t.atr,
         costShare: t.costShare,
         side: t.side,
@@ -53,11 +56,13 @@ export async function GET(req: NextRequest) {
         minRiskAtr: TREND_MIN_RISK_ATR,
         maxRiskAtr: TREND_MAX_RISK_ATR,
         targetR: TREND_TARGET_R,
+        lockAtR: TREND_LOCK_AT_R,
+        lockToR: TREND_LOCK_TO_R,
         maxOpen: TREND_MAX_OPEN,
         holdHours: (TREND_MAX_HOLD_BARS * 900) / 3600,
         /** when the 15-minute candle this was read on closed (epoch seconds) */
         readAt: ts.candles[ts.n - 1].time + 900,
-        setup: t.setup ? { direction: t.setup.direction, entry: t.setup.entry, stopLoss: t.setup.stopLoss, takeProfit: t.setup.takeProfit, trigger: t.setup.trigger } : null,
+        setup: t.setup ? { direction: t.setup.direction, entry: t.setup.entry, stopLoss: t.setup.stopLoss, takeProfit: t.setup.takeProfit, trigger: t.setup.trigger, lockTrigger: t.setup.lockTrigger, lockStop: t.setup.lockStop } : null,
       };
     }
     return NextResponse.json({ candles, trend, asOf: to ?? null });
