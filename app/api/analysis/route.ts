@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { EXECUTION_CANDLES, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/analysis/execution";
 import { buildTrendSeries, trendStateAt, TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MAX_RISK_ATR, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_MIN_RISK_ATR, TREND_REENTRY_MINUTES, TREND_REENTRY_R, TREND_SR_DAYS, TREND_SR_TOUCHES, TREND_TARGET_R } from "@/lib/analysis/trend";
 import { fetchScanCandles } from "@/lib/engine/scanner";
+import { fetchCandles } from "@/lib/oanda";
+import { toriChartLines, toriRead, TORI_HISTORY, TORI_SECONDS, TORI_TIMEFRAME } from "@/lib/analysis/tori";
 
 export const maxDuration = 60;
 
@@ -30,8 +32,25 @@ export async function GET(req: NextRequest) {
 
   try {
     // the read always uses the scanner's own window, however few candles the chart asked for
-    const data = await fetchScanCandles(instrument, to, Math.max(count, SCAN_HISTORY.m15));
+    const [data, h4] = await Promise.all([
+      fetchScanCandles(instrument, to, Math.max(count, SCAN_HISTORY.m15)),
+      // Tori Trades' trendlines are read on the 4-hour chart — shown and alerted, never traded by the system
+      fetchCandles({ instrument, granularity: TORI_TIMEFRAME, count: TORI_HISTORY, to }).catch(() => []),
+    ]);
     const candles = data.m15.slice(-count);
+    let tori = null;
+    if (h4.length > 50 && candles.length > 0) {
+      const read = toriRead(h4);
+      const ev = read.event;
+      tori = {
+        lines: toriChartLines(read, candles[0].time, candles[candles.length - 1].time),
+        safetyLong: read.safetyLong,
+        safetyShort: read.safetyShort,
+        /** what the last closed 4-hour candle did, if it made one of her setups */
+        event: ev ? { type: ev.type, direction: ev.direction, kind: ev.line.kind, touches: ev.line.touches, close: ev.close, time: ev.time, stop: ev.stop, safety: ev.safety } : null,
+        readAt: h4[h4.length - 1].time + TORI_SECONDS,
+      };
+    }
 
     let trend = null;
     if (data.m15.length > TREND_MIN_CANDLES && data.h1.length > TREND_MIN_H1_CANDLES) {
@@ -72,7 +91,7 @@ export async function GET(req: NextRequest) {
         setup: t.setup ? { direction: t.setup.direction, entry: t.setup.entry, stopLoss: t.setup.stopLoss, takeProfit: t.setup.takeProfit, trigger: t.setup.trigger, lockTrigger: t.setup.lockTrigger, lockStop: t.setup.lockStop } : null,
       };
     }
-    return NextResponse.json({ candles, trend, asOf: to ?? null });
+    return NextResponse.json({ candles, trend, tori, build: process.env.APP_BUILD ?? null, asOf: to ?? null });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }

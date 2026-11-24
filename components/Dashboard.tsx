@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "@/components/Chart";
 import SignalFeed from "@/components/SignalFeed";
 import TrendTracker, { type TrendSummary } from "@/components/TrendTracker";
+import ToriPanel, { type ToriSummary } from "@/components/ToriPanel";
 import AskAIButton from "@/components/AskAIButton";
 import { isLiveSignal, PAIRS, TRADE_TIMEFRAMES, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
 import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
@@ -12,6 +13,7 @@ import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
 const LAYERS = [
   { id: "trend", label: "Entry levels and swings", color: CHART_COLORS.trend, on: true },
   { id: "zones", label: "Support and resistance", color: CHART_COLORS.zone, on: true },
+  { id: "tori", label: "Tori trendlines (4H)", color: CHART_COLORS.tori, on: true },
   { id: "position", label: "Open trades", color: null, on: true },
   { id: "history", label: "Closed trades", color: null, on: true },
 ] as const;
@@ -31,6 +33,7 @@ export default function Dashboard() {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [liveCandle, setLiveCandle] = useState<Candle | null>(null);
   const [trend, setTrend] = useState<TrendSummary | null>(null);
+  const [tori, setTori] = useState<ToriSummary & { lines: { kind: "down" | "up"; touches: number; now: number; points: { time: number; price: number }[] }[] } | null>(null);
   /** when the analysis was last loaded */
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -113,9 +116,10 @@ export default function Dashboard() {
       positions: layers.position ? positions : [],
       history: layers.history ? history : [],
       zones: layers.zones && trend ? trend.zones : [],
+      trendlines: layers.tori && tori ? tori.lines : [],
       digits: DIGITS,
     };
-  }, [trend, layers, pairSignals, candles]);
+  }, [trend, tori, layers, pairSignals, candles]);
 
   /** One line on what the trend allows right now. */
   const trendLine = useMemo(() => {
@@ -157,15 +161,28 @@ export default function Dashboard() {
         .then(async (res) => {
           const json = await res.json();
           if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
+          // a newer version of the site has gone live since this page was loaded: load it, once per version
+          if (json.build && process.env.APP_BUILD && json.build !== process.env.APP_BUILD) {
+            try {
+              if (sessionStorage.getItem("reloadedFor") !== json.build) {
+                sessionStorage.setItem("reloadedFor", json.build);
+                window.location.reload();
+                return;
+              }
+            } catch {
+              // storage unavailable: keep the page as it is
+            }
+          }
           const jsonCandles = (json.candles ?? []) as Candle[];
           if (jsonCandles.length === 0) throw new Error(`No candles returned for ${pair}`);
           // skip the re-render when nothing changed — but the candle series is part
           // of the signature, so the chart never goes stale in a quiet market
-          const sig = JSON.stringify({ n: jsonCandles.length, t: jsonCandles[jsonCandles.length - 1]?.time ?? null, tr: json.trend ?? null });
+          const sig = JSON.stringify({ n: jsonCandles.length, t: jsonCandles[jsonCandles.length - 1]?.time ?? null, tr: json.trend ?? null, to: json.tori ?? null });
           if (!initial && sig === analysisSigRef.current) return;
           analysisSigRef.current = sig;
           setCandles(jsonCandles);
           setTrend(json.trend ?? null);
+          setTori(json.tori ?? null);
           setUpdatedAt(Date.now());
           setAsOf(json.asOf ?? null);
           setError(null);
@@ -285,6 +302,7 @@ export default function Dashboard() {
       {/* side panels */}
       <aside className="flex w-full shrink-0 flex-col gap-4 overflow-y-auto lg:w-80">
         <TrendTracker trend={trend} signals={pairSignals} price={price} digits={DIGITS} />
+        <ToriPanel tori={tori} digits={DIGITS} />
         <SignalFeed />
       </aside>
     </div>

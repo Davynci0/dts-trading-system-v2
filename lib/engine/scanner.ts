@@ -19,7 +19,8 @@ import {
   type LastEntry,
 } from "@/lib/analysis/trend";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
-import { sendTrendSignal } from "@/lib/telegram";
+import { sendToriAlert, sendTrendSignal } from "@/lib/telegram";
+import { toriRead, TORI_HISTORY, TORI_TIMEFRAME } from "@/lib/analysis/tori";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export interface ScanEvent {
@@ -59,6 +60,9 @@ export const ACCOUNT_BALANCE = (() => {
  *  plus five minutes of slack: every closed candle is read by at least one
  *  scan, and the one-trade-per-candle rule keeps a second scan from sending it
  *  twice. Override with MAX_ENTRY_AGE_MIN. */
+/** A Tori alert is only sent within this many minutes of its 4-hour candle's close. */
+const TORI_ALERT_MAX_AGE_MIN = 30;
+
 const MAX_ENTRY_AGE_MIN = Math.max(5, Number(process.env.MAX_ENTRY_AGE_MIN ?? EXECUTION_BAR_SECONDS / 60 + 5));
 
 /** The closed candles the system reads — 15-minute for the entries and the chart, 1-hour and daily for the trend — optionally as they stood at `to`. */
@@ -140,6 +144,30 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
     } catch (e) {
       push("error", (e as Error).message.slice(0, 160));
       continue;
+    }
+
+    // Tori Trades' trendlines on the 4-hour chart: an alert, once per setup. It never touches the
+    // signals table, so it neither counts as the open trade nor blocks one. Only her main setup — the
+    // break of a 3-touch line, about three a month on gold — goes to Telegram; bounces (about two a
+    // week) are shown on the dashboard only.
+    try {
+      const ev = toriRead(await fetchCandles({ instrument: pair, granularity: TORI_TIMEFRAME, count: TORI_HISTORY })).event;
+      if (ev && ev.type === "break") {
+        const ageMin = (now / 1000 - ev.time) / 60;
+        // a setup whose candle closed a while ago has been alerted already, or is too late to act on
+        if (ageMin <= TORI_ALERT_MAX_AGE_MIN && supabase) {
+          // the unique (pair, timeframe, kind, dedupe_key) row is the record that this setup was alerted
+          const { error: dupe } = await supabase
+            .from("market_state")
+            .insert({ pair, timeframe: TORI_TIMEFRAME, kind: "trendline", dedupe_key: ev.key, payload: { type: ev.type, direction: ev.direction, kind: ev.line.kind, touches: ev.line.touches, close: ev.close, stop: ev.stop, time: ev.time } });
+          if (!dupe) {
+            if (sendTelegrams) await sendToriAlert({ pair, type: ev.type, direction: ev.direction, kind: ev.line.kind, touches: ev.line.touches, close: ev.close, stop: ev.stop, safety: ev.safety }).catch((e) => push("error", `Tori alert recorded but Telegram failed: ${(e as Error).message.slice(0, 120)}`));
+            push("watching", `Tori ${ev.type} alert: ${ev.direction === "long" ? "buy" : "sell"} idea, ${ev.line.touches}-touch ${ev.line.kind} line, close ${ev.close.toFixed(2)}`);
+          }
+        }
+      }
+    } catch (e) {
+      push("error", `Tori trendlines: ${(e as Error).message.slice(0, 120)}`);
     }
 
     /** Checks the send rules, records the trade, and returns true when it may be announced. */

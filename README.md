@@ -193,6 +193,24 @@ better result and smaller drawdown. The improvement comes from the last three ye
 two years made a little less than before — and the rules were picked from about fifty variations
 on these same five years, so expect less than the table.
 
+## Tori Trades' trendlines (alerts only)
+
+The chart also shows **Tori Trades' trendlines** on the 4-hour chart, drawn the way she teaches
+them in her own threads and her TradeZella playbook: a down line from a swing high to a lower
+swing high (an up line from a swing low to a higher swing low), never crossed by price between
+the two, counting every later swing that returns to it as a touch, and dropped once a candle
+closes through it. Her **break** setup — a full-bodied 4-hour close through a line with three or
+more touches and at least a week of data, a broken down line being a buy idea and a broken up line
+a sell idea, with the stop beyond the opposing trendline (her *safety line*) — is sent to Telegram
+as a 💜 alert, once, within 30 minutes of the candle's close. Her **bounce** (the third touch of a
+line) is shown in the panel only. On gold that is about three break alerts a month.
+
+These are alerts for your own judgment, **not signals of the system**: they are recorded in
+`market_state`, never in `signals`, so they do not count as the open trade and do not block one.
+Backtested on five years of gold, her break was about break-even (22 trades, +1R on the 4-hour
+chart; +18R on the 1-hour) and her bounce won fewer than one trade in four, so they were not made
+part of the rules. The code is in `lib/analysis/tori.ts`.
+
 ## Scanning
 
 - A scheduler (cron-job.org) calls `/api/scan` every 15 minutes with
@@ -281,7 +299,7 @@ XAU/USD, to 2026-11-24, in R (1R = the risk of one trade):
 ## Verification
 
 ```bash
-npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, filters, support/resistance, entries, stop, profit lock, backtest, settlement, send rules, duplicates
+npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, filters, support/resistance, entries, stop, profit lock, Tori trendlines, backtest, settlement, send rules, duplicates
 ```
 
 ## Routes

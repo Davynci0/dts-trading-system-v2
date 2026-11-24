@@ -103,3 +103,36 @@ export async function sendStopMoved(opts: { pair: string; direction: "long" | "s
     ].join("\n")
   );
 }
+
+/** Tori Trades' setup on the 4-hour chart — an alert for the user's own judgment, never a signal of the system. */
+export async function sendToriAlert(opts: {
+  pair: string;
+  type: "break" | "bounce";
+  direction: "long" | "short";
+  kind: "down" | "up";
+  touches: number;
+  close: number;
+  stop: number | null;
+  safety: number | null;
+}): Promise<void> {
+  const px = (n: number) => n.toFixed(2);
+  const side = opts.direction === "long" ? "BUY" : "SELL";
+  const what =
+    opts.type === "break"
+      ? `a 4-hour candle closed through a ${opts.touches}-touch ${opts.kind} trendline — her ${side.toLowerCase()} idea (reversal)`
+      : `touch ${opts.touches + 1} of a ${opts.kind} trendline, closing back on its side — her ${side.toLowerCase()} bounce idea (continuation)`;
+  const stop =
+    opts.stop == null
+      ? `No safety line can be drawn yet — she waits for a new ${opts.direction === "long" ? "higher low" : "lower high"} to draw one before entering.`
+      : `Her stop: \`${px(opts.stop)}\` — beyond the ${opts.type === "break" ? "safety line (the opposing trendline)" : "trendline itself"}, ${px(Math.abs(opts.close - opts.stop))} from the close.`;
+  await sendTelegramMessage(
+    [
+      `💜 *TORI TRENDLINE ALERT: ${pairLabel(opts.pair)} ${side}* — not a system signal`,
+      `On the 4-hour chart, ${what}.`,
+      `Close: \`${px(opts.close)}\``,
+      stop,
+      `Her rules: wait for the full-bodied close (done), ideally a retest of the line; once in profit move the stop to break-even, then trail it behind new trendlines. No fixed target.`,
+      `_On five years of gold this setup was about break-even — use your own judgment. It does not count as the system's one open trade._`,
+    ].join("\n")
+  );
+}

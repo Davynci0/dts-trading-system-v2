@@ -45,6 +45,7 @@ import { tradeCost } from "../lib/analysis/instruments";
 import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES } from "../lib/backtest/trend";
 import { followTrade, LIVE_LOCK, settleSignal } from "../lib/engine/outcomes";
 import { lastEntryOf, sendBlock, type EarlierSignal } from "../lib/engine/scanner";
+import { toriRead, TORI_BREAK_TOUCHES, TORI_MIN_SPAN_BARS, TORI_BODY_MIN } from "../lib/analysis/tori";
 import { isLiveSignal, TREND_STRATEGY, type Candle } from "../lib/types";
 
 let failed = 0;
@@ -410,6 +411,47 @@ console.log("\nsupport and resistance");
       }),
     `${zoned.length} stops set by a zone`
   );
+}
+
+// ───────────── Tori Trades' trendlines (alerts only) ─────────────
+console.log("\nTori trendlines");
+{
+  // the generated market as 4-hour candles
+  const h4: Candle[] = [];
+  for (const c of m15) {
+    const t = Math.floor(c.time / 14400) * 14400;
+    const last = h4[h4.length - 1];
+    if (last && last.time === t) { last.high = Math.max(last.high, c.high); last.low = Math.min(last.low, c.low); last.close = c.close; }
+    else h4.push({ ...c, time: t });
+  }
+  let events = 0, breaks = 0, consistent = true, clean = true;
+  for (let i = 120; i <= h4.length; i += 1) {
+    const win = h4.slice(Math.max(0, i - 500), i);
+    const r = toriRead(win);
+    const n = win.length;
+    for (const l of r.lines) {
+      // a line drawn on the chart has not been closed through since its second point, and was not crossed between its two points
+      for (let q = l.a.index + 1; q < n; q++) {
+        const v = r.valueAt(l, q);
+        if (q < l.b.index && (l.kind === "down" ? win[q].high > v + 1e-9 : win[q].low < v - 1e-9)) clean = false;
+        if (q > l.b.index && (l.kind === "down" ? win[q].close > v : win[q].close < v)) clean = false;
+      }
+    }
+    const e = r.event;
+    if (!e) continue;
+    events++;
+    const c = win[n - 1];
+    const v = r.valueAt(e.line, n - 1);
+    if (e.type === "break") {
+      breaks++;
+      const body = Math.abs(c.close - c.open), range = c.high - c.low;
+      if (!((e.line.kind === "down" ? c.close > v && e.direction === "long" : c.close < v && e.direction === "short") && e.line.touches >= TORI_BREAK_TOUCHES && n - 1 - e.line.a.index >= TORI_MIN_SPAN_BARS && body >= TORI_BODY_MIN * range)) consistent = false;
+      if (e.stop != null && (e.direction === "long" ? e.stop >= e.close : e.stop <= e.close)) consistent = false;
+    }
+  }
+  check("trendlines are never crossed between their two points, and are dropped once a candle closes through them", clean);
+  check(`a break alert is a full-bodied close through a line with ${TORI_BREAK_TOUCHES}+ touches and a week of data, and its stop is on the other side of the price`, consistent && breaks > 0, `${events} setups, ${breaks} breaks`);
+  check("Tori alerts are never signals of the system: the scanner records them only in market_state", !readFileSync(new URL("../lib/engine/scanner.ts", import.meta.url), "utf8").split("// Tori Trades' trendlines")[1].split("/** Checks the send rules")[0].includes('from("signals")'));
 }
 
 // ───────────── the backtest ─────────────
