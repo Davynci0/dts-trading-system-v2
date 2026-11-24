@@ -27,6 +27,11 @@ export interface TrendTrade {
   trigger: TrendTrigger;
 }
 
+/** The two entries, as the results are grouped. */
+export const TREND_ENTRY_TYPES = ["Breakout", "RSI pullback"] as const;
+/** Which entry a trade counts under — a candle that is both counts as a breakout. */
+export const entryTypeOf = (t: { trigger: TrendTrigger }): (typeof TREND_ENTRY_TYPES)[number] => (t.trigger === "RSI pullback" ? "RSI pullback" : "Breakout");
+
 export function runTrendBacktest(opts: {
   pair: string;
   /** closed candles, oldest first, with history before `from` for the indicators */

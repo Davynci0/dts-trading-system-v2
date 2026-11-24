@@ -64,7 +64,7 @@ function toLegend(candle: Candle | undefined, digits: number): LegendState | nul
 
 /**
  * Interactive candle chart (zoom, pan, crosshair with OHLC legend) plus the
- * Fibonacci system's overlay (the swing, its levels, the entry zone) drawn
+ * system's overlay (the breakout level, the open trade, past results) drawn
  * from the same coordinates the engine used (Section 9).
  */
 export default function Chart({
@@ -241,7 +241,6 @@ export default function Chart({
       overlayRef.current = null;
     }
     const has =
-      overlay.fib != null ||
       overlay.trend != null ||
       (overlay.positions?.length ?? 0) > 0 ||
       (overlay.history?.length ?? 0) > 0;

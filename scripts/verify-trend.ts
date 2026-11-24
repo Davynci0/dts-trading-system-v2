@@ -6,6 +6,7 @@
  *
  * Usage: npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts
  */
+import { readFileSync } from "node:fs";
 import {
   buildTrendSeries,
   trendStateAt,
@@ -19,11 +20,10 @@ import {
   TREND_TRAIL_ATR,
 } from "../lib/analysis/trend";
 import { tradeCost } from "../lib/analysis/instruments";
-import { runTrendBacktest } from "../lib/backtest/trend";
-import { runSystemBacktest } from "../lib/backtest/system";
+import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES } from "../lib/backtest/trend";
 import { settleTrailing } from "../lib/engine/outcomes";
 import { sendBlock, type EarlierSignal } from "../lib/engine/scanner";
-import { FIB_STRATEGY, TREND_STRATEGY, type Candle } from "../lib/types";
+import { isLiveSignal, TREND_STRATEGY, type Candle } from "../lib/types";
 
 let failed = 0;
 let passed = 0;
@@ -256,8 +256,8 @@ const trades = runTrendBacktest({ pair: "XAU_USD", h1, m15, daily });
   const from = trades[Math.floor(trades.length / 2)].entryTime;
   const later = runTrendBacktest({ pair: "XAU_USD", h1, m15, daily, from });
   check("`from` keeps only trades entered at or after it", later.length > 0 && later.every((t) => t.entryTime >= from));
-  const sys = runSystemBacktest({ pair: "XAU_USD", m15, h1, h4: aggregate(m15, 4 * H1, M15), daily });
-  check("the system backtest holds both books, in the order the trades closed", sys.all.length === sys.trend.length + sys.fib.length && sys.trend.length === trades.length && sys.all.every((t, k) => k === 0 || t.exitTime >= sys.all[k - 1].exitTime));
+  check("one trade at a time: a trade is entered only after the one before it has closed", trades.every((t, k) => k === 0 || t.entryTime >= trades[k - 1].exitTime));
+  check("every trade counts under exactly one of the two entries", trades.every((t) => TREND_ENTRY_TYPES.includes(entryTypeOf(t))) && TREND_ENTRY_TYPES.reduce((n, type) => n + trades.filter((t) => entryTypeOf(t) === type).length, 0) === trades.length);
 }
 
 // ───────────── settlement: the live system follows a trade exactly as the backtest does ─────────────
@@ -302,16 +302,18 @@ console.log("\nsettlement");
 // ───────────── what may be sent ─────────────
 console.log("\nsend rules");
 {
-  const row = (strategy: string, direction: "long" | "short", open: boolean, variant = "x"): EarlierSignal => ({ strategy, variant, direction, status: "active", outcome: open ? null : "loss" });
-  const trend = { strategy: TREND_STRATEGY, key: "trend:1", direction: "long" as const };
-  const fib = { strategy: FIB_STRATEGY, key: "long:1:2", direction: "long" as const };
-  check("nothing open: a signal is sent", sendBlock([], trend) == null && sendBlock([row(TREND_STRATEGY, "short", false)], trend) == null);
-  check("a trend trade is open: no second trend trade", sendBlock([row(TREND_STRATEGY, "long", true)], trend) != null);
-  check("…but a Fibonacci trade the same way may still be sent", sendBlock([row(TREND_STRATEGY, "long", true)], fib) == null);
-  check("never a buy and a sell at once, whichever strategy holds the other side", sendBlock([row(FIB_STRATEGY, "short", true)], trend) != null && sendBlock([row(TREND_STRATEGY, "short", true)], fib) != null);
-  check("a signal candle is sent once, even after its trade has closed", sendBlock([row(TREND_STRATEGY, "long", false, "trend:1")], trend) != null);
-  check("a swing is traded once", sendBlock([row(FIB_STRATEGY, "long", false, "long:1:2")], fib) != null);
-  check("trades of removed strategies are not in the way", sendBlock([row(TREND_STRATEGY, "long", false, "other")], trend) == null);
+  const row = (direction: "long" | "short", open: boolean, variant = "x"): EarlierSignal => ({ variant, direction, status: "active", outcome: open ? null : "loss" });
+  const trade = { key: "trend:1" };
+  // the names the database's signals_strategy_check constraint accepts (supabase/schema.sql)
+  const schema = readFileSync(new URL("../supabase/schema.sql", import.meta.url), "utf8");
+  const allowed = /strategy text not null check \(strategy in \(([^)]*)\)\)/.exec(schema)?.[1] ?? "";
+  check("the database accepts the name the signals are stored under", allowed.split(",").map((x) => x.trim().replace(/'/g, "")).includes(TREND_STRATEGY), allowed);
+  check("a signal of these rules is told apart from one of the removed 30-minute system", setups.length > 0 && setups.every((x) => isLiveSignal({ strategy: TREND_STRATEGY, variant: x.s.setup!.key })) && !isLiveSignal({ strategy: TREND_STRATEGY, variant: "don30" }) && !isLiveSignal({ strategy: "fibonacci", variant: "trend:1" }));
+  check("nothing open: a signal is sent", sendBlock([], trade) == null && sendBlock([row("short", false)], trade) == null);
+  check("a trade is open: no second trade the same way", sendBlock([row("long", true)], trade) != null);
+  check("never a buy and a sell at once", sendBlock([row("short", true)], trade) != null);
+  check("a signal candle is sent once, even after its trade has closed", sendBlock([row("long", false, "trend:1")], trade) != null);
+  check("a closed trade of another candle is not in the way", sendBlock([row("long", false, "trend:0")], trade) == null);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

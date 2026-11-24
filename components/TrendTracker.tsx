@@ -1,6 +1,6 @@
 "use client";
 
-import { TREND_STRATEGY, type Signal } from "@/lib/types";
+import { isLiveSignal, type Signal } from "@/lib/types";
 
 /** The trend entries' read of the last closed 1-hour candle, as /api/analysis reports it. */
 export interface TrendSummary {
@@ -34,7 +34,7 @@ const clock = (epochSec: number) => new Date(epochSec * 1000).toLocaleTimeString
  */
 export default function TrendTracker({ trend, signals, price, digits = 2 }: { trend: TrendSummary | null; signals: Signal[]; price: number | null; digits?: number }) {
   const px = (n: number) => n.toFixed(digits);
-  const open = signals.find((s) => s.strategy === TREND_STRATEGY && !s.outcome && s.status === "active");
+  const open = signals.find((s) => isLiveSignal(s) && !s.outcome && s.status === "active");
   const met = trend ? trend.checks.filter((c) => c.met).length : 0;
   const total = trend?.checks.length ?? 5;
   const headline = !trend

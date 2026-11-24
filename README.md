@@ -1,21 +1,20 @@
 # DTS — Gold Trading System
 
-Signal-only gold (XAU/USD) trading system. It trades **with the trend** and has three entries:
+Signal-only gold (XAU/USD) trading system. It trades **with the trend**, on the 1-hour chart,
+and has two entries:
 
-| Entry | Chart | In one line |
-| --- | --- | --- |
-| **Trend — breakout** | 1-hour | the first close beyond the high/low of the last 240 candles, in a confirmed trend |
-| **Trend — RSI pullback** | 1-hour | RSI comes back through 50 after a dip against a confirmed trend |
-| **Fibonacci retracement** | 15-minute | a rejection candle in the 38.2%–61.8% zone of a 1-hour swing |
+| Entry | In one line |
+| --- | --- |
+| **Breakout** | the first 1-hour close beyond the high/low of the last 240 candles, in a confirmed trend |
+| **RSI pullback** | RSI comes back through 50 after a dip against a confirmed trend |
 
-The scanner reads the chart every 15 minutes; when a candle completes a setup, the trade —
-entry, stop loss and take profit — is sent to Telegram. The user reviews each signal and
-executes manually — the system never places trades.
+The scanner reads the chart every 15 minutes; when a 1-hour candle completes an entry, the
+trade — entry, stop loss, take profit and trailing stop — is sent to Telegram. The user reviews
+each signal and executes manually — the system never places trades.
 
-Expect about **one signal a week**: roughly three trend trades and two Fibonacci trades a
-month, at most one of each open at a time and never a buy and a sell together. About four
-trades in ten win; the trend trades win one time in three and live on a few large winners.
-Read [the backtest results](#backtesting) before trusting it.
+Expect about **three signals a month**, one trade open at a time. One trade in three wins; the
+system lives on a few large winners. Read [the backtest results](#backtesting) before trusting
+it.
 
 **Stack:** Next.js (App Router, single deployable on Vercel) · OANDA v20 (data) ·
 Supabase (auth + persistence) · Telegram Bot API (alerts).
@@ -35,10 +34,9 @@ database needs the files in `supabase/migrations/` that it has not had yet).
 
 | Timeframe | Job |
 | --- | --- |
-| Daily | the trend for every entry: last closed day above its 50-day average → buys only; below → sells only |
-| 4-hour | Fibonacci only: the trend must agree (price above a rising 50 EMA for buys, below a falling one for sells) |
-| 1-hour | the trend entries (moving averages, ADX, ±DI, RSI, the 240-candle channel) and the swing the Fibonacci retracement is measured on |
-| 15-minute (`EXECUTION_TIMEFRAME`) | the chart, the Fibonacci entry candle, the settlement of every open trade |
+| Daily | the trend: last closed day above its 50-day average → buys only; below → sells only |
+| 1-hour | the entries: moving averages, ADX, ±DI, RSI, the 240-candle channel |
+| 15-minute (`EXECUTION_TIMEFRAME`) | the chart, and the candles every open trade is followed on |
 
 A higher-timeframe candle is only read once it has closed.
 
@@ -66,7 +64,7 @@ and retracements — with every number tested on gold.
 | Stop loss | 2.5 × the 1-hour ATR from the entry — this distance is 1R |
 | Trailing stop | 6 × ATR (the ATR at entry, a fixed distance) behind the best price. It passes the stop loss once price has moved 3.5 ATR in favour, and it closes most winners |
 | Take profit | 8 × the risk — only an exceptional run gets there |
-| Positions | one trend trade at a time |
+| Positions | one trade at a time — so never a buy and a sell together |
 | Refused when | spread + slippage exceed 10% of the risk |
 | Size | 1% of the account (`RISK_PCT`, `ACCOUNT_BALANCE`, default $500) |
 
@@ -96,53 +94,26 @@ as a rule and run on fifteen years of gold, chosen on 2011–2021 only, with cos
   ones in the design years, so expect the plateau's average — roughly half the backtest — not
   the backtest itself.
 
-## The Fibonacci retracement
+### What was removed
 
-All of it is in `lib/analysis/fibonacci.ts`.
-
-**Five conditions, in order:**
-
-| # | Condition | Rule |
-| --- | --- | --- |
-| 1 | Daily trend | close of the last day on one side of its 50-day average |
-| 2 | 4-hour trend | agrees with the daily trend (price and slope of the 50 EMA) |
-| 3 | 1-hour swing | a leg in the trend's direction, 8 to 80 ATR long. A swing point only counts once price has turned 5 ATR away from it, so the leg is an impulse, not noise. The leg is finished once price trades through its start or beyond its end |
-| 4 | Pullback | a 15-minute candle trades into the **38.2%–61.8%** retracement zone and does not close through its deep edge |
-| 5 | Rejection | that candle is an engulfing candle (closes beyond the previous candle's far side) or a pin bar (a wick at least twice the body) |
-
-**The trade:**
-
-| | Rule |
-| --- | --- |
-| Entry | at market, at the close of the rejection candle |
-| Stop loss | beyond the start of the swing (the 100% level) by a quarter of a 1-hour ATR |
-| Take profit | the **161.8% extension** of the swing — about 1.7 × the risk on average |
-| Time limit | closed at market after 480 fifteen-minute candles (five trading days) |
-| Positions | one trade per swing, one Fibonacci trade at a time |
-| Refused when | the target is closer than the stop, the stop is inside 1.5 fifteen-minute ATR, or spread + slippage exceed 10% of the risk |
-
-It needs a completed swing and a pullback, so a move that runs without one — gold fell 9% in the
-week of 16 November 2026 without a 5-ATR bounce — gives it nothing. The trend entries are there
-for those moves.
-
-Of 23,520 Fibonacci rule sets tested the same way, 80% lost in 2011–2021; large swings with both
-trends were the only consistently positive corner, and the live rules sit in the middle of it.
+A Fibonacci retracement entry on the 15-minute chart ran alongside these until 23 November
+2026. On the same fifteen years it made +43R on 361 trades against the trend entries' +175R on
+504, and of 23,520 Fibonacci rule sets 80% lost in the design years. The 30-minute trend system
+and the pattern strategies before it are gone too. Their signals stay in the feed, marked as
+removed.
 
 ## Scanning
 
 - A scheduler (cron-job.org) calls `/api/scan` every 15 minutes with
   `Authorization: Bearer $CRON_SECRET`. Each scan first settles the open trades on 15-minute
-  candles (and moves the trailing stops), then reads the last closed 15-minute candle for the
-  Fibonacci entry and the last closed 1-hour candle for the trend entries.
+  candles (and moves the trailing stops), then reads the last closed 1-hour candle. Three scans
+  in four see a candle that has already been read and send nothing new.
 - A signal is only sent within 20 minutes of its candle's close (`MAX_ENTRY_AGE_MIN`). A scan
   that runs later — after an outage, or at the weekend — does not send a trade at a price that
   is no longer there.
-- Each of the two strategies holds one trade at a time; a swing or a signal candle that has been
-  traded once is not traded again.
-- **Never a buy and a sell at the same time**: a signal against an open trade of the other
-  strategy is not sent. (In fifteen years this would have held back 17 of 865 trades.)
-- Trades left open by the 30-minute trend system that was removed are still followed to their
-  stop; they do not block new signals.
+- One trade at a time; a signal candle that has been traded once is not traded again.
+- Trades left open by a removed strategy are still followed to their stop, target or time
+  limit; they do not block new signals.
 - `vercel.json` keeps one daily cron as a fallback (Vercel's Hobby plan allows one run per
   day). `.github/workflows/scan.yml` is a second scheduler, currently disabled.
 - The dashboard's **Scan now** button runs a scan on demand.
@@ -152,7 +123,7 @@ trends were the only consistently positive corner, and the live rules sit in the
 ## Backtesting
 
 ```bash
-npx tsx --env-file=.env.local scripts/backtest.ts            # 15 years, the system and each strategy, year by year
+npx tsx --env-file=.env.local scripts/backtest.ts            # 15 years: totals, year by year, by entry and side
 npx tsx --env-file=.env.local scripts/backtest.ts --save     # …and stored for the Backtests page
 npx tsx --env-file=.env.local scripts/backtest.ts --years=3  # a shorter window
 ```
@@ -164,47 +135,49 @@ stop moves. Candles are cached in `.cache/` (the first run of a day downloads fi
 history). The `/backtests` page shows stored runs and its **Quick run** button backtests the
 last six months on the server.
 
-XAU/USD, 15 years to 2026-11-23, in R (1R = the risk of one trade):
+XAU/USD, 15 years to 2026-11-24, in R (1R = the risk of one trade):
 
-| | Trades | Win rate | 2011–2021 (rules chosen) | 2021–2026 | All 15 years | Costs doubled | Worst drawdown |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Trend entries | 504 (3 a month) | 33% | +118.2R | +56.9R | +175.1R | +157.0R | 15.7R |
-| Fibonacci retracement | 361 (2 a month) | 48% | +16.5R | +26.7R | +43.2R | +38.3R | 10.5R |
-| **The system** | **865 (1.1 a week)** | **39%** | **+134.6R** | **+83.7R** | **+218.3R** | **+195.3R** | **17.3R** |
+| | Trades | Win rate | Total | Worst drawdown |
+| --- | --- | --- | --- | --- |
+| **All 15 years** | **504 (3 a month)** | **33%** | **+174.5R** | **15.7R** |
+| …with costs doubled | 504 | 32% | +156.4R | 17.4R |
+| 2011–2021 (rules chosen) | 331 | 31% | +118.2R | 12.3R |
+| 2021–2026 (left alone) | 173 | 36% | +56.3R | 15.7R |
+| Breakout entry | 267 | 33% | +62.6R | 17.2R |
+| RSI pullback entry | 237 | 32% | +111.9R | 10.4R |
 
-Every one of the 15 years was positive for the system (the weakest: +1.0R, +3.0R, +4.4R,
-+4.4R). Of the trend trades, 263 ended at the first stop, 214 at the trailing stop and 26 at
-the take-profit; the breakout made +63R and the RSI pullback +112R.
+Thirteen of the 15 years were positive; the two losing years were −6.3R (November 2016 to
+November 2017) and −2.6R (November 2021 to November 2022), and three more made under 5R. 264
+trades ended at the first stop, 214 at the trailing stop and 26 at the take-profit.
 
 **Read this before trusting it.**
 
 - **It is a backtest of rules chosen with hindsight.** The settings were picked among the
   better ones of the design years. The honest expectation is the average of their neighbours —
   about half of the figures above — and a live year can be negative.
-- **Two losses for every win.** The trend entries lose 67% of the time; the longest losing run
+- **Two losses for every win.** The system loses 67% of the time; the longest losing run
   was 12 trades. The profit is a minority of trades that run for several R, and missing those
-  few — by skipping signals or closing early — removes the edge. The ten best trend trades
-  made 80R of the 175R.
-- **2021–2023 made nothing** (+2.7R on 77 trend trades, with a 15.7R drawdown). Two flat years
+  few — by skipping signals or closing early — removes the edge. The ten best trades made
+  80R of the 175R.
+- **2021–2023 made nothing** (+2.7R on 77 trades, with a 15.7R drawdown). Two flat years
   in a row have happened and will happen again.
-- **Buys did better than sells** (+158R against +61R). Gold rose for most of these years.
-- **Stops are wide for a small account.** In the last twelve months a trend trade's stop was
-  $28 to $215 an ounce, $51 in the middle; a Fibonacci trade's $50 to $757, $125 in the middle.
-  With the usual minimum trade (0.01 lot = 1 oz) one trend trade risks about 10% of a $500
-  account — a losing run of 12 would end it. Sized at 1% (a few hundredths of an ounce, which
-  needs a micro or cent account) the trend entries made about +24R, $500 → about $630, in the
-  last twelve months. The Telegram message gives the size for both.
+- **Buys did better than sells** (+117R against +57R, and the sells' worst drawdown was 26R).
+  Gold rose for most of these years.
+- **Stops are wide for a small account.** In the last twelve months a trade's stop was $28 to
+  $215 an ounce, $51 in the middle. With the usual minimum trade (0.01 lot = 1 oz) one trade
+  risks about 10% of a $500 account — a losing run of 12 would end it. Sized at 1% (a few
+  hundredths of an ounce, which needs a micro or cent account) the system made +23.6R,
+  $500 → about $627, in the last twelve months. The Telegram message gives the size for both.
 
 ## Verification
 
 ```bash
 npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # indicators, trend rules, entries, backtest, settlement, send rules
-npx tsx --tsconfig tsconfig.json scripts/verify-fib.ts     # trends, swing, zone, entry candle, levels, refusals, backtest, settlement
 ```
 
 ## Routes
 
-- `/` — dashboard: the 15-minute chart with the 1-hour swing, its retracement levels, the entry zone, the level the breakout entry waits on, the open trades (with the trailing stop) and past results; the Trend and Fibonacci panels show each strategy's conditions. `/?asOf=2026-10-27T16:30Z` shows the chart as it stood at that moment
+- `/` — dashboard: the 15-minute chart with the level the breakout entry waits on, the open trade (with its trailing stop) and past results; the Trend panel shows each condition and what is missing. `/?asOf=2026-10-27T16:30Z` shows the chart as it stood at that moment
 - `/backtests` — stored backtest runs and the quick run
 - `/login` — Supabase auth
 - `/api/candles` — OANDA candle proxy (key stays server-side)

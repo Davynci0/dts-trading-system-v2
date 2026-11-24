@@ -3,22 +3,20 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "@/components/Chart";
 import SignalFeed from "@/components/SignalFeed";
-import FibTracker, { type FibSummary } from "@/components/FibTracker";
 import TrendTracker, { type TrendSummary } from "@/components/TrendTracker";
 import AskAIButton from "@/components/AskAIButton";
-import { FIB_STRATEGY, LIVE_STRATEGIES, PAIRS, TRADE_TIMEFRAMES, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
+import { isLiveSignal, PAIRS, TRADE_TIMEFRAMES, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
 import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
 
 /** What the chart can show on top of the candles. */
 const LAYERS = [
-  { id: "fib", label: "Fibonacci levels", color: CHART_COLORS.fib, on: true },
   { id: "trend", label: "Breakout level", color: CHART_COLORS.trend, on: true },
   { id: "position", label: "Open trades", color: null, on: true },
   { id: "history", label: "Closed trades", color: null, on: true },
 ] as const;
 type LayerId = (typeof LAYERS)[number]["id"];
 
-/** The chart and the Fibonacci entry run on this timeframe; the trend entries are read on 1-hour candles. */
+/** The chart runs on this timeframe; the entries are read on 1-hour candles. */
 const timeframe: Timeframe = TRADE_TIMEFRAMES[0];
 /** Length of one chart candle in milliseconds. */
 const CANDLE_MS = ({ M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D: 1440 } as Record<string, number>)[timeframe] * 60_000;
@@ -31,7 +29,6 @@ export default function Dashboard() {
   const pair: Pair = PAIRS[0];
   const [candles, setCandles] = useState<Candle[]>([]);
   const [liveCandle, setLiveCandle] = useState<Candle | null>(null);
-  const [fib, setFib] = useState<FibSummary | null>(null);
   const [trend, setTrend] = useState<TrendSummary | null>(null);
   /** when the analysis was last loaded */
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
@@ -67,12 +64,12 @@ export default function Dashboard() {
 
   const shownOverlay = useMemo<OverlayData>(() => {
     const barAt = (epochSec: number) => [...candles].reverse().find((c) => c.time <= epochSec) ?? candles[0];
-    // each strategy holds at most one open trade
+    // at most one trade is open at a time
     const positions: NonNullable<OverlayData["positions"]> = [];
     if (candles.length > 0) {
-      for (const open of pairSignals.filter((s) => LIVE_STRATEGIES.includes(s.strategy) && !s.outcome && s.status === "active")) {
+      for (const open of pairSignals.filter((s) => isLiveSignal(s) && !s.outcome && s.status === "active")) {
         positions.push({
-          label: open.strategy === FIB_STRATEGY ? "FIBONACCI" : "TREND",
+          label: "TREND",
           direction: open.direction,
           entry: open.entry,
           stopLoss: open.stop_loss,
@@ -100,24 +97,7 @@ export default function Dashboard() {
       }
     }
 
-    const last = candles[candles.length - 1];
-    const leg = fib?.leg;
     return {
-      fib:
-        layers.fib && fib && leg
-          ? {
-              direction: leg.direction,
-              origin: leg.origin,
-              end: leg.end,
-              levels: fib.levels,
-              zone: fib.zone,
-              stopLoss: fib.stopLoss,
-              takeProfit: fib.takeProfit,
-              targetLevel: fib.targetLevel,
-              tradeable: fib.tradeable,
-              inZone: fib.tradeable && !!fib.zone && !!last && last.low <= Math.max(fib.zone.shallow, fib.zone.deep) && last.high >= Math.min(fib.zone.shallow, fib.zone.deep),
-            }
-          : null,
       trend:
         layers.trend && trend && trend.breakoutLevel != null && trend.dailyTrend !== 0
           ? { direction: trend.dailyTrend === 1 ? "long" : "short", level: trend.breakoutLevel, bars: trend.breakoutBars, ready: !trend.blocked }
@@ -126,18 +106,17 @@ export default function Dashboard() {
       history: layers.history ? history : [],
       digits: DIGITS,
     };
-  }, [fib, trend, layers, pairSignals, candles]);
+  }, [trend, layers, pairSignals, candles]);
 
-  /** One line on what the trends allow right now. */
+  /** One line on what the trend allows right now. */
   const trendLine = useMemo(() => {
-    if (!fib) return null;
+    if (!trend) return null;
     const arrow = (t: number) => (t === 1 ? "▲ up" : t === -1 ? "▼ down" : "unclear");
-    const daily = fib.dailyTrend;
+    const daily = trend.dailyTrend;
     const tone = daily === 1 ? "text-emerald-400" : daily === -1 ? "text-rose-400" : "text-amber-400";
     const allows = daily === 0 ? "no trades until the daily trend is known" : `${daily === 1 ? "buys" : "sells"} only`;
-    const hourly = trend ? ` · 1-hour averages ${arrow(trend.maTrend)}${trend.adx != null ? `, ADX ${trend.adx.toFixed(0)}` : ""}` : "";
-    return { text: `Daily trend ${arrow(daily)} · 4-hour trend ${arrow(fib.h4Trend)}${hourly} — ${allows}`, tone };
-  }, [fib, trend]);
+    return { text: `Daily trend ${arrow(daily)} · 1-hour averages ${arrow(trend.maTrend)}${trend.adx != null ? `, ADX ${trend.adx.toFixed(0)}` : ""} — ${allows}`, tone };
+  }, [trend]);
 
   async function scanNow() {
     setScanStatus("scanning…");
@@ -172,11 +151,10 @@ export default function Dashboard() {
           if (jsonCandles.length === 0) throw new Error(`No candles returned for ${pair}`);
           // skip the re-render when nothing changed — but the candle series is part
           // of the signature, so the chart never goes stale in a quiet market
-          const sig = JSON.stringify({ n: jsonCandles.length, t: jsonCandles[jsonCandles.length - 1]?.time ?? null, f: json.fib ?? null, tr: json.trend ?? null });
+          const sig = JSON.stringify({ n: jsonCandles.length, t: jsonCandles[jsonCandles.length - 1]?.time ?? null, tr: json.trend ?? null });
           if (!initial && sig === analysisSigRef.current) return;
           analysisSigRef.current = sig;
           setCandles(jsonCandles);
-          setFib(json.fib ?? null);
           setTrend(json.trend ?? null);
           setUpdatedAt(Date.now());
           setAsOf(json.asOf ?? null);
@@ -187,7 +165,6 @@ export default function Dashboard() {
           if (initial) {
             setError(e.message);
             setCandles([]);
-            setFib(null);
             setTrend(null);
           }
         })
@@ -298,7 +275,6 @@ export default function Dashboard() {
       {/* side panels */}
       <aside className="flex w-full shrink-0 flex-col gap-4 overflow-y-auto lg:w-80">
         <TrendTracker trend={trend} signals={pairSignals} price={price} digits={DIGITS} />
-        <FibTracker fib={fib} signals={pairSignals} price={price} digits={DIGITS} />
         <SignalFeed />
       </aside>
     </div>

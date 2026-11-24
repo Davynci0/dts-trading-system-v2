@@ -1,18 +1,18 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { FIB_STRATEGY, LIVE_STRATEGIES, TREND_STRATEGY, type Signal } from "@/lib/types";
+import { isLiveSignal, type Signal } from "@/lib/types";
 
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 const px = (n: number) => n.toFixed(2);
 const signedR = (r: number | null) => (r == null ? "" : `${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R`);
 
-const strategyName = (strategy: string) => (strategy === FIB_STRATEGY ? "Fibonacci" : strategy === TREND_STRATEGY ? "Trend" : `${strategy} (removed strategy)`);
+const strategyName = (s: Signal) => (isLiveSignal(s) ? "Trend" : `${s.strategy} (removed strategy)`);
 
-/** Closed trades of the live strategies: how many, how many won, and the total in R. */
+/** Closed trades of the live trend entries: how many, how many won, and the total in R. */
 function record(signals: Signal[]) {
-  const closed = signals.filter((s) => LIVE_STRATEGIES.includes(s.strategy) && s.outcome != null && s.outcome_r != null);
+  const closed = signals.filter((s) => isLiveSignal(s) && s.outcome != null && s.outcome_r != null);
   if (closed.length === 0) return null;
   const won = closed.filter((s) => (s.outcome_r ?? 0) > 0).length;
   const total = closed.reduce((sum, s) => sum + (s.outcome_r ?? 0), 0);
@@ -65,7 +65,7 @@ export default function SignalFeed() {
       {!error && signals?.length === 0 && <p className="text-xs text-neutral-500">No signals yet.</p>}
       <ul className="space-y-2">
         {signals?.map((s) => {
-          const live = LIVE_STRATEGIES.includes(s.strategy);
+          const live = isLiveSignal(s);
           const hasLevels = s.stop_loss > 0;
           const risk = Math.abs(s.entry - s.stop_loss);
           return (
@@ -76,7 +76,7 @@ export default function SignalFeed() {
                   <span className={s.direction === "long" ? "text-teal-400" : "text-red-400"}>{s.direction === "long" ? "BUY" : "SELL"}</span>
                 </span>
                 <span className="text-right text-neutral-500">
-                  {fmtTime(s.created_at)} · {strategyName(s.strategy)}
+                  {fmtTime(s.created_at)} · {strategyName(s)}
                 </span>
               </div>
               {hasLevels && (

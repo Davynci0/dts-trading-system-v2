@@ -15,9 +15,9 @@ export interface Signal {
   created_at: string;
   pair: string;
   direction: SignalDirection;
-  /** "fibonacci" or "trend-h1" for the signals the system sends now; older rows keep the strategy that sent them */
+  /** "trend" for the signals the system sends now (see isLiveSignal); older rows keep the strategy that sent them */
   strategy: string;
-  /** fibonacci: the key of the 1-hour leg the trade was taken on (one trade per leg); trend-h1: the key of the signal candle */
+  /** the key of the 1-hour signal candle — a candle is traded once */
   variant?: string | null;
   confluence_strategies?: string[] | null;
   /** trend trades: the trailing distance and where the trailing stop stands */
@@ -57,10 +57,19 @@ export type Pair = (typeof PAIRS)[number];
 export const TIMEFRAMES = ["M5", "M15", "M30", "H1", "H4", "D"] as const;
 export type Timeframe = (typeof TIMEFRAMES)[number];
 
-/** The chart timeframe entries are taken on (see lib/analysis/execution.ts). */
+/** The chart's timeframe, on which open trades are followed (see lib/analysis/execution.ts). */
 export const TRADE_TIMEFRAMES = ["M15"] as const satisfies readonly Timeframe[];
 
-/** The strategies new signals are stored under: the Fibonacci retracement and the 1-hour trend entries. */
-export const FIB_STRATEGY = "fibonacci" as const;
-export const TREND_STRATEGY = "trend-h1" as const;
-export const LIVE_STRATEGIES: readonly string[] = [FIB_STRATEGY, TREND_STRATEGY];
+/**
+ * How a signal of the 1-hour trend entries is stored. The database only
+ * accepts the strategy names in its `signals_strategy_check` constraint, and
+ * "trend" is the one that fits. The removed 30-minute trend system used the
+ * same name, so the two are told apart by `variant`: these rows carry the key
+ * of their signal candle ("trend:<epoch seconds>"), the old ones the name of
+ * an entry type ("don30", "ema20pb", …).
+ */
+export const TREND_STRATEGY = "trend" as const;
+export const TREND_KEY_PREFIX = "trend:" as const;
+/** True for a signal sent by the rules that are live now, false for one a removed strategy sent. */
+export const isLiveSignal = (s: { strategy: string; variant?: string | null }): boolean =>
+  s.strategy === TREND_STRATEGY && (s.variant ?? "").startsWith(TREND_KEY_PREFIX);

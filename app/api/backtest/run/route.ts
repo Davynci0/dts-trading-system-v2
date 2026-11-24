@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
-import { computeMetrics } from "@/lib/backtest/fib";
-import { ENTRY_TYPES, runSystemBacktest, type SystemTrade } from "@/lib/backtest/system";
+import { computeMetrics } from "@/lib/backtest/metrics";
+import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES, type TrendTrade } from "@/lib/backtest/trend";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAuthorizedMutation } from "@/lib/apiGuard";
 import { EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
@@ -29,11 +29,10 @@ async function fetchM15(pair: string, fromMs: number, toMs: number): Promise<Can
 /**
  * POST /api/backtest/run
  *
- * Quick backtest of the system — the trend entries and the Fibonacci
- * retracement — on the last six months, with the scanner's own detection.
- * Stored for the Backtests page. The system trades about five times a month,
- * so six months is some thirty trades — a check that the rules run, not
- * evidence about them. The multi-year run lives in scripts/backtest.ts.
+ * Quick backtest of the trend entries on the last six months, with the
+ * scanner's own detection. Stored for the Backtests page. The system trades
+ * about three times a month, so six months is some fifteen to twenty trades —
+ * a check that the rules run, not evidence about them. The multi-year run lives in scripts/backtest.ts.
  */
 export async function POST(req: NextRequest) {
   if (!isAuthorizedMutation(req)) {
@@ -43,28 +42,27 @@ export async function POST(req: NextRequest) {
   const to = Date.now();
   const from = to - TRADED_DAYS * DAY_MS;
 
-  let trades: SystemTrade[];
+  let trades: TrendTrade[];
   try {
-    const [m15, h1, h4, daily] = await Promise.all([
+    const [m15, h1, daily] = await Promise.all([
       fetchM15(pair, from - WARMUP_DAYS * DAY_MS, to),
       fetchCandles({ instrument: pair, granularity: "H1", count: H1_COUNT }),
-      fetchCandles({ instrument: pair, granularity: "H4", count: 2000 }),
       fetchCandles({ instrument: pair, granularity: "D", count: 400 }),
     ]);
     if (m15.length < 1000) throw new Error("not enough candles returned");
-    trades = runSystemBacktest({ pair, m15, h1, h4, daily, from: from / 1000 }).all;
+    trades = runTrendBacktest({ pair, m15, h1, daily, from: from / 1000 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }
 
   const cut = (from + 0.7 * (to - from)) / 1000;
-  const scope = (g: SystemTrade[]) => ({
+  const scope = (g: TrendTrade[]) => ({
     inSample: computeMetrics(g.filter((t) => t.entryTime < cut)),
     outOfSample: computeMetrics(g.filter((t) => t.entryTime >= cut)),
     all: computeMetrics(g),
   });
   const scopes: Record<string, unknown> = { combined: scope(trades) };
-  for (const type of ENTRY_TYPES) scopes[`strategy:${type}`] = scope(trades.filter((t) => t.entryType === type));
+  for (const type of TREND_ENTRY_TYPES) scopes[`strategy:${type}`] = scope(trades.filter((t) => entryTypeOf(t) === type));
   scopes["pair:buys"] = scope(trades.filter((t) => t.direction === "long"));
   scopes["pair:sells"] = scope(trades.filter((t) => t.direction === "short"));
 
@@ -78,8 +76,8 @@ export async function POST(req: NextRequest) {
         range_end: new Date(to).toISOString(),
         pairs: [pair],
         timeframes: ["H1", EXECUTION_TIMEFRAME],
-        config: { system: "trend + fibonacci", days: TRADED_DAYS },
-        notes: `Quick run · last ${TRADED_DAYS} days · trend entries (1-hour) + Fibonacci retracement (${EXECUTION_TIMEFRAME})`,
+        config: { system: "trend entries", days: TRADED_DAYS },
+        notes: `Quick run · last ${TRADED_DAYS} days · trend entries (1-hour breakout + RSI pullback, trailing stop)`,
       })
       .select("id")
       .single();

@@ -17,7 +17,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "DTS — Gold Signals",
-  description: "Signal-only gold trading system: trend entries on the 1-hour chart and Fibonacci retracements on the 15-minute chart, with the daily trend",
+  description: "Signal-only gold trading system: trend entries on the 1-hour chart — a breakout and an RSI pullback, with the daily trend and a trailing stop",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

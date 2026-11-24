@@ -39,7 +39,7 @@ async function fetchRange(instrument: string, granularity: string, end: number, 
 /** `spanDays` of history plus enough higher-timeframe history before it that
  *  the very first bar already has weekly/daily context. The M15 series (the
  *  bulk of the download) is only fetched when `withM15` is set — the backtest
- *  of the Fibonacci system needs it. */
+ *  follows every open trade on it. */
 export async function loadPairData(pair: string, spanDays: number, withM15 = false): Promise<PairData> {
   const end = windowEnd();
   const file = `${CACHE_DIR}/${pair}-${spanDays}d${withM15 ? "" : "-h4"}-${new Date(end).toISOString().slice(0, 10)}.json`;

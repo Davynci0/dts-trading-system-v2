@@ -1,4 +1,4 @@
-import type { Candle, SignalDirection } from "@/lib/types";
+import { TREND_KEY_PREFIX, type Candle, type SignalDirection } from "@/lib/types";
 import { tradeCost } from "./instruments";
 
 /**
@@ -315,7 +315,7 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
         trailDistance: TREND_TRAIL_ATR * atr,
         atr,
         time: c.time + H1,
-        key: `trend:${c.time}`,
+        key: `${TREND_KEY_PREFIX}${c.time}`,
       };
     }
   }

@@ -1,6 +1,5 @@
 import type { createAdminClient } from "@/lib/supabase/admin";
 import { fetchCandles } from "@/lib/oanda";
-import { FIB_MAX_HOLD_BARS } from "@/lib/analysis/fibonacci";
 
 export interface SettleInput {
   direction: "long" | "short";
@@ -22,14 +21,18 @@ export interface Settlement {
 /** Signals are settled on 15-minute candles. `candle.time` is the candle's OPEN;
  *  a candle only predates the signal when it CLOSED before it. */
 const CANDLE_MS = 15 * 60 * 1000;
+/** A trade without a trailing stop is closed at market after this many 15-minute candles (five trading days). */
+const FIXED_MAX_HOLD_BARS = 480;
 
 /**
- * Follow a trade through the 15-minute candles since it was sent: the first
- * candle to touch the stop is a loss, the first to touch the target a win, and
- * a candle that touches both counts as a loss. A trade that has reached
- * neither after FIB_MAX_HOLD_BARS candles is closed at that candle's close
- * ("expired", with whatever it made or lost). A gap through the stop fills at
- * the candle's open.
+ * Follow a trade with a fixed stop and target — the kind the removed
+ * strategies sent; the trend entries trail, see settleTrailing — through the
+ * 15-minute candles since it was sent: the first candle to touch the stop is a
+ * loss, the first to touch the target a win, and a candle that touches both
+ * counts as a loss. A trade that has reached neither after
+ * FIXED_MAX_HOLD_BARS candles is closed at that candle's close ("expired",
+ * with whatever it made or lost). A gap through the stop fills at the
+ * candle's open.
  */
 export function settleSignal(s: SettleInput, candles: { time: number; open: number; high: number; low: number; close: number }[]): Settlement | null {
   const long = s.direction === "long";
@@ -45,7 +48,7 @@ export function settleSignal(s: SettleInput, candles: { time: number; open: numb
     if (long ? c.high >= s.take_profit : c.low <= s.take_profit) {
       return { outcome: "win", r: risk > 0 ? Math.abs(s.take_profit - s.entry) / risk : 0, hitTime: c.time, hitPrice: s.take_profit };
     }
-    if (held >= FIB_MAX_HOLD_BARS) {
+    if (held >= FIXED_MAX_HOLD_BARS) {
       return { outcome: "expired", r: risk > 0 ? (dir * (c.close - s.entry)) / risk : 0, hitTime: c.time, hitPrice: c.close };
     }
     held++;
