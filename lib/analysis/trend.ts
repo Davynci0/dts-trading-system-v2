@@ -33,6 +33,11 @@ import { tradeCost } from "./instruments";
  *    instead of coming back to the stop; the ones that keep going still have
  *    the 1:3 target.
  *  - NO TRADE when the spread and slippage would be more than 6% of the risk.
+ *  - NO DUPLICATE ENTRY: within 60 minutes of the last trade's entry, a new
+ *    trade on the same side is only taken once price is more than 1R (the
+ *    last trade's risk) away from that entry. Re-entering the same move at
+ *    the same price straight after a trade closed made nothing over five
+ *    years.
  *  - FOUR CONDITIONS THAT COME FROM THE LOSING TRADES — each lost in both
  *    halves of the test: an exhausted trend (1-hour ADX 40 or more), the
  *    London morning (07:00–12:00 UTC), an entry in the wrong half of the last
@@ -76,6 +81,35 @@ export const TREND_RANGE_MIN = 0.5;
 export const TREND_MIN_DISTANCE_PCT = 1;
 /** Trades that may be open together. */
 export const TREND_MAX_OPEN = 1;
+/** No same-side re-entry within this many minutes of the last trade's entry … */
+export const TREND_REENTRY_MINUTES = 60;
+/** … unless price is more than this many times the last trade's risk away from that entry. */
+export const TREND_REENTRY_R = 1;
+
+/** The last trade of the system, as the re-entry rule needs it. */
+export interface LastEntry {
+  direction: SignalDirection;
+  /** when it was entered: the close of its signal candle (epoch seconds) */
+  time: number;
+  entry: number;
+  /** its distance from the entry to the first stop */
+  risk: number;
+}
+
+/**
+ * Why a new trade would be a duplicate of the last one, or null when it is not:
+ * the same side, within TREND_REENTRY_MINUTES of the last entry, and within
+ * TREND_REENTRY_R of its price. `next.time` is the close of the new signal candle.
+ */
+export function reentryBlock(last: LastEntry | null, next: { direction: SignalDirection; time: number; entry: number }): string | null {
+  if (!last || last.direction !== next.direction || !(last.risk > 0)) return null;
+  const minutes = (next.time - last.time) / 60;
+  if (minutes < 0 || minutes > TREND_REENTRY_MINUTES) return null;
+  const apart = Math.abs(next.entry - last.entry);
+  if (apart > TREND_REENTRY_R * last.risk) return null;
+  const side = last.direction === "long" ? "buy" : "sell";
+  return `a ${side} was entered at ${last.entry.toFixed(2)} ${Math.round(minutes)} min ago — no new ${side} within ${TREND_REENTRY_R}R of it (${(last.entry - TREND_REENTRY_R * last.risk).toFixed(2)}–${(last.entry + TREND_REENTRY_R * last.risk).toFixed(2)}) for ${TREND_REENTRY_MINUTES} minutes`;
+}
 /** No trade when the spread and slippage are more than this share of the risk. */
 export const TREND_MAX_COST_SHARE = 0.06;
 /** History needed before the reads have settled: 15-minute candles for the ATR, the longest channel and the swings; 1-hour candles for the structure. */

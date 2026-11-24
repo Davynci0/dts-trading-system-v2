@@ -1,6 +1,6 @@
 import type { Candle } from "@/lib/types";
 import { tradeCost } from "@/lib/analysis/instruments";
-import { buildTrendSeries, trendStateAt, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MIN_CANDLES, type TrendTrigger } from "@/lib/analysis/trend";
+import { buildTrendSeries, reentryBlock, trendStateAt, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MIN_CANDLES, type LastEntry, type TrendTrigger } from "@/lib/analysis/trend";
 
 /**
  * Backtest of the system (lib/analysis/trend.ts) with the scanner's own
@@ -9,7 +9,7 @@ import { buildTrendSeries, trendStateAt, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TR
  * followed candle by candle exactly as the live system settles it: the stop is
  * tested first, then the take-profit, then the profit lock moves the stop for
  * the candles that follow, then the time limit. One trade at a time
- * (TREND_MAX_OPEN).
+ * (TREND_MAX_OPEN), and no duplicate entry of the last one (reentryBlock).
  */
 export interface TrendTrade {
   direction: "long" | "short";
@@ -53,6 +53,8 @@ export function runTrendBacktest(opts: {
   let open: { exitIndex: number; dir: number }[] = [];
   /** nothing can be entered while the limit is full, so those candles need no read */
   let busyUntil = 0;
+  /** the last trade entered, for the re-entry rule */
+  let last: LastEntry | null = null;
 
   for (let i = TREND_MIN_CANDLES; i < s.n - 1; i++) {
     if (m15[i + 1].time < from || i < busyUntil) continue;
@@ -64,6 +66,7 @@ export function runTrendBacktest(opts: {
     // a trade that closed on or before the signal candle has been settled by the time the signal is read
     open = open.filter((t) => t.exitIndex > i);
     if (open.length >= TREND_MAX_OPEN || open.some((t) => t.dir !== dir)) continue;
+    if (reentryBlock(last, { direction: setup.direction, time: m15[i + 1].time, entry: setup.entry })) continue;
 
     const e = i + 1;
     let stop = setup.stopLoss;
@@ -110,6 +113,7 @@ export function runTrendBacktest(opts: {
       trigger: setup.trigger,
     });
     open.push({ exitIndex: outcome === "open" ? Infinity : k, dir });
+    last = { direction: setup.direction, time: m15[e].time, entry: setup.entry, risk: setup.risk };
     if (open.length >= TREND_MAX_OPEN) busyUntil = Math.min(...open.map((t) => t.exitIndex));
   }
   return trades;

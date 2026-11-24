@@ -29,6 +29,8 @@ import {
   TREND_QUIET_HOURS_UTC,
   TREND_RANGE_BARS,
   TREND_RANGE_MIN,
+  TREND_REENTRY_MINUTES,
+  TREND_REENTRY_R,
   TREND_STOP_BARS,
   TREND_STOP_BUFFER_ATR,
   TREND_SWING,
@@ -37,7 +39,7 @@ import {
 import { tradeCost } from "../lib/analysis/instruments";
 import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES } from "../lib/backtest/trend";
 import { followTrade, LIVE_LOCK, settleSignal } from "../lib/engine/outcomes";
-import { sendBlock, type EarlierSignal } from "../lib/engine/scanner";
+import { lastEntryOf, sendBlock, type EarlierSignal } from "../lib/engine/scanner";
 import { isLiveSignal, TREND_STRATEGY, type Candle } from "../lib/types";
 
 let failed = 0;
@@ -372,6 +374,13 @@ const trades = runTrendBacktest({ pair: "XAU_USD", m15, h1, daily });
 {
   check("the generated market is traded", trades.length >= 100, `${trades.length} trades`);
   check("one trade at a time: a trade is entered only after the one before it has closed", TREND_MAX_OPEN === 1 && trades.every((t, k) => k === 0 || t.entryTime >= trades[k - 1].exitTime));
+  // the re-entry rule: no trade on the same side within an hour of the last entry and within 1R of its price
+  const dupes = trades.filter((t, k) => {
+    const p = trades[k - 1];
+    return !!p && p.direction === t.direction && t.entryTime - p.entryTime <= TREND_REENTRY_MINUTES * 60 && Math.abs(t.entry - p.entry) <= TREND_REENTRY_R * Math.abs(p.entry - p.stopLoss);
+  });
+  const near60 = trades.filter((t, k) => k > 0 && t.entryTime - trades[k - 1].entryTime <= TREND_REENTRY_MINUTES * 60).length;
+  check("no duplicate entries: never the same side within an hour of the last entry and within 1R of its price", dupes.length === 0, `${near60} trades within an hour of the last entry, all further than 1R or the other side`);
   check(
     "a trade fills at the open of the candle after its signal candle",
     trades.every((t) => {
@@ -482,8 +491,9 @@ console.log("\nsettlement");
 // ───────────── what may be sent ─────────────
 console.log("\nsend rules");
 {
-  const row = (direction: "long" | "short", open: boolean, variant = "x"): EarlierSignal => ({ variant, direction, status: "active", outcome: open ? null : "loss" });
-  const trade = { key: "trend:1" };
+  // an earlier trade of these rules: a sell at 100 with its stop at 110 (1R = 10), its signal candle opening at `at`
+  const row = (direction: "long" | "short", open: boolean, variant = "x", entry = 100, stop = direction === "long" ? 90 : 110): EarlierSignal => ({ variant, direction, status: "active", outcome: open ? null : "loss", entry, stop_loss: stop });
+  const trade = { key: "trend:1", direction: "long" as const, time: 1 + 900, entry: 100 };
   // the names the database's signals_strategy_check constraint accepts (supabase/schema.sql)
   const schema = readFileSync(new URL("../supabase/schema.sql", import.meta.url), "utf8");
   const allowed = /strategy text not null check \(strategy in \(([^)]*)\)\)/.exec(schema)?.[1] ?? "";
@@ -492,7 +502,16 @@ console.log("\nsend rules");
   check("nothing open: a signal is sent", sendBlock([], trade) == null && sendBlock([row("short", false)], trade) == null);
   check("one trade at a time: nothing is sent while a trade is open, the same way or the other", sendBlock([row("long", true)], trade) != null && sendBlock([row("short", true)], trade) != null);
   check("a signal candle is sent once, even after its trade has closed", sendBlock([row("long", false, "trend:1")], trade) != null);
-  check("a closed trade of another candle is not in the way", sendBlock([row("long", false, "trend:0")], trade) == null);
+  check("a closed trade of another candle is not in the way", sendBlock([row("long", false, "trend:0", 80)], trade) == null);
+  // re-entry: the last trade, a sell at 100 (1R = 10) whose signal candle closed at T
+  const T = 1_800_000_000;
+  const last = row("short", false, `trend:${T - 900}`);
+  const sell = (minutes: number, entry: number) => ({ key: `trend:${T - 900 + minutes * 60}`, direction: "short" as const, time: T + minutes * 60, entry });
+  check("the last trade is the one with the latest signal candle", lastEntryOf([row("long", false, `trend:${T - 5000}`), last, row("long", false, "don30")])?.time === T);
+  check(`a sell within ${TREND_REENTRY_MINUTES} minutes and within ${TREND_REENTRY_R}R of the last sell is not sent`, !!sendBlock([last], sell(30, 95))?.includes("no new sell within") && sendBlock([last], sell(60, 109)) != null && sendBlock([last], sell(15, 90)) != null);
+  check("a sell more than 1R away from the last one is sent", sendBlock([last], sell(30, 89.9)) == null && sendBlock([last], sell(30, 110.1)) == null);
+  check(`a sell more than ${TREND_REENTRY_MINUTES} minutes after the last entry is sent`, sendBlock([last], sell(61, 100)) == null);
+  check("a buy straight after a sell is not a re-entry", sendBlock([last], { ...sell(15, 100), direction: "long" as const }) == null);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

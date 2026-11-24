@@ -15,6 +15,8 @@ import {
   TREND_MIN_H1_CANDLES,
   TREND_MIN_RISK_ATR,
   TREND_TARGET_R,
+  reentryBlock,
+  type LastEntry,
 } from "@/lib/analysis/trend";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
 import { sendTrendSignal } from "@/lib/telegram";
@@ -75,18 +77,40 @@ export interface EarlierSignal {
   direction: SignalDirection;
   status: string;
   outcome: string | null;
+  entry: number;
+  stop_loss: number;
+}
+
+/** The close of a signal's candle (epoch seconds), read from its key "trend:<candle open>", or null for a row of another system. */
+function keyTime(variant: string | null): number | null {
+  if (!variant?.startsWith(TREND_KEY_PREFIX)) return null;
+  const open = Number(variant.slice(TREND_KEY_PREFIX.length));
+  return Number.isFinite(open) ? open + EXECUTION_BAR_SECONDS : null;
+}
+
+/** The most recent trade of this system among `earlier`, as the re-entry rule needs it. */
+export function lastEntryOf(earlier: EarlierSignal[]): LastEntry | null {
+  let last: LastEntry | null = null;
+  for (const r of earlier) {
+    const time = keyTime(r.variant);
+    if (time == null || (last && time <= last.time)) continue;
+    last = { direction: r.direction, time, entry: Number(r.entry), risk: Math.abs(Number(r.entry) - Number(r.stop_loss)) };
+  }
+  return last;
 }
 
 /**
  * Why a new trade may not be sent, or null when it may:
  *  - this signal candle has already been traded;
- *  - a trade is already open — the system holds one at a time.
+ *  - a trade is already open — the system holds one at a time;
+ *  - it would duplicate the last trade: the same side, within an hour of its
+ *    entry and within 1R of its price (reentryBlock).
  */
-export function sendBlock(earlier: EarlierSignal[], trade: { key: string }): string | null {
+export function sendBlock(earlier: EarlierSignal[], trade: { key: string; direction: SignalDirection; time: number; entry: number }): string | null {
   if (earlier.some((r) => r.variant === trade.key)) return "this signal has already been sent";
   const open = earlier.filter((r) => r.status === "active" && r.outcome == null);
   if (open.length >= TREND_MAX_OPEN) return `a ${open[0].direction === "long" ? "buy" : "sell"} is already open — one trade at a time`;
-  return null;
+  return reentryBlock(lastEntryOf(earlier), trade);
 }
 
 /**
@@ -119,7 +143,7 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
     }
 
     /** Checks the send rules, records the trade, and returns true when it may be announced. */
-    const record = async (setup: { key: string; direction: SignalDirection; time: number }, row: Record<string, unknown>): Promise<boolean> => {
+    const record = async (setup: { key: string; direction: SignalDirection; time: number; entry: number }, row: Record<string, unknown>): Promise<boolean> => {
       const ageMin = (now / 1000 - setup.time) / 60;
       if (ageMin > MAX_ENTRY_AGE_MIN) {
         push("skipped", `signal candle closed ${Math.round(ageMin)} min ago — too late to enter (limit ${MAX_ENTRY_AGE_MIN} min)`);
@@ -132,7 +156,7 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
       }
       const { data: rows, error } = await supabase
         .from("signals")
-        .select("variant, direction, status, outcome")
+        .select("variant, direction, status, outcome, entry, stop_loss")
         .eq("pair", pair)
         .eq("strategy", TREND_STRATEGY)
         // only this system's rows — the removed 30-minute system stored its trades under the same name
