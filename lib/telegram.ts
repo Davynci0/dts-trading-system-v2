@@ -64,6 +64,11 @@ export async function sendTrendSignal(opts: {
   /** trades that may be open together */
   maxOpen: number;
   trendDays: number;
+  /** the 1-hour ADX and the level at which the system stops trading */
+  adx: number | null;
+  adxMax: number;
+  /** how many of the three daily momentum horizons point the trade's way */
+  momentumAgree: number;
   fastEma: number;
   slowEma: number;
   accountBalance: number;
@@ -80,7 +85,7 @@ export async function sendTrendSignal(opts: {
       `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(risk)} away (${opts.stopAtr} × the 15-minute ATR)`,
       `*Take profit:* \`${px(opts.takeProfit)}\` — ${px(reward)} away (1:${opts.targetR})`,
       `Entry: ${opts.why}`,
-      `Trend: daily ${up ? "above" : "below"} its ${opts.trendDays}-day average, 1-hour ${opts.fastEma} EMA ${up ? "above" : "below"} the ${opts.slowEma} EMA, ${up ? "+DI above −DI" : "−DI above +DI"}`,
+      `Trend: daily ${up ? "above" : "below"} its ${opts.trendDays}-day average with ${opts.momentumAgree} of 3 momentum readings, 1-hour ${opts.fastEma} EMA ${up ? "above" : "below"} the ${opts.slowEma} EMA, ${up ? "+DI above −DI" : "−DI above +DI"}${opts.adx != null ? `, ADX ${opts.adx.toFixed(0)} (under ${opts.adxMax})` : ""}`,
       sizeLine(risk, opts.accountBalance, opts.riskPct),
       `If neither level is hit in ${opts.holdHours} hours of trading, close the trade at market. Up to ${opts.maxOpen} trades can be open together; about one in three wins.`,
       `_Signal only — review and execute manually._`,

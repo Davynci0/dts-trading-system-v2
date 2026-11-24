@@ -137,7 +137,7 @@ export default function BacktestsPage() {
         <div>
           <h1 className="text-lg font-semibold text-neutral-100">Backtest Results</h1>
           <p className="mt-1 max-w-3xl text-xs text-neutral-500">
-            The 15-minute trend breakouts (1:3 target, up to four trades open) replayed on history with the
+            The 15-minute trend breakouts (1:3 target, several trades open together) replayed on history with the
             scanner&apos;s own detection: a signal on a closed 15-minute candle fills at the next candle&apos;s open,
             the full spread + slippage is charged once, and a candle that touches both the stop and the target counts
             as a loss. Older runs in the list belong to earlier versions of the system.

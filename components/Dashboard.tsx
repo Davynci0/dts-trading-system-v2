@@ -64,7 +64,7 @@ export default function Dashboard() {
 
   const shownOverlay = useMemo<OverlayData>(() => {
     const barAt = (epochSec: number) => [...candles].reverse().find((c) => c.time <= epochSec) ?? candles[0];
-    // up to four trades are open together
+    // several trades are open together
     const positions: NonNullable<OverlayData["positions"]> = [];
     if (candles.length > 0) {
       for (const open of pairSignals.filter((s) => isLiveSignal(s) && !s.outcome && s.status === "active")) {
@@ -114,7 +114,7 @@ export default function Dashboard() {
     const daily = trend.dailyTrend;
     const tone = daily === 1 ? "text-emerald-400" : daily === -1 ? "text-rose-400" : "text-amber-400";
     const allows = daily === 0 ? "no trades until the daily trend is known" : `${daily === 1 ? "buys" : "sells"} only`;
-    const di = trend.plusDi != null && trend.minusDi != null ? ` · +DI ${trend.plusDi.toFixed(0)} / −DI ${trend.minusDi.toFixed(0)}` : "";
+    const di = trend.plusDi != null && trend.minusDi != null ? ` · +DI ${trend.plusDi.toFixed(0)} / −DI ${trend.minusDi.toFixed(0)}${trend.adx != null ? ` · ADX ${trend.adx.toFixed(0)}` : ""}` : "";
     return { text: `Daily trend ${arrow(daily)} · 1-hour averages ${arrow(trend.maTrend)}${di} — ${allows}`, tone };
   }, [trend]);
 

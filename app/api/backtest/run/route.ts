@@ -47,7 +47,8 @@ export async function POST(req: NextRequest) {
     const [m15, h1, daily] = await Promise.all([
       fetchM15(pair, from - WARMUP_DAYS * DAY_MS, to),
       fetchCandles({ instrument: pair, granularity: "H1", count: H1_COUNT }),
-      fetchCandles({ instrument: pair, granularity: "D", count: 400 }),
+      // 250 trading days of momentum before the first traded day
+      fetchCandles({ instrument: pair, granularity: "D", count: 700 }),
     ]);
     if (m15.length < 1000) throw new Error("not enough candles returned");
     trades = runTrendBacktest({ pair, m15, h1, daily, from: from / 1000 });

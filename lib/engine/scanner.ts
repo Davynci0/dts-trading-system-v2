@@ -5,6 +5,7 @@ import { EXECUTION_BAR_SECONDS, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/
 import {
   buildTrendSeries,
   trendStateAt,
+  TREND_ADX_MAX,
   TREND_DAYS,
   TREND_FAST_EMA,
   TREND_MAX_HOLD_BARS,
@@ -33,14 +34,14 @@ export interface ScanSummary {
   events: ScanEvent[];
 }
 
-/** Share of the account one trade risks. Up to four trades are open together
- *  and the backtest's worst drawdown was close to 200 times the risk of one
- *  trade, so the default is a quarter of a percent: four open trades risk 1%
- *  between them. Override with RISK_PCT (e.g. 0.001 for a tenth of a percent);
- *  the older name FIB_RISK_PCT is still read. */
+/** Share of the account one trade risks. Up to eight trades are open together
+ *  and the backtest's worst drawdown was 55 times the risk of one trade, so
+ *  the default is an eighth of a percent: eight open trades risk 1% between
+ *  them. Override with RISK_PCT (e.g. 0.0025 for a quarter of a percent); the
+ *  older name FIB_RISK_PCT is still read. */
 export const RISK_PCT = (() => {
   const raw = Number(process.env.RISK_PCT ?? process.env.FIB_RISK_PCT);
-  return Number.isFinite(raw) && raw > 0 && raw <= 0.05 ? raw : 0.0025;
+  return Number.isFinite(raw) && raw > 0 && raw <= 0.05 ? raw : 0.00125;
 })();
 
 /** Account size the position size in a signal is worked out from. Override with ACCOUNT_BALANCE. */
@@ -201,6 +202,9 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
           holdHours,
           maxOpen: TREND_MAX_OPEN,
           trendDays: TREND_DAYS,
+          adx: state.adx,
+          adxMax: TREND_ADX_MAX,
+          momentumAgree: state.momentumAgree,
           fastEma: TREND_FAST_EMA,
           slowEma: TREND_SLOW_EMA,
           accountBalance,

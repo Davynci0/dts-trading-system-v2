@@ -20,7 +20,7 @@ export interface OverlayData {
     /** false while the trend readings do not all agree */
     ready: boolean;
   } | null;
-  /** the open trades' plans (entry/SL/TP), drawn as position tools — up to four at a time */
+  /** the open trades' plans (entry/SL/TP), drawn as position tools — several at a time */
   positions?: {
     /** the trade's name as shown on the chart */
     label: string;

@@ -5,10 +5,11 @@ import { WebSocket } from "ws";
  * Multi-year backtest of the live rules — 15-minute trend breakouts with a 1:3
  * target (lib/analysis/trend.ts) — with the scanner's own detection: a signal
  * on a closed 15-minute candle, filled at the next candle's open, the full
- * spread + slippage charged once, up to four trades open together.
+ * spread + slippage charged once, up to eight trades open together.
  *
- * The rules were chosen on the first ten years (DESIGN) and left alone for the
- * last five, which are printed separately; a second pass doubles the costs.
+ * The first ten years and the last five are printed separately, and a second
+ * pass doubles the costs. Neither period is untouched any more: the filters
+ * came from the losing trades of all fifteen years.
  *
  * Usage: npx tsx --env-file=.env.local scripts/backtest.ts [--years=15] [--save]
  *   --years=N  history length (default 15, 1–15)
@@ -17,7 +18,7 @@ import { WebSocket } from "ws";
  */
 import { computeMetrics, type ScopedMetrics } from "@/lib/backtest/metrics";
 import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES, type TrendTrade } from "@/lib/backtest/trend";
-import { TREND_BREAKOUT_BARS, TREND_DAYS, TREND_FAST_EMA, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MOMENTUM_ATR, TREND_SLOW_EMA, TREND_STOP_ATR, TREND_TARGET_R } from "@/lib/analysis/trend";
+import { TREND_ADX_MAX, TREND_BREAKOUT_BARS, TREND_DAYS, TREND_MAX_COST_SHARE, TREND_MOMENTUM_DAYS, TREND_FAST_EMA, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MOMENTUM_ATR, TREND_SLOW_EMA, TREND_STOP_ATR, TREND_TARGET_R } from "@/lib/analysis/trend";
 import { EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 import { createAdminClient } from "@/lib/supabase/admin";
@@ -33,7 +34,7 @@ const PAIR = "XAU_USD";
 const END = windowEnd() / 1000;
 const YEAR_S = 365 * 86400;
 const START = END - YEARS * YEAR_S;
-/** The rules were chosen on data before this moment; everything after it is untouched. */
+/** Where the first ten years end and the last five begin. */
 const DESIGN_END = END - 5 * YEAR_S;
 
 type T = TrendTrade;
@@ -97,6 +98,9 @@ async function save(trades: T[]): Promise<void> {
         trend: {
           emas: [TREND_FAST_EMA, TREND_SLOW_EMA],
           trendDays: TREND_DAYS,
+          momentumDays: [...TREND_MOMENTUM_DAYS],
+          adxMax: TREND_ADX_MAX,
+          maxCostShare: TREND_MAX_COST_SHARE,
           breakoutBars: [...TREND_BREAKOUT_BARS],
           momentumAtr: TREND_MOMENTUM_ATR,
           stopAtr: TREND_STOP_ATR,
@@ -128,8 +132,8 @@ async function main() {
   console.log(line("  ALL", base));
   console.log(line("  COSTS ×2", stressed));
   if (START < DESIGN_END) {
-    console.log(line("  DESIGN (rules chosen)", base.filter(between(START, DESIGN_END)), START, DESIGN_END));
-    console.log(line("  AFTER (untouched)", base.filter(between(DESIGN_END, END)), DESIGN_END, END));
+    console.log(line("  FIRST TEN YEARS", base.filter(between(START, DESIGN_END)), START, DESIGN_END));
+    console.log(line("  LAST FIVE YEARS", base.filter(between(DESIGN_END, END)), DESIGN_END, END));
   }
 
   const count = (o: T["outcome"]) => base.filter((t) => t.outcome === o).length;

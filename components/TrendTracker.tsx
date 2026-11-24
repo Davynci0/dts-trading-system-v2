@@ -10,6 +10,9 @@ export interface TrendSummary {
   emaSlow: number | null;
   plusDi: number | null;
   minusDi: number | null;
+  adx: number | null;
+  momentumAgree: number;
+  costShare: number | null;
   atr: number | null;
   side: "long" | "short" | null;
   checks: { label: string; met: boolean }[];
@@ -35,7 +38,7 @@ export default function TrendTracker({ trend, signals, price, digits = 2 }: { tr
   const px = (n: number) => n.toFixed(digits);
   const open = signals.filter((s) => isLiveSignal(s) && !s.outcome && s.status === "active");
   const met = trend ? trend.checks.filter((c) => c.met).length : 0;
-  const total = trend?.checks.length ?? 4;
+  const total = trend?.checks.length ?? 7;
   const full = !!trend && open.length >= trend.maxOpen;
   const headline = !trend
     ? null
