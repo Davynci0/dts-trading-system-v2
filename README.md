@@ -2,7 +2,8 @@
 
 Signal-only gold (XAU/USD) trading system: a **market-structure scalp on the 15-minute chart**.
 One trade at a time, a **1:3** target with a **profit lock**, every trade closed within **five
-hours**, and no duplicate entries. About **two trades in three close in profit**, at about **two
+hours**, with **support and resistance zones** deciding where not to enter and where the stop
+goes, and no duplicate entries. About **two trades in three close in profit**, at about **1.7
 trades a trading day**.
 
 The scanner reads the chart every 15 minutes; when a candle completes an entry, the trade —
@@ -45,7 +46,11 @@ on each side, a *swing low* a low with three higher lows. A candle that **closes
 last swing low makes the structure bearish; a close above the last swing high makes it bullish.
 It stays that way until the other side is broken. A wick through a swing is not a break.
 
-**Seven conditions, then an entry:**
+**Support and resistance**, as traders usually draw them: a *zone* is a band where at least three
+1-hour swing highs or lows of the last 30 days sit together, no taller than 0.15 of a day's
+average range (the daily ATR).
+
+**Eight conditions, then an entry:**
 
 | # | Condition | Rule |
 | --- | --- | --- |
@@ -56,16 +61,17 @@ It stays that way until the other side is broken. A wick through a swing is not 
 | 5 | Not the London morning | no new trade on a candle that closes between 07:00 and 12:00 UTC |
 | 6 | The right half of the range | a buy only in the upper half of the last 24 hours' range, a sell only in the lower half |
 | 7 | Costs | spread + slippage at most 6% of the trade's risk |
-| 8 | Entry, on a 15-minute close, with the trend | **break of structure**: price pulls back, then closes beyond the last swing — in a downtrend it comes up a little, makes a lower high and closes below the last swing low · **breakout**: the first close beyond the high/low of the last 3, 6, 12 or 24 hours · **momentum candle**: a candle at least 1.2 × ATR long that closes in the outer quarter of its range |
+| 8 | Not through a zone | no trade on a candle that has just closed through a support/resistance zone — price usually comes back to test it |
+| 9 | Entry, on a 15-minute close, with the trend | **break of structure**: price pulls back, then closes beyond the last swing — in a downtrend it comes up a little, makes a lower high and closes below the last swing low · **breakout**: the first close beyond the high/low of the last 3, 6, 12 or 24 hours · **momentum candle**: a candle at least 1.2 × ATR long that closes in the outer quarter of its range |
 
-Conditions 3 to 6 come from the losing trades — see below.
+Conditions 3 to 6 come from the losing trades, and 8 from the support and resistance study — see below.
 
 **The trade:**
 
 | | Rule |
 | --- | --- |
 | Entry | at market, at the close of the 15-minute candle |
-| Stop loss | just beyond the high of the last two candles for a sell (their low for a buy) — the small pullback the trade is leaving behind — plus 0.2 ATR. Never closer than 0.75 ATR or further than 2 ATR. The distance is 1R |
+| Stop loss | just beyond the support (buy) or resistance (sell) zone behind the entry, plus 0.2 ATR, when there is one and that puts the stop between 0.75 and 2 ATR away. Otherwise just beyond the high of the last two candles for a sell (their low for a buy) — the small pullback the trade is leaving behind — plus 0.2 ATR, never closer than 0.75 ATR or further than 2 ATR. The distance is 1R |
 | Take profit | 3 × the risk (1:3) |
 | Profit lock | once price has gone 0.4R the trade's way, the stop is moved to 0.2R in profit. It applies from the next 15-minute candle; a second Telegram message says when to move it |
 | Time limit | closed at market at the close of the 20th candle — five hours |
@@ -160,6 +166,33 @@ from 27R to 24.5R and the longest losing run from 7 to 6, and leaves about two t
 day (2.05 in the last twelve months, from 2.2). Blocking every trade within an hour of the last
 entry did a little better per trade (a 21R drawdown) but fell to 1.97 a day.
 
+### Support and resistance
+
+Zones were drawn the way traders commonly draw them — clusters of swing highs and lows, three or
+more touches — and the usual ways of using them were each tested on the live rules over five
+years: 1-hour zones, daily zones, the previous day's high and low, and round $50 numbers.
+
+| Use | Trades a day | Win rate | 5 years | Worst drawdown |
+| --- | --- | --- | --- | --- |
+| Rules before the zones | 2.05 | 65% | +119R | 24.5R |
+| Skip a trade with a zone less than 1R ahead | 1.04 | 66% | +91R | 11.7R |
+| Take only trades whose candle broke through a zone | 0.73 | 59% | −5R | 25.2R |
+| Target at the next zone instead of 3R | 2.07 | 65% | +118R | 25.6R |
+| **A. No trade on a candle that has just closed through a zone** | 1.72 | 67% | +127R | 14.3R |
+| **B. The stop beyond the zone behind the entry** | 2.09 | 63% | +129R | 12.9R |
+| **A and B — the rules now** | 1.72 | 67% | +139R | 10.8R |
+
+Breaking through a level on the signal candle is the trap: price usually comes back to test the
+level it broke, and those entries lost money. A zone behind the entry is the natural place for
+the stop — where the trade is wrong — and it is often closer than the last two candles' extreme.
+Daily zones, the previous day's high and low and round numbers did less or nothing.
+
+**It trades under two a day.** The brief asks for at least two trades a trading day; with the zones
+it made 1.72 in the last twelve months. The owner chose this version on 24 November 2026 for its
+better result and smaller drawdown. The improvement comes from the last three years — the first
+two years made a little less than before — and the rules were picked from about fifty variations
+on these same five years, so expect less than the table.
+
 ## Scanning
 
 - A scheduler (cron-job.org) calls `/api/scan` every 15 minutes with
@@ -198,54 +231,57 @@ XAU/USD, to 2026-11-24, in R (1R = the risk of one trade):
 
 | | Trades | A week | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **5 years** | **1,186** | **4.6** | **65%** | **+118.7R** | **+77.2R** | **24.5R** | **6** |
-| **Last 3 years** | 1,025 | 6.6 | 64% | +106.5R | +73.0R | 24.5R | 6 |
+| **5 years** | **957** | **3.7** | **67%** | **+139.0R** | **+105.5R** | **10.8R** | **5** |
+| **Last 3 years** | 844 | 5.4 | 67% | +135.0R | +107.1R | 10.8R | 5 |
 
 | Year from | Trades | A week | Win rate | Total |
 | --- | --- | --- | --- | --- |
-| Nov 2021 | 87 | 1.7 | 67% | +9.0R |
-| Nov 2022 | 74 | 1.4 | 68% | +3.2R |
-| Nov 2023 | 152 | 2.9 | 68% | +18.4R |
-| Nov 2024 | 341 | 6.5 | 62% | +22.5R |
-| Nov 2025 | 532 | 10.2 | 65% | +65.6R |
+| Nov 2021 | 62 | 1.2 | 68% | +2.9R |
+| Nov 2022 | 51 | 1.0 | 67% | +1.2R |
+| Nov 2023 | 114 | 2.2 | 68% | +19.7R |
+| Nov 2024 | 282 | 5.4 | 66% | +31.0R |
+| Nov 2025 | 448 | 8.6 | 67% | +84.2R |
 
-- **How trades end:** 292 at the first stop (a full loss), 688 at the moved stop (a small gain,
-  or a little less after a gap), 76 at the 1:3 target, 130 at the five-hour limit (102 of those
+- **How trades end:** 218 at the first stop (a full loss), 561 at the moved stop (a small gain,
+  or a little less after a gap), 67 at the 1:3 target, 111 at the five-hour limit (88 of those
   in profit, +1.0R on average).
-- **What a win and a loss are worth:** the average win is 0.59R, the average loss 0.80R.
-- **How long they last:** 56% are over within an hour, 27% last 1 to 3 hours, 17% last 3 to 5.
+- **What a win and a loss are worth:** the average win is 0.62R, the average loss 0.81R.
+- **How long they last:** 58% are over within an hour, 25% last 1 to 3 hours, 17% last 3 to 5.
   None is held longer than five.
-- **By entry:** momentum candles +52.6R (520 trades, 65% won), breakouts +37.0R (271, 67%),
-  breaks of structure +29.1R (395, 63%). Buys +88.8R (65%), sells +29.9R (64%).
-- **The last twelve months:** 532 trades — 2.05 a trading day, on 182 of about 260 trading
-  days, usually two on a day that has any; 65% closed in profit.
+- **Where the stop came from:** 436 trades beyond the last two candles (69% won, +91.2R), 213
+  beyond a support/resistance zone (65%, +22.7R), 308 at the 2-ATR limit (64%, +25.2R). 579
+  signal candles were refused for closing through a zone.
+- **By entry:** momentum candles +72.7R (421 trades, 67% won), breakouts +39.7R (245, 70%),
+  breaks of structure +26.6R (291, 64%). Buys +94.2R, sells +44.8R, both 67%.
+- **The last twelve months:** 448 trades — 1.72 a trading day, on 168 of about 260 trading
+  days, usually two on a day that has any; 67% closed in profit.
 
 **Read this before trusting it.**
 
 - **A high win rate is not a high profit.** Most wins are the moved stop at +0.2R; the losses
-  are mostly a full 1R. It averages 0.10R a trade — 0.07R with costs doubled — and the same
-  entries without the lock make about twice as much. Six losses in a row have happened.
+  are mostly a full 1R. It averages 0.15R a trade — 0.11R with costs doubled — and the same
+  entries without the lock make about twice as much. Five losses in a row have happened.
 - **The lock needs you to act.** The backtest moves the stop from the 15-minute candle after
   price reaches +0.4R. Live, that is a second Telegram message; if the stop is moved late, or
   not at all, the result is not the one in the table.
-- **It trades twice a day only while gold is this active.** The cost limit keeps it out when
-  15-minute candles are small: under two trades a week in the first two years, eleven a week
-  in the last. If gold goes quiet, it will too.
-- **Most of the evidence is two years old or less.** 873 of the 1,186 trades, and three-quarters
-  of the profit, are from the last two years. The filters and the lock were chosen by looking
+- **It trades often only while gold is this active.** The cost limit keeps it out when
+  15-minute candles are small: about one trade a week in the first two years, nine a week in
+  the last. If gold goes quiet, it will too.
+- **Most of the evidence is two years old or less.** 730 of the 957 trades, and four-fifths of
+  the profit, are from the last two years. The filters and the lock were chosen by looking
   at these same five years, so expect less than the table.
 - **Check the spread you actually pay.** Everything above assumes $0.35 an ounce a trade. At
-  twice that the five-year result falls from +119R to +77R.
+  twice that the five-year result falls from +139R to +106R.
 - **Size.** In the last twelve months the stop was $6 to $74 an ounce, $15 in the middle. The
   usual minimum trade (0.01 lot = 1 oz) then risks about 3% of a $500 account per trade — six
-  times the 0.5% the system assumes. At 0.5% a trade, $500 became $891 over the five years with
-  a worst drop of 12%; at 1% it became $1,539 with a worst drop of 22%. The Telegram message
+  times the 0.5% the system assumes. At 0.5% a trade, $500 became $989 over the five years with
+  a worst drop of 5%; at 1% it became $1,904 with a worst drop of 11%. The Telegram message
   gives the size for both.
 
 ## Verification
 
 ```bash
-npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, filters, entries, stop, profit lock, backtest, settlement, send rules, duplicates
+npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, filters, support/resistance, entries, stop, profit lock, backtest, settlement, send rules, duplicates
 ```
 
 ## Routes

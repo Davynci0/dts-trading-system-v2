@@ -11,6 +11,7 @@ import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
 /** What the chart can show on top of the candles. */
 const LAYERS = [
   { id: "trend", label: "Entry levels and swings", color: CHART_COLORS.trend, on: true },
+  { id: "zones", label: "Support and resistance", color: CHART_COLORS.zone, on: true },
   { id: "position", label: "Open trades", color: null, on: true },
   { id: "history", label: "Closed trades", color: null, on: true },
 ] as const;
@@ -111,6 +112,7 @@ export default function Dashboard() {
           : null,
       positions: layers.position ? positions : [],
       history: layers.history ? history : [],
+      zones: layers.zones && trend ? trend.zones : [],
       digits: DIGITS,
     };
   }, [trend, layers, pairSignals, candles]);

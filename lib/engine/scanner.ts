@@ -205,7 +205,9 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
       // where the stop comes from, in words
       const swingName = `the ${up ? "low" : "high"} of the last two candles (${setup.swing.toFixed(2)})`;
       const stopWhy =
-        setup.stopBasis === "swing"
+        setup.stopBasis === "zone" && setup.zone
+          ? `just beyond the ${up ? "support" : "resistance"} zone at ${setup.zone.low.toFixed(2)}–${setup.zone.high.toFixed(2)} (${setup.zone.touches} touches on the 1-hour chart)`
+          : setup.stopBasis === "swing"
           ? `just beyond ${swingName}`
           : setup.stopBasis === "nearest"
             ? `${TREND_MIN_RISK_ATR} ATR away — ${swingName} is closer than that`

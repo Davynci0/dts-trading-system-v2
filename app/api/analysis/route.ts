@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { EXECUTION_CANDLES, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/analysis/execution";
-import { buildTrendSeries, trendStateAt, TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MAX_RISK_ATR, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_MIN_RISK_ATR, TREND_REENTRY_MINUTES, TREND_REENTRY_R, TREND_TARGET_R } from "@/lib/analysis/trend";
+import { buildTrendSeries, trendStateAt, TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MAX_RISK_ATR, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_MIN_RISK_ATR, TREND_REENTRY_MINUTES, TREND_REENTRY_R, TREND_SR_DAYS, TREND_SR_TOUCHES, TREND_TARGET_R } from "@/lib/analysis/trend";
 import { fetchScanCandles } from "@/lib/engine/scanner";
 
 export const maxDuration = 60;
@@ -61,6 +61,11 @@ export async function GET(req: NextRequest) {
         maxOpen: TREND_MAX_OPEN,
         reentryMinutes: TREND_REENTRY_MINUTES,
         reentryR: TREND_REENTRY_R,
+        /** support/resistance zones near the price, and the one the last candle closed through */
+        zones: t.zones,
+        brokeZone: t.brokeZone,
+        srDays: TREND_SR_DAYS,
+        srTouches: TREND_SR_TOUCHES,
         holdHours: (TREND_MAX_HOLD_BARS * 900) / 3600,
         /** when the 15-minute candle this was read on closed (epoch seconds) */
         readAt: ts.candles[ts.n - 1].time + 900,

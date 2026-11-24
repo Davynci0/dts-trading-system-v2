@@ -22,6 +22,8 @@ export interface OverlayData {
     /** the high (sell) / low (buy) of the last two candles: a new trade's stop goes just beyond it */
     stopSwing?: number | null;
   } | null;
+  /** support/resistance zones: bands where several 1-hour swing highs/lows sit */
+  zones?: { low: number; high: number; touches: number }[];
   /** the open trade's plan (entry/SL/TP), drawn as a position tool — the system holds one at a time */
   positions?: {
     /** the trade's name as shown on the chart */
@@ -54,6 +56,7 @@ export const EMPTY_OVERLAY: OverlayData = {};
 /** One colour per idea, used the same way on the chart and in the panels: blue for the trend entries, green/red for direction and results. */
 export const CHART_COLORS = {
   trend: "56,189,248", // sky blue — the breakout levels
+  zone: "245,158,11", // amber — support and resistance
   muted: "100,116,139",
   ink: "229,231,235",
   win: "38,166,154",
@@ -145,6 +148,19 @@ class OverlayPaneView implements IPrimitivePaneView {
             dot(xB, yB, rgb, 4);
             const result = `${h.r >= 0 ? "+" : "−"}${Math.abs(h.r).toFixed(1)}R`;
             tag(`${h.direction === "long" ? "BUY" : "SELL"} ${result}`, xB + 7, yB - 3, rgb, "left", 4, { small: true });
+          }
+
+          // ── support and resistance: a band per zone, behind everything else ──
+          for (const z of data.zones ?? []) {
+            const [yHi, yLo] = [Y(z.high), Y(z.low)];
+            if (yHi == null || yLo == null) continue;
+            const top = Math.min(yHi, yLo) - 1;
+            const h = Math.max(Math.abs(yLo - yHi), 2) + 2;
+            ctx.fillStyle = rgba(C.zone, 0.1);
+            ctx.fillRect(0, top, W, h);
+            line(0, W, top, C.zone, 0.35, 1, []);
+            line(0, W, top + h, C.zone, 0.35, 1, []);
+            tag(`S/R ${fmt(z.low)}–${fmt(z.high)} · ${z.touches} touches`, W - 4, top + h + 10, C.zone, "right", 2, { small: true, dim: true });
           }
 
           // ── the entry levels: what a 15-minute close has to break ─────────

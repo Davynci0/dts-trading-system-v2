@@ -33,6 +33,13 @@ import { tradeCost } from "./instruments";
  *    instead of coming back to the stop; the ones that keep going still have
  *    the 1:3 target.
  *  - NO TRADE when the spread and slippage would be more than 6% of the risk.
+ *  - SUPPORT AND RESISTANCE: zones where at least three 1-hour swing highs or
+ *    lows of the last 30 days sit within 0.15 of a day's average range. They
+ *    are used twice. A signal candle that has just CLOSED THROUGH a zone is not
+ *    traded — price usually comes back to test the level it broke, and those
+ *    trades lost. And when a zone sits behind the entry, the STOP goes just
+ *    beyond that zone instead of beyond the last two candles, as long as that
+ *    keeps it within the limits below.
  *  - NO DUPLICATE ENTRY: within 60 minutes of the last trade's entry, a new
  *    trade on the same side is only taken once price is more than 1R (the
  *    last trade's risk) away from that entry. Re-entering the same move at
@@ -85,6 +92,42 @@ export const TREND_MAX_OPEN = 1;
 export const TREND_REENTRY_MINUTES = 60;
 /** … unless price is more than this many times the last trade's risk away from that entry. */
 export const TREND_REENTRY_R = 1;
+/** Support and resistance: 1-hour swing points of the last this many days … */
+export const TREND_SR_DAYS = 30;
+/** … grouped into zones no taller than this share of a day's average range (daily ATR) … */
+export const TREND_SR_WIDTH_ATR = 0.15;
+/** … with at least this many swing points (touches) in a zone. */
+export const TREND_SR_TOUCHES = 3;
+
+/** A support/resistance zone: the band its touches span. */
+export interface SrZone {
+  low: number;
+  high: number;
+  touches: number;
+}
+
+/** Zones of at least `touches` prices no more than `width` apart — the fullest first, never two sharing a touch. */
+export function srZones(prices: number[], width: number, touches: number = TREND_SR_TOUCHES): SrZone[] {
+  const p = [...prices].sort((a, b) => a - b);
+  const found: { a: number; b: number }[] = [];
+  let b = 0;
+  for (let a = 0; a < p.length; a++) {
+    if (b < a) b = a;
+    while (b + 1 < p.length && p[b + 1] - p[a] <= width) b++;
+    if (b - a + 1 >= touches) found.push({ a, b });
+  }
+  found.sort((x, y) => y.b - y.a - (x.b - x.a));
+  const used = new Uint8Array(p.length);
+  const zones: SrZone[] = [];
+  for (const f of found) {
+    let free = true;
+    for (let q = f.a; q <= f.b; q++) if (used[q]) free = false;
+    if (!free) continue;
+    for (let q = f.a; q <= f.b; q++) used[q] = 1;
+    zones.push({ low: p[f.a], high: p[f.b], touches: f.b - f.a + 1 });
+  }
+  return zones.sort((x, y) => x.low - y.low);
+}
 
 /** The last trade of the system, as the re-entry rule needs it. */
 export interface LastEntry {
@@ -221,6 +264,12 @@ export interface TrendSeries {
   /** +1 / −1 / 0 from the last CLOSED daily candle, and the average it was read against */
   dailyTrend: Int8Array;
   dailyAverage: Float64Array;
+  /** the daily ATR of the last closed day */
+  dailyAtr: Float64Array;
+  /** every 1-hour swing high and low, with the moment it became known (the close of the third candle after it), oldest first */
+  h1Swings: { time: number; known: number; price: number }[];
+  /** support/resistance zones already worked out, by the swings they were built from */
+  zoneCache: Map<string, SrZone[]>;
 }
 
 /** OANDA prints an empty daily candle on some weekends (it opens on a Friday or Saturday, UTC); it is not a trading day. */
@@ -302,6 +351,9 @@ export function buildTrendSeries(input: { m15: Candle[]; h1: Candle[]; daily: Ca
     h1Adx: new Float64Array(n).fill(NaN),
     dailyTrend: new Int8Array(n),
     dailyAverage: new Float64Array(n).fill(NaN),
+    dailyAtr: new Float64Array(n).fill(NaN),
+    h1Swings: [],
+    zoneCache: new Map(),
   };
 
   for (const bars of TREND_BREAKOUT_BARS) {
@@ -335,6 +387,19 @@ export function buildTrendSeries(input: { m15: Candle[]; h1: Candle[]; daily: Ca
   // the 1-hour structure and ADX, carried to each 15-minute candle from the last 1-hour candle closed by then
   const h1 = input.h1;
   const hourly = readStructure(h1);
+  // the 1-hour swing points the support/resistance zones are built from
+  for (let p = TREND_SWING; p + TREND_SWING < h1.length; p++) {
+    let isHigh = true;
+    let isLow = true;
+    for (let q = p - TREND_SWING; q <= p + TREND_SWING; q++) {
+      if (q === p) continue;
+      if (h1[q].high >= h1[p].high) isHigh = false;
+      if (h1[q].low <= h1[p].low) isLow = false;
+    }
+    const known = h1[p + TREND_SWING].time + H1;
+    if (isHigh) s.h1Swings.push({ time: h1[p].time, known, price: h1[p].high });
+    if (isLow) s.h1Swings.push({ time: h1[p].time, known, price: h1[p].low });
+  }
   const adx = wilderAdx(h1);
   let j = -1;
   for (let i = 0; i < n; i++) {
@@ -347,6 +412,7 @@ export function buildTrendSeries(input: { m15: Candle[]; h1: Candle[]; daily: Ca
   }
 
   const daily = input.daily.filter((d) => !isWeekendCandle(d));
+  const dailyAtr = wilderAtr(daily);
   const avg = new Float64Array(daily.length).fill(NaN);
   let sum = 0;
   for (let k = 0; k < daily.length; k++) {
@@ -362,8 +428,38 @@ export function buildTrendSeries(input: { m15: Candle[]; h1: Candle[]; daily: Ca
       s.dailyTrend[i] = daily[d].close > avg[d] ? 1 : daily[d].close < avg[d] ? -1 : 0;
       s.dailyAverage[i] = avg[d];
     }
+    if (d >= 0) s.dailyAtr[i] = dailyAtr[d];
   }
   return s;
+}
+
+/** The support/resistance zones as they stood when 15-minute candle `i` closed. */
+export function zonesAt(s: TrendSeries, i: number): SrZone[] {
+  const t = s.candles[i].time + M15;
+  const width = TREND_SR_WIDTH_ATR * s.dailyAtr[i];
+  if (!(width > 0)) return [];
+  // the swings are in order of time and of when they became known, so the ones that count are one slice
+  const sw = s.h1Swings;
+  const first = (ok: (k: number) => boolean) => {
+    let lo = 0;
+    let hi = sw.length;
+    while (lo < hi) {
+      const m = (lo + hi) >> 1;
+      if (ok(m)) hi = m;
+      else lo = m + 1;
+    }
+    return lo;
+  };
+  const from = first((k) => sw[k].time >= t - TREND_SR_DAYS * DAY);
+  const to = first((k) => sw[k].known > t);
+  const key = `${from}:${to}:${width}`;
+  let zones = s.zoneCache.get(key);
+  if (!zones) {
+    zones = srZones(sw.slice(from, Math.max(from, to)).map((x) => x.price), width);
+    if (s.zoneCache.size > 5000) s.zoneCache.clear();
+    s.zoneCache.set(key, zones);
+  }
+  return zones;
 }
 
 export type TrendTrigger = "break of structure" | "breakout" | "momentum candle" | "breakout and momentum candle";
@@ -382,10 +478,12 @@ export interface TrendSetup {
   /** the profit lock: once price reaches `lockTrigger`, the stop is moved to `lockStop` */
   lockTrigger: number;
   lockStop: number;
-  /** the level the stop is set beyond: the high (sell) or low (buy) of the last two candles */
+  /** the level the stop is set beyond: the far edge of the support/resistance zone behind the entry, or the high (sell) / low (buy) of the last two candles */
   swing: number;
-  /** "swing" when the stop sits just beyond that level; "nearest" / "furthest" when the level was closer or further than the limits and the stop was set at the limit */
-  stopBasis: "swing" | "nearest" | "furthest";
+  /** "zone" when the stop sits just beyond a support/resistance zone; "swing" when it sits just beyond the last two candles; "nearest" / "furthest" when that level was closer or further than the limits and the stop was set at the limit */
+  stopBasis: "zone" | "swing" | "nearest" | "furthest";
+  /** the zone the stop sits beyond, when it does */
+  zone: SrZone | null;
   atr: number;
   /** when the signal candle closed (epoch seconds) */
   time: number;
@@ -423,6 +521,10 @@ export interface TrendState {
   checks: { label: string; met: boolean }[];
   /** why there is nothing to wait for right now, or null when only the entry is missing */
   blocked: string | null;
+  /** the support/resistance zones, nearest first: up to four above the price and four below */
+  zones: SrZone[];
+  /** the zone this candle closed through, if it did — no trade on such a candle */
+  brokeZone: SrZone | null;
   setup: TrendSetup | null;
 }
 
@@ -512,7 +614,15 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
     stopLevel = dir === 1 ? Infinity : -Infinity;
     for (let k = i + 1 - TREND_STOP_BARS; k <= i; k++) stopLevel = dir === 1 ? Math.min(stopLevel, s.candles[k].low) : Math.max(stopLevel, s.candles[k].high);
   }
-  let plan: { risk: number; swing: number; basis: TrendSetup["stopBasis"] } | null = null;
+  // support and resistance: the zones, the one this candle closed through, and the nearest one behind the price
+  const zones = zonesAt(s, i);
+  const prevClose = i >= 1 ? s.candles[i - 1].close : NaN;
+  const brokeZone =
+    daily === 0
+      ? null
+      : (zones.find((z) => (dir === 1 ? prevClose <= z.high && c.close > z.high : prevClose >= z.low && c.close < z.low)) ?? null);
+
+  let plan: { risk: number; swing: number; basis: TrendSetup["stopBasis"]; zone: SrZone | null } | null = null;
   if (trigger && atr > 0) {
     const price = entry ?? c.close;
     const swing = stopLevel;
@@ -521,7 +631,20 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
     if (raw > 0) {
       const risk = Math.min(Math.max(raw, TREND_MIN_RISK_ATR * atr), TREND_MAX_RISK_ATR * atr);
       const basis = raw < TREND_MIN_RISK_ATR * atr ? "nearest" : raw > TREND_MAX_RISK_ATR * atr ? "furthest" : "swing";
-      if (tradeCost(pair) / risk <= TREND_MAX_COST_SHARE) plan = { risk, swing, basis };
+      if (tradeCost(pair) / risk <= TREND_MAX_COST_SHARE) plan = { risk, swing, basis, zone: null };
+    }
+    // a support (buy) / resistance (sell) zone behind the price: the stop goes just beyond its far edge, when that is within the limits
+    if (plan) {
+      let behind: SrZone | null = null;
+      for (const z of zones) {
+        const gap = dir * (price - (dir === 1 ? z.high : z.low));
+        if (gap > 0 && (!behind || gap < dir * (price - (dir === 1 ? behind.high : behind.low)))) behind = z;
+      }
+      if (behind) {
+        const edge = dir === 1 ? behind.high : behind.low;
+        const risk = dir * (price - (edge - dir * TREND_STOP_BUFFER_ATR * atr));
+        if (risk >= TREND_MIN_RISK_ATR * atr && risk <= TREND_MAX_RISK_ATR * atr && tradeCost(pair) / risk <= TREND_MAX_COST_SHARE) plan = { risk, swing: edge, basis: "zone", zone: behind };
+      }
     }
   }
 
@@ -543,6 +666,12 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
     },
     { label: `Costs ${pct(costShare)} of the widest stop (limit ${TREND_MAX_COST_SHARE * 100}%)`, met: affordable },
     {
+      label: brokeZone
+        ? `This candle closed through the ${dir === 1 ? "resistance" : "support"} zone at ${brokeZone.low.toFixed(2)}–${brokeZone.high.toFixed(2)} — price usually comes back to test it`
+        : `Not a candle that has just closed through a support/resistance zone`,
+      met: brokeZone == null,
+    },
+    {
       label: `Entry: a 15-minute close ${dir === 1 ? "above" : "below"} the last swing ${dir === 1 ? "high" : "low"} or the ${dir === 1 ? "high" : "low"} of the last ${TREND_BREAKOUT_BARS.map(hours).join(", ")} hours, or a ${dir === 1 ? "rising" : "falling"} candle of ${TREND_MOMENTUM_ATR} ATR or more`,
       met: trigger != null && plan != null,
     },
@@ -559,9 +688,10 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
   else if (quiet) blocked = `the London morning (${quietHours} UTC) — no new trade`;
   else if (!placed) blocked = `price is in the ${dir === 1 ? "lower" : "upper"} half of the last 24 hours' range — ${dir === 1 ? "buys" : "sells"} wait for the ${dir === 1 ? "upper" : "lower"} half`;
   else if (!affordable) blocked = `the candles are too small — costs would be ${pct(costShare)} of even the widest stop (limit ${TREND_MAX_COST_SHARE * 100}%)`;
+  else if (trigger && brokeZone) blocked = `this candle closed through the ${dir === 1 ? "resistance" : "support"} zone at ${brokeZone.low.toFixed(2)}–${brokeZone.high.toFixed(2)} — no trade until price has tested it`;
 
   let setup: TrendSetup | null = null;
-  if (!blocked && side && trigger && plan) {
+  if (!blocked && side && trigger && plan && !brokeZone) {
     const price = entry ?? c.close;
     setup = {
       direction: side,
@@ -575,6 +705,7 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
       lockStop: price + dir * TREND_LOCK_TO_R * plan.risk,
       swing: plan.swing,
       stopBasis: plan.basis,
+      zone: plan.zone,
       atr,
       time: c.time + M15,
       key: `${TREND_KEY_PREFIX}${c.time}`,
@@ -598,6 +729,8 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
     levels,
     checks,
     blocked,
+    zones: [...zones.filter((z) => z.high < c.close).slice(-4), ...zones.filter((z) => z.low <= c.close && z.high >= c.close), ...zones.filter((z) => z.low > c.close).slice(0, 4)],
+    brokeZone,
     setup,
   };
 }

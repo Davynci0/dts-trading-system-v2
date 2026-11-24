@@ -31,6 +31,11 @@ import {
   TREND_RANGE_MIN,
   TREND_REENTRY_MINUTES,
   TREND_REENTRY_R,
+  TREND_SR_DAYS,
+  TREND_SR_TOUCHES,
+  TREND_SR_WIDTH_ATR,
+  srZones,
+  zonesAt,
   TREND_STOP_BARS,
   TREND_STOP_BUFFER_ATR,
   TREND_SWING,
@@ -285,10 +290,10 @@ console.log("\nrules, on the generated market");
   // the stop: set by the last two candles, inside the two limits
   const basis = (b: string) => setups.filter((x) => x.s.setup!.stopBasis === b);
   check("stops come from the level itself and from the far limit", basis("swing").length >= 20 && basis("furthest").length >= 20, `level ${basis("swing").length}, nearest ${basis("nearest").length}, furthest ${basis("furthest").length}`);
-  check("most stops are set by the candles, not by a limit", basis("swing").length > setups.length / 2, `${basis("swing").length} of ${setups.length}`);
+  check("most stops are set by the candles or by a support/resistance zone, not by a limit", basis("swing").length + basis("zone").length > setups.length / 2, `candles ${basis("swing").length}, zone ${basis("zone").length} of ${setups.length}`);
   check(
-    "the level is the low of the last two candles for a buy and their high for a sell — the same for every entry",
-    TREND_STOP_BARS === 2 && ok((x, d) => near(x.s.setup!.swing, d === 1 ? Math.min(m15[x.i].low, m15[x.i - 1].low) : Math.max(m15[x.i].high, m15[x.i - 1].high)))
+    "without a zone, the level is the low of the last two candles for a buy and their high for a sell — the same for every entry",
+    TREND_STOP_BARS === 2 && setups.filter((x) => x.s.setup!.stopBasis !== "zone").every((x) => { const d = x.s.setup!.direction === "long" ? 1 : -1; return near(x.s.setup!.swing, d === 1 ? Math.min(m15[x.i].low, m15[x.i - 1].low) : Math.max(m15[x.i].high, m15[x.i - 1].high)); })
   );
   check(
     "the stop sits 0.2 ATR beyond that level",
@@ -315,8 +320,8 @@ console.log("\nrules, on the generated market");
   check("the entry is the candle's close and the signal is timed at that close", ok((x) => x.s.setup!.entry === m15[x.i].close && x.s.setup!.time === m15[x.i].time + M15 && x.s.setup!.key === `trend:${m15[x.i].time}`));
   check("nothing is signalled while a condition is unmet", states.every((s) => !(s.blocked && s.setup)) && states.every((s) => !s.setup || s.checks.every((c) => c.met)));
   check("no signal before the history has settled", setups.every((x) => x.i >= TREND_MIN_CANDLES && m15[x.i].time + M15 >= h1[TREND_MIN_H1_CANDLES].time + H1));
-  const pending = states.findIndex((s, i) => i > 4 * TREND_MIN_H1_CANDLES + LONGEST && !s.blocked && !s.setup && s.levels.length === TREND_BREAKOUT_BARS.length + 1);
-  check("with the trend confirmed and no entry yet, only the entry is missing", pending > 0 && states[pending].checks.length === 8 && states[pending].checks.filter((c) => !c.met).length === 1 && !states[pending].checks[7].met);
+  const pending = states.findIndex((s, i) => i > 4 * TREND_MIN_H1_CANDLES + LONGEST && !s.blocked && !s.setup && !s.brokeZone && s.levels.length === TREND_BREAKOUT_BARS.length + 1);
+  check("with the trend confirmed and no entry yet, only the entry is missing", pending > 0 && states[pending].checks.length === 9 && states[pending].checks.filter((c) => !c.met).length === 1 && !states[pending].checks[8].met);
   const lvl = states[pending];
   check(
     "the levels shown are the ones the NEXT candle has to close beyond: the last swing and each channel",
@@ -365,6 +370,45 @@ console.log("\nrules, on the generated market");
   check(
     "when costs are more than 6% of even the widest stop there is no trade, and the panel says why",
     near(small.costShare!, 10 * states[one.i].costShare!, 1e-9) && small.costShare! > 0.06 && small.setup == null && !!small.blocked?.startsWith("the candles are too small") && small.checks[6].met === false && small.checks.slice(0, 6).every((c) => c.met)
+  );
+}
+
+// ───────────── support and resistance ─────────────
+console.log("\nsupport and resistance");
+{
+  const z = srZones([100, 100.5, 100.9, 105, 105.2, 110, 101.5], 1);
+  check("a zone is three or more turning points no more than its width apart", z.length === 1 && z[0].low === 100 && z[0].high === 100.9 && z[0].touches === 3, JSON.stringify(z));
+  check("two points are not a zone; a point is never counted in two zones", srZones([1, 2, 10, 11], 5).length === 0 && srZones([0, 0.5, 1, 1.5, 2, 2.5], 1).reduce((n, q) => n + q.touches, 0) <= 6);
+  // the zones at a candle are built from the 1-hour swings known by its close, of the last 30 days only
+  const probe = [Math.floor(series.n * 0.5), Math.floor(series.n * 0.75), series.n - 1];
+  check(
+    `the zones use only 1-hour swings already known, from the last ${TREND_SR_DAYS} days, and are no taller than ${TREND_SR_WIDTH_ATR} daily ATR`,
+    probe.every((i) => {
+      const t = m15[i].time + M15;
+      const pts = series.h1Swings.filter((x) => x.known <= t && x.time >= t - TREND_SR_DAYS * 86400).map((x) => x.price);
+      const want = srZones(pts, TREND_SR_WIDTH_ATR * series.dailyAtr[i]);
+      const got = zonesAt(series, i);
+      return JSON.stringify(want) === JSON.stringify(got) && got.every((q) => q.touches >= TREND_SR_TOUCHES && q.high - q.low <= TREND_SR_WIDTH_ATR * series.dailyAtr[i] + 1e-9);
+    }) && series.h1Swings.every((x) => x.known > x.time)
+  );
+  const brokeSignals = states.filter((s) => s.brokeZone != null && s.checks[8].met === false && s.blocked?.startsWith("this candle closed through"));
+  check("a candle that has just closed through a zone is not traded, and the panel says why", setups.every((x) => states[x.i].brokeZone == null) && brokeSignals.length > 0, `${brokeSignals.length} entries refused`);
+  check(
+    "closing through a zone means the candle before closed on the other side of it",
+    states.every((s, i) => !s.brokeZone || (s.dailyTrend === 1 ? m15[i - 1].close <= s.brokeZone.high && m15[i].close > s.brokeZone.high : m15[i - 1].close >= s.brokeZone.low && m15[i].close < s.brokeZone.low))
+  );
+  const zoned = setups.filter((x) => x.s.setup!.stopBasis === "zone");
+  check(
+    "with a zone behind the entry, the stop sits 0.2 ATR beyond its far edge — the nearest zone behind, within the limits",
+    zoned.length > 0 &&
+      zoned.every(({ i, s }) => {
+        const u = s.setup!;
+        const d = u.direction === "long" ? 1 : -1;
+        const edge = d === 1 ? u.zone!.high : u.zone!.low;
+        const nearer = zonesAt(series, i).some((q) => { const e = d === 1 ? q.high : q.low; return d * (u.entry - e) > 0 && d * (u.entry - e) < d * (u.entry - edge); });
+        return near(u.swing, edge) && near(u.stopLoss, edge - d * TREND_STOP_BUFFER_ATR * series.atr[i], 1e-9) && !nearer && u.risk >= TREND_MIN_RISK_ATR * series.atr[i] - 1e-9 && u.risk <= TREND_MAX_RISK_ATR * series.atr[i] + 1e-9;
+      }),
+    `${zoned.length} stops set by a zone`
   );
 }
 

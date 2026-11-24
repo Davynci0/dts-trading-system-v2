@@ -34,6 +34,10 @@ export interface TrendSummary {
   /** no same-side trade within this many minutes of the last entry and this many R of its price */
   reentryMinutes: number;
   reentryR: number;
+  zones: { low: number; high: number; touches: number }[];
+  brokeZone: { low: number; high: number; touches: number } | null;
+  srDays: number;
+  srTouches: number;
   holdHours: number;
   readAt: number;
   setup: { direction: "long" | "short"; entry: number; stopLoss: number; takeProfit: number; trigger: string; lockTrigger: number; lockStop: number } | null;
@@ -133,6 +137,17 @@ export default function TrendTracker({ trend, signals, price, digits = 2 }: { tr
                 <span>{px(l.price)}</span>
               </li>
             ))}
+            {[...trend.zones].reverse().map((z) => (
+              <li key={`z${z.low}`} className="flex justify-between">
+                <span>
+                  support/resistance zone · {z.touches} touches
+                  {trend.brokeZone && trend.brokeZone.low === z.low ? " — the last candle closed through it" : ""}
+                </span>
+                <span>
+                  {px(z.low)}–{px(z.high)}
+                </span>
+              </li>
+            ))}
             {trend.atr != null && (
               <li className="flex justify-between">
                 <span>a new trade&apos;s risk (per ounce)</span>
@@ -143,7 +158,7 @@ export default function TrendTracker({ trend, signals, price, digits = 2 }: { tr
             )}
           </ul>
           <p className="mt-3 text-[10px] leading-relaxed text-neutral-600">
-            Read on the 15-minute candle that closed at {clock(trend.readAt * 1000)}. The stop goes just beyond the {up ? "low" : "high"} of the last two candles
+            Read on the 15-minute candle that closed at {clock(trend.readAt * 1000)}. Support/resistance zones are where {trend.srTouches} or more 1-hour swing highs or lows of the last {trend.srDays} days sit together; a candle that has just closed through one is not traded. The stop goes just beyond the {up ? "support" : "resistance"} zone behind the entry, or else beyond the {up ? "low" : "high"} of the last two candles
             {stopSwing != null ? ` (${px(stopSwing)})` : ""}, never closer than {trend.minRiskAtr} ATR or further than {trend.maxRiskAtr} ATR. Take-profit 1:{trend.targetR}; at +{trend.lockAtR}R the stop moves to +{trend.lockToR}R; closed at market after {trend.holdHours} hours. One trade at a time, and no new trade on the same side within {trend.reentryR}R of the last entry for {trend.reentryMinutes} minutes; about two in three close in profit.
           </p>
         </>
