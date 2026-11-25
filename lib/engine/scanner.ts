@@ -349,6 +349,7 @@ export async function runScan(opts: {
             lockToR: TREND_LOCK_TO_R,
             holdHours,
             trendDays: TREND_DAYS,
+            confirmed: setup.confirmed,
             accountBalance,
             riskPct: RISK_PCT,
             lateMinutes,

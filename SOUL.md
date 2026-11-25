@@ -15,6 +15,9 @@ the strategy, the backtest and the reports, until the owner says otherwise.
 3. **The 15-minute chart**, with higher timeframes for confirmation.
 4. **A modest target: about 1:3 risk to reward.** Do not aim for distant targets.
 5. **About 2.5 trades a trading day; never fewer than 2.**
+   (On 24 and 25 November 2026 the owner chose fewer, better trades over this number more than
+   once — losing three to five in a row matters more to them than how many trades there are.
+   The system now makes about 0.8 a day. Say so plainly whenever a change lowers it.)
 6. **Market structure decides the trade and its risk.** Read swing highs and swing lows. In a
    downtrend, expect price to come up a little and then continue down: sell the pullback, not
    the low. The stop goes where the structure says the idea is wrong (beyond the swing), not

@@ -27,6 +27,7 @@ import {
   TREND_MOMENTUM_ATR,
   TREND_MOMENTUM_CLOSE,
   TREND_QUIET_HOURS_UTC,
+  TREND_CONFIRMATIONS_MIN,
   TREND_RANGE_BARS,
   TREND_RANGE_MIN,
   TREND_REENTRY_MINUTES,
@@ -245,7 +246,13 @@ console.log("\nrules, on the generated market");
   // the four conditions that come from the losing trades
   check(`never once the 1-hour ADX is ${TREND_ADX_MAX} or more`, TREND_ADX_MAX === 40 && ok((x) => series.h1Adx[x.i] < 40) && states.some((s) => s.blocked?.startsWith("the trend is exhausted")));
   const closeHour = (i: number) => new Date((m15[i].time + M15) * 1000).getUTCHours();
-  check("never on a candle that closes in the London morning, 07:00 to 12:00 UTC", TREND_QUIET_HOURS_UTC.join() === "7,12" && ok((x) => closeHour(x.i) < 7 || closeHour(x.i) >= 12) && states.some((s) => s.blocked?.startsWith("the London morning")));
+  check("never on a candle that closes in the London morning or the US data hour, 07:00 to 14:00 UTC", TREND_QUIET_HOURS_UTC.join() === "7,14" && ok((x) => closeHour(x.i) < 7 || closeHour(x.i) >= 14) && states.some((s) => s.blocked?.startsWith("the London morning")));
+  check(
+    `every trade has at least ${TREND_CONFIRMATIONS_MIN} of the six trend confirmations, and one short of them is refused with the reason`,
+    setups.every((x) => states[x.i].confirmations.length === 6 && states[x.i].confirmed === states[x.i].confirmations.filter((c) => c.met).length && states[x.i].confirmed >= TREND_CONFIRMATIONS_MIN && x.s.setup!.confirmed === states[x.i].confirmed) &&
+      states.some((s) => s.setup == null && s.confirmed < TREND_CONFIRMATIONS_MIN && !!s.blocked?.includes("trend confirmations")),
+    `${states.filter((s) => s.blocked?.includes("trend confirmations")).length} refused`
+  );
   check(
     "only in the trend's half of the last 24 hours' range",
     TREND_RANGE_BARS === 96 &&
@@ -327,7 +334,7 @@ console.log("\nrules, on the generated market");
   check("nothing is signalled while a condition is unmet", states.every((s) => !(s.blocked && s.setup)) && states.every((s) => !s.setup || s.checks.every((c) => c.met)));
   check("no signal before the history has settled", setups.every((x) => x.i >= TREND_MIN_CANDLES && m15[x.i].time + M15 >= h1[TREND_MIN_H1_CANDLES].time + H1));
   const pending = states.findIndex((s, i) => i > 4 * TREND_MIN_H1_CANDLES + LONGEST && !s.blocked && !s.setup && s.checks.slice(0, -1).every((c) => c.met) && s.levels.length === TREND_BREAKOUT_BARS.length + 1);
-  check("with the trend confirmed and no entry yet, only the entry is missing", pending > 0 && states[pending].checks.length === 11 && states[pending].checks.filter((c) => !c.met).length === 1 && !states[pending].checks[10].met);
+  check("with the trend confirmed and no entry yet, only the entry is missing", pending > 0 && states[pending].checks.length === 12 && states[pending].checks.filter((c) => !c.met).length === 1 && !states[pending].checks[11].met);
   const lvl = states[pending];
   check(
     "the levels shown are the ones the NEXT candle has to close beyond: the last swing and each channel",
@@ -375,7 +382,7 @@ console.log("\nrules, on the generated market");
   const small = trendStateAt(buildTrendSeries({ m15: tenth(m15.slice(0, one.i + 1)), h1: tenth(h1.filter((c) => c.time + H1 <= end)), daily: tenth(daily) }), one.i);
   check(
     "when costs are more than 6% of even the widest stop there is no trade, and the panel says why",
-    near(small.costShare!, 10 * states[one.i].costShare!, 1e-9) && small.costShare! > 0.06 && small.setup == null && !!small.blocked?.startsWith("the candles are too small") && small.checks[6].met === false && small.checks.slice(0, 6).every((c) => c.met)
+    near(small.costShare!, 10 * states[one.i].costShare!, 1e-9) && small.costShare! > 0.06 && small.setup == null && !!small.blocked?.startsWith("the candles are too small") && small.checks[7].met === false && small.checks.slice(0, 7).every((c) => c.met)
   );
 }
 
@@ -424,7 +431,7 @@ console.log("\nsupport and resistance");
       return JSON.stringify(want) === JSON.stringify(got) && got.every((q) => q.touches >= TREND_SR_TOUCHES && q.high - q.low <= TREND_SR_WIDTH_ATR * series.dailyAtr[i] + 1e-9);
     }) && series.h1Swings.every((x) => x.known > x.time)
   );
-  const brokeSignals = states.filter((s) => s.brokeZone != null && s.checks[7].met === false && s.blocked?.startsWith("this candle closed through"));
+  const brokeSignals = states.filter((s) => s.brokeZone != null && s.checks[8].met === false && s.blocked?.startsWith("this candle closed through"));
   check("a candle that has just closed through a zone is not traded, and the panel says why", setups.every((x) => states[x.i].brokeZone == null) && brokeSignals.length > 0, `${brokeSignals.length} entries refused`);
   check(
     "closing through a zone means the candle before closed on the other side of it",

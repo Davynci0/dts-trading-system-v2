@@ -4,9 +4,10 @@ Signal-only gold (XAU/USD) trading system: a **market-structure scalp on the 15-
 ("the trend scalp"). One trade at a time, a **1:3** target with a **profit lock**, every trade
 closed within **five hours**, with **support and resistance zones** deciding where not to enter
 and where the stop goes, **supply and demand zones** it will not trade into, and no duplicate
-entries. About **two trades in three close in profit**, at about **1.4 trades a trading day**:
-785 trades in five years, 69% won, +160.4R, worst drawdown 9.9R, never more than five losses in
-a row ([backtest](#backtesting)).
+entries, and **five of six trend confirmations** before any trade. About **seven trades in ten
+close in profit**, at about **0.8 trades a trading day**: 435 trades in five years, 71% won,
++114.2R, worst drawdown 7.0R, never more than four losses in a row and three or more in a row six
+times ([backtest](#backtesting)).
 
 The scanner reads the chart every 15 minutes; when a candle completes an entry, the trade —
 entry, stop loss and take profit — is sent to Telegram. The user reviews each signal and
@@ -66,7 +67,8 @@ lapses after ten days.
 | 2 | 1-hour structure | bullish for buys, bearish for sells |
 | 3 | Trend not exhausted | the 1-hour ADX under 40 |
 | 4 | A real daily trend | price at least 1% beyond the 50-day average, on the trend's side |
-| 5 | Not the London morning | no new trade on a candle that closes between 07:00 and 12:00 UTC |
+| 5 | Not the London morning or the US data hour | no new trade on a candle that closes between 07:00 and 14:00 UTC |
+| 5b | Five of six trend confirmations | on the 1-hour chart price, the 20-EMA and the 50-EMA lined up · the 1-hour 50-EMA beyond the 200-EMA with price beyond it · 1-hour +DI/−DI on the trade's side · on the 15-minute chart price and the 20-, 50- and 200-EMA lined up · price 2% or more beyond the 50-day average · the daily ADX at 25 or more ([why](#what-the-losing-trades-had-in-common)) |
 | 6 | The right half of the range | a buy only in the upper half of the last 24 hours' range, a sell only in the lower half |
 | 7 | Costs | spread + slippage at most 6% of the trade's risk |
 | 8 | Not through a zone | no trade on a candle that has just closed through a support/resistance zone — price usually comes back to test it |
@@ -233,8 +235,52 @@ only acted on when it lost in **both halves** of the five years and had a reason
   candle. Before: 870 trades, 68% won, +155.9R, drawdown 9.5R. After: **785 trades, 69% won,
   +160.4R**, drawdown 9.9R.
 
-This was chosen by looking at the same five years it is measured on, so it is the best case, not
-a forecast — the test that counts is live trading.
+### The confirmations: what the trades that made money had in common
+
+The owner's brief: winning two and losing one is fine; losing three to five in a row is not. The
+785 trades were laid out against every reading the scanner has. Two honest findings first:
+
+- **No reading separates winners from losers by much.** Whatever was tried, between 62% and 76% of
+  the trades in a group won. Changing the exit does not help either: every other profit lock and
+  target made less money with the same losing runs.
+- **Standing aside after a loss does not help.** The trade after a loss wins as often (69%) as the
+  trade after a win, so a pause only removes trades.
+
+What does help is trading less, in better conditions. Six readings each made more per trade in
+both halves of the five years when present; a trade now needs **five of the six**:
+
+| Confirmation | R a trade with it | without it |
+| --- | --- | --- |
+| 1-hour price, 20-EMA and 50-EMA lined up | 0.22 | 0.16 |
+| 1-hour 50-EMA beyond the 200-EMA, price beyond it | 0.22 | 0.15 |
+| 1-hour +DI/−DI on the trade's side | 0.22 | 0.14 |
+| 15-minute price and 20-, 50-, 200-EMA lined up | 0.22 | 0.16 |
+| Price 2% or more beyond the 50-day average | 0.22 | −0.01 |
+| Daily ADX 25 or more | 0.23 | 0.17 |
+
+And the **US data hour** (candles closing 12:00–14:00 UTC, 7 to 9 am in New York) joined the
+no-trade hours: 162 trades, 62% won in both halves, 28% full losses — the worst hours of the day.
+
+| | Before | With five of six confirmations, no trade 07:00–14:00 UTC |
+| --- | --- | --- |
+| Trades | 785 (1.4 a day) | 435 (0.8 a day) |
+| Won | 69% | 71% |
+| Total | +160.4R | +114.2R |
+| A trade | 0.20R | 0.26R |
+| Worst drawdown | 9.9R | 7.0R |
+| Longest losing run | 5 | 4 |
+| Three or more losses in a row | 18 times | 6 times |
+| Four or more in a row | 4 times | 3 times |
+| Days at −2R or worse | 7 | 3 |
+
+Both halves of the five years give the same result (+56.1R and +58.1R, 71% won in each). The cost
+is plain: 46R less profit over five years and about half the trades, and over the last 30 days it
+made +4.5R from 24 trades where the rules before made +9.4R from 39. **Runs of three losses still
+happen — about once a year instead of three or four times.** A system that wins seven in ten
+cannot avoid them altogether.
+
+These were chosen by looking at the same five years they are measured on, so this is the best
+case, not a forecast — the test that counts is live trading.
 
 ## Strategies that were tried next to it, and removed
 
@@ -249,7 +295,7 @@ signal. Their five-year tests, for the record:
 | Supply and demand zones (30-minute, with the daily trend) | 50 trades, 60% won, +60.3R | About ten trades a year; one trade last month, a loss |
 
 With the last two the three together made 1,045 trades, 65% won, +287.3R with a worst drawdown of
-11.4R, against 785 trades, 69% won, +160.4R and 9.9R for the trend scalp alone: more profit over
+11.4R, against 785 trades, 69% won, +160.4R and 9.9R for the trend scalp alone as it then was: more profit over
 five years, but a lower win rate, a deeper drawdown and up to three trades open at once. The code
 is in the git history (`lib/analysis/trendline.ts`, `lib/analysis/zones.ts`, `lib/strategies.ts`).
 
@@ -302,44 +348,42 @@ XAU/USD, to 2026-11-24, in R (1R = the risk of one trade):
 
 | | Trades | A week | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **5 years** | **785** | **3.0** | **69%** | **+160.4R** | **+132.8R** | **9.9R** | **5** |
-| **Last 3 years** | 690 | 4.4 | 68% | +150.4R | +127.7R | 9.9R | 5 |
+| **5 years** | **435** | **1.7** | **71%** | **+114.2R** | **+99.3R** | **7.0R** | **4** |
+| **Last 3 years** | 378 | 2.4 | 71% | +108.4R | +96.4R | 7.0R | 4 |
 
 | Year from | Trades | A week | Win rate | Total |
 | --- | --- | --- | --- | --- |
-| Nov 2021 | 53 | 1.0 | 74% | +8.9R |
-| Nov 2022 | 42 | 0.8 | 69% | +1.0R |
-| Nov 2023 | 94 | 1.8 | 69% | +24.4R |
-| Nov 2024 | 232 | 4.5 | 66% | +36.7R |
-| Nov 2025 | 364 | 7.0 | 70% | +89.4R |
+| Nov 2021 | 32 | 0.6 | 75% | +6.7R |
+| Nov 2022 | 25 | 0.5 | 72% | −0.9R |
+| Nov 2023 | 53 | 1.0 | 72% | +19.6R |
+| Nov 2024 | 118 | 2.3 | 71% | +38.7R |
+| Nov 2025 | 207 | 4.0 | 71% | +50.1R |
 
-- **How trades end:** 175 at the first stop (a full loss), 451 at the moved stop (a small gain,
-  or a little less after a gap), 64 at the 1:3 target, 95 at the five-hour limit (77 of those
-  in profit, +1.1R on average).
-- **What a win and a loss are worth:** the average win is 0.67R, the average loss 0.82R.
-- **How long they last:** 56% are over within an hour, 25% last 1 to 3 hours, 18% last 3 to 5.
-  None is held longer than five.
-- **By entry:** momentum candles +77.6R (397 trades, 68% won), breakouts on a momentum candle
-  +46.1R (119, 76%), breaks of structure +36.6R (269, 66%). Buys +104.3R (68%), sells +56.1R (71%).
-- **The last twelve months:** 364 trades — 1.41 a trading day, on 158 of about 260 trading
-  days; 70% closed in profit.
+- **How trades end:** 87 at the first stop (a full loss), 252 at the moved stop (a small gain,
+  or a little less after a gap), 38 at the 1:3 target, 58 at the five-hour limit.
+- **What a win and a loss are worth:** the average win is 0.69R, the average loss 0.80R.
+- **How long they last:** half are over within an hour. None is held longer than five.
+- **By entry:** momentum candles +61.8R (205 trades, 71% won), breakouts on a momentum candle
+  +30.1R (75, 83%), breaks of structure +22.3R (155, 66%). Buys +88.0R (71%), sells +26.2R (71%).
+- **The last twelve months:** 207 trades — 0.8 a trading day; 71% closed in profit. The last six
+  months 105 trades, +23.0R; the last month 24 trades, +4.5R.
 
 **Read this before trusting it.**
 
 - **A high win rate is not a high profit.** Most wins are the moved stop at +0.2R; the losses
-  are mostly a full 1R. It averages 0.20R a trade — 0.17R with costs doubled — and the same
-  entries without the lock make about twice as much. Five losses in a row have happened.
+  are mostly a full 1R. It averages 0.26R a trade — 0.23R with costs doubled — and the same
+  entries without the lock make about twice as much. Four losses in a row have happened.
 - **The lock needs you to act.** The backtest moves the stop from the 15-minute candle after
   price reaches +0.4R. Live, that is a second Telegram message; if the stop is moved late, or
   not at all, the result is not the one in the table.
 - **It trades often only while gold is this active.** The cost limit keeps it out when
-  15-minute candles are small: about one trade a week in the first two years, seven a week in
-  the last. If gold goes quiet, it will too.
-- **Most of the evidence is two years old or less.** 596 of the 785 trades, and nearly four-fifths of
+  15-minute candles are small: about one trade in two weeks in the first two years, four a week
+  in the last. If gold goes quiet, it will too.
+- **Most of the evidence is two years old or less.** 325 of the 435 trades, and nearly four-fifths of
   the profit, are from the last two years. The filters and the lock were chosen by looking
   at these same five years, so expect less than the table.
 - **Check the spread you actually pay.** Everything above assumes $0.35 an ounce a trade. At
-  twice that the five-year result falls from +160R to +133R.
+  twice that the five-year result falls from +114R to +99R.
 - **Size.** In the last twelve months the stop was $6 to $74 an ounce, $15 in the middle. The
   usual minimum trade (0.01 lot = 1 oz) then risks about 3% of a $500 account per trade — six
   times the 0.5% the system assumes. At 0.5% a trade, $500 became $1,076 over the five years with

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { EXECUTION_CANDLES, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/analysis/execution";
-import { buildTrendSeries, structureMarks, trendStateAt, TREND_QUIET_HOURS_UTC, TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MAX_RISK_ATR, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_MIN_RISK_ATR, TREND_REENTRY_MINUTES, TREND_REENTRY_R, TREND_SR_DAYS, TREND_SR_TOUCHES, TREND_TARGET_R, TREND_MAX_CANDLE_ATR, TREND_SD_AHEAD_R } from "@/lib/analysis/trend";
+import { buildTrendSeries, emaOf, structureMarks, trendStateAt, TREND_QUIET_HOURS_UTC, TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MAX_RISK_ATR, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_MIN_RISK_ATR, TREND_REENTRY_MINUTES, TREND_REENTRY_R, TREND_SR_DAYS, TREND_SR_TOUCHES, TREND_TARGET_R, TREND_MAX_CANDLE_ATR, TREND_SD_AHEAD_R } from "@/lib/analysis/trend";
 import { fetchScanCandles } from "@/lib/engine/scanner";
 import { fetchCandles } from "@/lib/oanda";
 import type { Candle } from "@/lib/types";
@@ -64,6 +64,9 @@ export async function GET(req: NextRequest) {
         costShare: t.costShare,
         side: t.side,
         checks: t.checks,
+        /** the six trend confirmations behind the "confirmations" check */
+        confirmations: t.confirmations,
+        confirmed: t.confirmed,
         blocked: t.blocked,
         levels: t.levels,
         minRiskAtr: TREND_MIN_RISK_ATR,
@@ -96,11 +99,16 @@ export async function GET(req: NextRequest) {
     // low, and the hours in which no new trade is taken
     const from = candles[0]?.time ?? 0;
     const marks = structureMarks(shown);
+    // the moving averages of the chart shown: the 20-, 50- and 200-EMA the confirmations are read from
+    const emas = [20, 50, 200].map((period) => {
+      const values = emaOf(shown, period);
+      return { period, points: shown.map((c, k) => ({ time: c.time, value: values[k] })).slice(-candles.length) };
+    });
     const structure = { points: marks.points.filter((p) => p.time >= from), breaks: marks.breaks.filter((b) => b.time >= from) };
     const days = data.daily.filter((d) => ![5, 6].includes(new Date(d.time * 1000).getUTCDay()));
     const yesterday = days[days.length - 1];
     const context = { prevDayHigh: yesterday?.high ?? null, prevDayLow: yesterday?.low ?? null, quietHoursUtc: [...TREND_QUIET_HOURS_UTC] };
-    return NextResponse.json({ candles, view, trend, structure, context, build: process.env.APP_BUILD ?? null, asOf: to ?? null });
+    return NextResponse.json({ candles, view, trend, emas, structure, context, build: process.env.APP_BUILD ?? null, asOf: to ?? null });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }

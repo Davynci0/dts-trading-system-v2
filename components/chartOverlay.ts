@@ -31,6 +31,8 @@ export interface OverlayData {
   } | null;
   /** yesterday's high and low */
   dayLevels?: { high: number; low: number } | null;
+  /** the moving averages of the chart shown (20-, 50-, 200-EMA) */
+  emas?: { period: number; points: { time: number; value: number }[] }[];
   /** stretches of candles in which no new trade is taken (first and last candle open time) */
   quiet?: { from: number; to: number; bars: number; label: string }[];
   /** fresh 1-hour supply (sell) and demand (buy) zones */
@@ -71,6 +73,9 @@ export const CHART_COLORS = {
   demand: "45,212,191", // teal — fresh demand
   supply: "251,113,133", // rose — fresh supply
   muted: "100,116,139",
+  ema20: "250,204,21", // yellow — the 20-EMA
+  ema50: "251,146,60", // orange — the 50-EMA
+  ema200: "232,121,249", // magenta — the 200-EMA
   ink: "229,231,235",
   win: "38,166,154",
   loss: "239,83,80",
@@ -163,6 +168,28 @@ class OverlayPaneView implements IPrimitivePaneView {
           }
 
           // ── yesterday's high and low ─────────────────────────────────────
+          // ── the moving averages: the 20-EMA brightest, the 200-EMA the heaviest ──
+          for (const e of data.emas ?? []) {
+            const rgb = e.period === 20 ? C.ema20 : e.period === 50 ? C.ema50 : C.ema200;
+            ctx.save();
+            ctx.strokeStyle = rgba(rgb, 0.85);
+            ctx.lineWidth = e.period === 200 ? 1.6 : 1.1;
+            ctx.beginPath();
+            let started = false;
+            let lastXY: [number, number] | null = null;
+            for (const p of e.points) {
+              const [x, y] = [X(p.time), Y(p.value)];
+              if (x == null || y == null) continue;
+              if (started) ctx.lineTo(x, y);
+              else ctx.moveTo(x, y);
+              started = true;
+              lastXY = [x, y];
+            }
+            ctx.stroke();
+            ctx.restore();
+            if (lastXY) tag(`EMA ${e.period}`, Math.min(lastXY[0] + 4, W - 4), lastXY[1] - 3, rgb, "right", 1, { small: true, dim: true });
+          }
+
           if (data.dayLevels) {
             for (const [name, price] of [["yesterday's high", data.dayLevels.high], ["yesterday's low", data.dayLevels.low]] as const) {
               const y = Y(price);

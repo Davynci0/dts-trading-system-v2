@@ -13,6 +13,7 @@ const LAYERS = [
   { id: "trend", label: "Entry levels", color: CHART_COLORS.trend, on: true },
   { id: "structure", label: "Market structure", color: CHART_COLORS.ink, on: true },
   { id: "context", label: "Day levels and no-trade hours", color: CHART_COLORS.muted, on: true },
+  { id: "emas", label: "Moving averages (20, 50, 200)", color: CHART_COLORS.ema50, on: true },
   { id: "zones", label: "Support and resistance", color: CHART_COLORS.zone, on: true },
   { id: "sd", label: "Supply and demand (1H)", color: CHART_COLORS.demand, on: true },
   { id: "position", label: "Open trades", color: null, on: true },
@@ -43,6 +44,7 @@ export default function Dashboard() {
   const [liveCandle, setLiveCandle] = useState<Candle | null>(null);
   const [trend, setTrend] = useState<TrendSummary | null>(null);
   const [marks, setMarks] = useState<{ structure: NonNullable<OverlayData["structure"]>; prevDayHigh: number | null; prevDayLow: number | null; quietHoursUtc: [number, number] } | null>(null);
+  const [emas, setEmas] = useState<NonNullable<OverlayData["emas"]>>([]);
   /** when the analysis was last loaded */
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -136,6 +138,7 @@ export default function Dashboard() {
 
     return {
       structure: layers.structure && marks ? marks.structure : null,
+      emas: layers.emas ? emas : [],
       dayLevels: layers.context && marks && marks.prevDayHigh != null && marks.prevDayLow != null ? { high: marks.prevDayHigh, low: marks.prevDayLow } : null,
       quiet,
       trend:
@@ -154,7 +157,7 @@ export default function Dashboard() {
       sdZones: layers.sd && trend && candles.length > 0 ? trend.sdZones.map((z) => ({ ...z, from: barAt(z.known - 1).time })) : [],
       digits: DIGITS,
     };
-  }, [trend, marks, layers, pairSignals, candles, view]);
+  }, [trend, marks, emas, layers, pairSignals, candles, view]);
 
   /** One line on what the trend allows right now. */
   const trendLine = useMemo(() => {
@@ -217,6 +220,7 @@ export default function Dashboard() {
           analysisSigRef.current = sig;
           setCandles(jsonCandles);
           setTrend(json.trend ?? null);
+          setEmas(json.emas ?? []);
           setMarks(json.structure && json.context ? { structure: json.structure, ...json.context } : null);
           setUpdatedAt(Date.now());
           setAsOf(json.asOf ?? null);

@@ -21,6 +21,9 @@ export interface TrendSummary {
   costShare: number | null;
   side: "long" | "short" | null;
   checks: { label: string; met: boolean }[];
+  /** the six trend confirmations behind the "confirmations" check */
+  confirmations?: { label: string; met: boolean }[];
+  confirmed?: number;
   blocked: string | null;
   /** the levels the next 15-minute candle has to close beyond for an entry */
   levels: { label: string; price: number; armed: boolean }[];
@@ -88,9 +91,22 @@ export default function TrendTracker({ trend, signals, price, digits = 2 }: { tr
           <p className={`mb-2 text-xs font-medium ${headline.tone}`}>{headline.text}</p>
           <ul className="mb-3 space-y-0.5">
             {trend.checks.map((c) => (
-              <li key={c.label} className={`flex items-start gap-2 text-xs ${c.met ? "text-teal-300" : "text-neutral-500"}`}>
-                <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${c.met ? "bg-teal-400" : "bg-neutral-700"}`} />
-                {c.label}
+              <li key={c.label} className={`text-xs ${c.met ? "text-teal-300" : "text-neutral-500"}`}>
+                <span className="flex items-start gap-2">
+                  <span className={`mt-1 inline-block h-2 w-2 shrink-0 rounded-full ${c.met ? "bg-teal-400" : "bg-neutral-700"}`} />
+                  {c.label}
+                </span>
+                {/* the six confirmations, under the check that counts them */}
+                {c.label.startsWith("Trend confirmations") && trend.confirmations && (
+                  <ul className="ml-4 mt-1 space-y-0.5 border-l border-neutral-800 pl-2">
+                    {trend.confirmations.map((x) => (
+                      <li key={x.label} className={`flex items-start gap-1.5 text-[11px] ${x.met ? "text-teal-300/80" : "text-neutral-600"}`}>
+                        <span>{x.met ? "✓" : "✗"}</span>
+                        {x.label}
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </li>
             ))}
           </ul>

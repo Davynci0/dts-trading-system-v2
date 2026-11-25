@@ -16,4 +16,4 @@ export const EXECUTION_CANDLES = 500;
  * enough 1-hour history for the structure to be the real one, and the daily
  * candles behind the 50-day average.
  */
-export const SCAN_HISTORY = { m15: 500, h1: 1000, daily: 150 } as const;
+export const SCAN_HISTORY = { m15: 500, h1: 1000, daily: 300 } as const;

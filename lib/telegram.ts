@@ -68,6 +68,8 @@ export async function sendTrendSignal(opts: {
   /** hours after which an undecided trade is closed at market */
   holdHours: number;
   trendDays: number;
+  /** how many of the six trend confirmations the trade has */
+  confirmed: number;
   accountBalance: number;
   riskPct: number;
   /** minutes since the signal candle closed, when the signal was recovered late */
@@ -87,6 +89,7 @@ export async function sendTrendSignal(opts: {
       `*Profit lock:* when price reaches \`${px(opts.lockTrigger)}\` (+${opts.lockAtR}R), move the stop to \`${px(opts.lockStop)}\` (+${opts.lockToR}R). You will get a message when it does.`,
       `Entry: ${opts.why}`,
       `Trend: 1-hour structure ${up ? "bullish (higher highs)" : "bearish (lower lows)"}, daily ${up ? "above" : "below"} its ${opts.trendDays}-day average`,
+      `Confirmations: ${opts.confirmed} of 6 — the 1-hour and 15-minute averages, +DI/−DI, the distance from the ${opts.trendDays}-day average, the daily ADX`,
       sizeLine(risk, opts.accountBalance, opts.riskPct),
       `Close the trade at market if neither level is hit within ${opts.holdHours} hours. One trade at a time: no new signal until this one is closed. About two in three close in profit — half of them at the moved stop, with a small gain.`,
       `_Signal only — review and execute manually._`,

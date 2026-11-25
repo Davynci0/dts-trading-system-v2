@@ -27,6 +27,8 @@ export interface TrendTrade {
   /** stop = the first stop · lock = the stop after the profit lock moved it · time = closed at market at the time limit */
   outcome: "target" | "stop" | "lock" | "time" | "open";
   trigger: TrendTrigger;
+  /** how many of the six trend confirmations it had */
+  confirmed: number;
 }
 
 /** The two entries, as the results are grouped. */
@@ -111,6 +113,7 @@ export function runTrendBacktest(opts: {
       rAchieved: (dir * (exitPrice - setup.entry) - cost) / setup.risk,
       outcome,
       trigger: setup.trigger,
+      confirmed: setup.confirmed,
     });
     open.push({ exitIndex: outcome === "open" ? Infinity : k, dir });
     last = { direction: setup.direction, time: m15[e].time, entry: setup.entry, risk: setup.risk };
