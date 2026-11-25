@@ -3,8 +3,6 @@ import { fetchCandles } from "@/lib/oanda";
 import { TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS } from "@/lib/analysis/trend";
 import { sendStopMoved } from "@/lib/telegram";
 import { strategyOf } from "@/lib/types";
-import { TL_LOCK_AT_R, TL_LOCK_TO_R, TL_MAX_HOLD_BARS } from "@/lib/analysis/trendline";
-import { ZN_MAX_HOLD_BARS } from "@/lib/analysis/zones";
 
 export interface SettleInput {
   direction: "long" | "short";
@@ -34,10 +32,8 @@ export interface ProfitLock {
   at: number;
   to: number;
 }
-/** The lock the trend scalp uses. */
+/** The lock the live rules use. */
 export const LIVE_LOCK: ProfitLock = { at: TREND_LOCK_AT_R, to: TREND_LOCK_TO_R };
-/** The lock of the trendline strategy. */
-export const TL_LOCK: ProfitLock = { at: TL_LOCK_AT_R, to: TL_LOCK_TO_R };
 
 /**
  * Follow a trade through the 15-minute candles since it was sent, exactly as
@@ -205,22 +201,16 @@ export async function scoreOpenSignals(
           .from("signals")
           .update({ trail_stop: followed.trailStop, ...(res ? {} : { trail_checked_at: new Date(followed.checkedAt).toISOString() }) })
           .eq("id", r.id);
-      } else if (strategyOf(r) === "trend" || strategyOf(r) === "trendline") {
-        // each has its own profit lock and time limit
-        const id = strategyOf(r) as "trend" | "trendline";
-        const lock = id === "trend" ? LIVE_LOCK : TL_LOCK;
-        const followed = followTrade({ ...r, firedAt }, candles, { maxHoldBars: id === "trend" ? TREND_MAX_HOLD_BARS : TL_MAX_HOLD_BARS, lock });
+      } else if (strategyOf(r) === "trend") {
+        const followed = followTrade({ ...r, firedAt }, candles, { maxHoldBars: TREND_MAX_HOLD_BARS, lock: LIVE_LOCK });
         res = followed.settlement;
         // the profit lock has moved the stop of a trade that is still open: record it once, and say so once
         if (!res && followed.stop !== r.stop_loss && r.trail_stop == null) {
           const { data: marked } = await supabase.from("signals").update({ trail_stop: followed.stop }).eq("id", r.id).is("trail_stop", null).select("id");
           if (marked?.length && opts.notify !== false) {
-            await sendStopMoved({ strategy: id, pair: r.pair, direction: r.direction, entry: r.entry, stop: followed.stop, takeProfit: r.take_profit, lockedR: lock.to }).catch(() => undefined);
+            await sendStopMoved({ pair: r.pair, direction: r.direction, entry: r.entry, stop: followed.stop, takeProfit: r.take_profit, lockedR: TREND_LOCK_TO_R }).catch(() => undefined);
           }
         }
-      } else if (strategyOf(r) === "zones") {
-        // the stop is not moved; closed at market after five trading days
-        res = settleSignal({ ...r, firedAt }, candles, ZN_MAX_HOLD_BARS);
       } else {
         res = settleSignal({ ...r, firedAt }, candles, LEGACY_MAX_HOLD_BARS);
       }

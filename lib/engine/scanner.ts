@@ -1,6 +1,5 @@
 import type { Candle, Pair, SignalDirection, StrategyId } from "@/lib/types";
 import { STRATEGY_IDS, strategyOf, TREND_KEY_PREFIX, TREND_STRATEGY } from "@/lib/types";
-import { conflictBlock, contradict, STRATEGIES } from "@/lib/strategies";
 import { fetchCandles } from "@/lib/oanda";
 import { EXECUTION_BAR_SECONDS, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/analysis/execution";
 import {
@@ -22,9 +21,7 @@ import {
   type TrendSetup,
 } from "@/lib/analysis/trend";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
-import { sendStrategySignal, sendTrendSignal } from "@/lib/telegram";
-import { readTrendlines, tlDailyTrend, tlSetup, tlTrendFlips, TL_HISTORY, TL_LOCK_AT_R, TL_LOCK_TO_R, TL_MAX_HOLD_BARS, TL_MIN_RISK_ATR, TL_OPTIONS, TL_SECONDS, TL_TARGET_R, TL_TIMEFRAME } from "@/lib/analysis/trendline";
-import { readZones, znContext, znSetup, ZN_HISTORY, ZN_MAX_HOLD_BARS, ZN_TARGET_R } from "@/lib/analysis/zones";
+import { sendTrendSignal } from "@/lib/telegram";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export interface ScanEvent {
@@ -41,10 +38,9 @@ export interface ScanSummary {
   events: ScanEvent[];
 }
 
-/** Share of the account one trade risks. Each of the three strategies can
- *  hold a trade, so up to three times this can be at risk at once; the
- *  five-year backtest's worst drawdown was 17 times the risk of one trade and
- *  its longest losing run 13 trades, so the default is half a percent.
+/** Share of the account one trade risks. One trade is open at a time; the
+ *  five-year backtest's worst drawdown was 10 times the risk of one trade and
+ *  its longest losing run 5 trades, so the default is half a percent.
  *  Override with RISK_PCT (e.g. 0.01 for one percent); the older name
  *  FIB_RISK_PCT is still read. */
 export const RISK_PCT = (() => {
@@ -140,7 +136,6 @@ export interface StoredSignal extends EarlierSignal {
 }
 
 const ALREADY_SENT = "this signal has already been sent";
-const isOpen = (r: EarlierSignal) => r.status === "active" && r.outcome == null;
 
 /**
  * Why a new trade may not be sent, or null when it may:
@@ -172,38 +167,6 @@ export function sendBlock(earlier: EarlierSignal[], trade: { key: string; direct
   return reentryBlock(lastEntryOf(earlier), trade);
 }
 
-/**
- * Why a signal of `strategy` may not be sent, or null when it may. `rows` are
- * the earlier signals of all three strategies.
- *  - Its own rules first: the trend scalp's send rules above; for the other
- *    two, a setup is traded once and the strategy holds one trade at a time.
- *  - Then the rule between strategies: nothing is sent against another
- *    strategy's open trade (lib/strategies.ts).
- */
-export function strategyBlock(rows: StoredSignal[], strategy: StrategyId, trade: { key: string; direction: SignalDirection; time: number; entry: number }, late = false): string | null {
-  const own = rows.filter((r) => strategyOf(r) === strategy);
-  let block: string | null = null;
-  if (strategy === "trend") block = sendBlock(own, trade, late);
-  else if (own.some((r) => r.variant === trade.key)) block = ALREADY_SENT;
-  else {
-    const open = own.find(isOpen);
-    if (open) block = `the ${STRATEGIES[strategy].name} ${open.direction === "long" ? "buy" : "sell"} is still open — one trade a strategy`;
-  }
-  if (block) return block;
-  const open = rows.filter(isOpen).flatMap((r) => {
-    const id = strategyOf(r);
-    return id ? [{ strategy: id, direction: r.direction }] : [];
-  });
-  return conflictBlock(open, { strategy, direction: trade.direction });
-}
-
-/** The strategies that send signals: all three, unless ENABLED_STRATEGIES names fewer (e.g. "trend,zones"). A strategy left out sends nothing new; its open trade is still followed to its end. */
-export const ENABLED_STRATEGIES: StrategyId[] = (() => {
-  const named = (process.env.ENABLED_STRATEGIES ?? "").split(",").map((x) => x.trim().toLowerCase());
-  const chosen = STRATEGY_IDS.filter((id) => named.includes(id));
-  return chosen.length > 0 ? chosen : [...STRATEGY_IDS];
-})();
-
 /** A signal a scan has found, before the send rules are applied. */
 interface Candidate {
   strategy: StrategyId;
@@ -219,15 +182,10 @@ interface Candidate {
 }
 
 /**
- * One scan: settle the open trades, then let each of the three strategies read
- * its own chart —
- *  - the trend scalp the last closed 15-minute candle (and the one before it,
- *    in case the scan that should have read it did not run);
- *  - the trendline strategy the 1-hour candle that has just closed;
- *  - supply and demand the last closed 15-minute candle against the fresh
- *    zones of the 30-minute chart (and the candle before it, likewise).
- * A candle that completes an entry is stored and sent to Telegram — unless the
- * strategy's own send rules forbid it, it contradicts another strategy, or the
+ * One scan: settle the open trade, then read the last closed 15-minute candle
+ * of each pair (lib/analysis/trend.ts) — and the one before it, in case the
+ * scan that should have read it did not run. A candle that completes an entry
+ * is stored and sent to Telegram — unless the send rules above forbid it or the
  * candle closed too long ago. Every scan leaves a row in market_state, written
  * when it starts and again when it is done, so one that did not run or failed
  * can be seen afterwards.
@@ -286,7 +244,7 @@ export async function runScan(opts: {
       continue;
     }
 
-    /** The earlier signals of the three strategies on this pair — the last 300 and every open one. Read once a scan, and kept current as trades are recorded. */
+    /** The earlier signals of the system on this pair — the last 300 and every open one. Read once a scan, and kept current as trades are recorded. */
     let known: StoredSignal[] | null = null;
     const earlierSignals = async (): Promise<StoredSignal[] | string> => {
       if (known) return known;
@@ -300,7 +258,7 @@ export async function runScan(opts: {
       const seen = new Set<string>();
       known = ([...(recent.data ?? []), ...(open.data ?? [])] as StoredSignal[]).filter((r) => {
         const id = `${r.strategy}|${r.variant}`;
-        // only the three live strategies — removed systems stored their trades under the same names
+        // only this system's rows — removed systems stored their trades under the same names
         if (strategyOf(r) === null || seen.has(id)) return false;
         seen.add(id);
         return true;
@@ -313,23 +271,16 @@ export async function runScan(opts: {
       if (ageMin > MAX_ENTRY_AGE_MIN) return `signal candle closed ${Math.round(ageMin)} min ago — too late to enter (limit ${MAX_ENTRY_AGE_MIN} min)`;
       const rows = await earlierSignals();
       if (typeof rows === "string") return `a setup was found but ${rows} — nothing sent`;
-      return strategyBlock(rows, c.strategy, c.signal, c.late);
+      return sendBlock(rows, c.signal, c.late);
     };
     const candidates: Candidate[] = [];
-    const px = (n: number) => n.toFixed(2);
-    /** the price a trade found now is entered at: the close of the newest 15-minute candle */
-    const priceNow = data.m15[data.m15.length - 1]?.close;
-    /** seconds since the last candle of `seconds` length closed, given the open time of any candle of that length */
-    const sinceClose = (anyOpen: number, seconds: number) => (((now / 1000 - anyOpen) % seconds) + seconds) % seconds;
-
     try {
       if (data.m15.length <= TREND_MIN_CANDLES || data.h1.length <= TREND_MIN_H1_CANDLES) {
         push("error", "not enough candles returned");
         continue;
       }
       const series = buildTrendSeries(data);
-      // a strategy that is switched off reads nothing
-      const newest = ENABLED_STRATEGIES.includes("trend") ? series.n - 1 : -9;
+      const newest = series.n - 1;
       // the candle before the newest first: a signal its own scan did not send is recovered while it is young enough
       for (const i of [newest - 1, newest]) {
       if (i < 0) continue;
@@ -408,132 +359,16 @@ export async function runScan(opts: {
       push("error", (e as Error).message.slice(0, 160));
     }
 
-    // ── the trendline strategy: the 1-hour candle that has just closed ──
-    try {
-      const lastH1 = data.h1[data.h1.length - 1];
-      if (ENABLED_STRATEGIES.includes("trendline") && lastH1 && priceNow != null && sinceClose(lastH1.time, TL_SECONDS) <= MAX_ENTRY_AGE_MIN * 60) {
-        const h1 = closedBy(await fetchCandles({ instrument: pair, granularity: TL_TIMEFRAME, count: TL_HISTORY, to }), TL_SECONDS);
-        const n = h1.length;
-        // only the candle that has just closed: an older one was read by its own scan
-        const found = (now / 1000 - (h1[n - 1].time + TL_SECONDS)) / 60 <= MAX_ENTRY_AGE_MIN ? readTrendlines(h1, TL_OPTIONS).events.filter((ev) => ev.index === n - 1) : [];
-        const trend = found.length > 0 ? tlDailyTrend(data.daily, found[0].time) : 0;
-        const flips = found.length > 0 ? tlTrendFlips(data.daily, found[0].time) : 0;
-        const plans = found.map((ev) => ({ ev, ...tlSetup(ev, h1[n - 1], trend, priceNow, pair, flips) }));
-        const lineOf = (ev: (typeof found)[number]) => `${ev.touches}-touch ${ev.line.kind === "up" ? "rising" : "falling"} trendline`;
-        const taken = plans.find((x) => x.setup);
-        // a candle can make more than one setup; the first that gives a trade is the trade
-        for (const x of plans) if (x !== taken && !(taken && x.ev.type === "break")) push("watching", `${x.ev.type} of a ${lineOf(x.ev)}: no trade — ${x.setup ? "another setup of this candle is traded" : x.reason}`, "trendline");
-        if (taken?.setup) {
-          const setup = taken.setup;
-          const lineName = lineOf(taken.ev);
-          const up = setup.direction === "long";
-          const why =
-            setup.type === "bounce"
-              ? `a 1-hour candle came back to a ${lineName} (at ${px(setup.line.value)}) and closed ${up ? "up" : "down"}, away from it — with the daily trend`
-              : `price broke ${up ? "above" : "below"} a ${lineName}, came back to it (at ${px(setup.line.value)}) and closed ${up ? "up" : "down"} off it — the broken line held, with the daily trend`;
-          const stopWhy = setup.stopBasis === "line" ? "just beyond the trendline" : `${TL_MIN_RISK_ATR} ATR away — the line is closer than that`;
-          const days = (TL_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS) / 86_400;
-          const manage = `Close at market if neither level is hit within ${days} trading days.`;
-          candidates.push({
-            strategy: "trendline",
-            signal: { key: setup.key, direction: setup.direction, time: setup.time, entry: setup.entry },
-            late: false,
-            row: {
-              entry: setup.entry,
-              stop_loss: setup.stopLoss,
-              take_profit: setup.takeProfit,
-              r_multiple: TL_TARGET_R,
-              sl_basis: stopWhy,
-              tp_basis: `${TL_TARGET_R} × the risk; the stop moves to +${TL_LOCK_TO_R}R once price reaches +${TL_LOCK_AT_R}R (${px(setup.lockTrigger)}); closed at market after ${days} trading days if neither is hit`,
-              confidence: 5,
-              confirmations: { [`Trendline ${setup.type}`]: true, "With the daily trend": true, "Line not too steep": true, "1-hour ADX under 40": true, "Stop within the limits": true },
-            },
-            describe: `${up ? "buy" : "sell"} at ${px(setup.entry)}, stop ${px(setup.stopLoss)}, target ${px(setup.takeProfit)} (${TL_TARGET_R}R) — trendline ${setup.type}`,
-            announce: () =>
-              sendStrategySignal({
-                strategy: "trendline",
-                headline: setup.type === "bounce" ? "1-hour trendline bounce" : "1-hour break and retest",
-                pair,
-                direction: setup.direction,
-                entry: setup.entry,
-                stopLoss: setup.stopLoss,
-                takeProfit: setup.takeProfit,
-                targetR: TL_TARGET_R,
-                why,
-                stopWhy,
-                manage,
-                lock: { trigger: setup.lockTrigger, stop: setup.lockStop, atR: TL_LOCK_AT_R, toR: TL_LOCK_TO_R },
-                accountBalance,
-                riskPct: RISK_PCT,
-              }),
-          });
-        }
-      }
-    } catch (e) {
-      push("error", (e as Error).message.slice(0, 160), "trendline");
-    }
-
-    // ── supply and demand: a 15-minute candle that rejected a fresh 30-minute zone ──
-    try {
-      if (ENABLED_STRATEGIES.includes("zones") && priceNow != null) {
-        // further back than the trend scalp reads: a zone lives ten days, and what price did to it since has to be known
-        const m15 = closedBy(await fetchCandles({ instrument: pair, granularity: EXECUTION_TIMEFRAME, count: ZN_HISTORY, to }), EXECUTION_BAR_SECONDS);
-        const n = m15.length;
-        // what the 1-hour and daily charts said when a candle closed
-        const context = znContext(data.h1, data.daily);
-        // the newest candle, and the one before it in case its scan did not run
-        const found = n > 2 ? readZones(m15, n - 2).events.filter((ev) => (now / 1000 - ev.time) / 60 <= MAX_ENTRY_AGE_MIN) : [];
-        for (const ev of found) {
-          const late = ev.index < n - 1;
-          const up = ev.direction === "long";
-          const zoneName = `${ev.zone.kind} zone ${px(Math.min(ev.zone.proximal, ev.zone.distal))}–${px(Math.max(ev.zone.proximal, ev.zone.distal))}`;
-          // found late: the stop must not have been reached since
-          if (late && (up ? m15[n - 1].low <= ev.stop : m15[n - 1].high >= ev.stop)) continue;
-          const { setup, reason } = znSetup(ev, context(ev.time), priceNow, pair);
-          if (!setup) {
-            if (!late) push("watching", `rejection of the ${zoneName}: no trade — ${reason}`, "zones");
-            continue;
-          }
-          const why = `price came back to a fresh 30-minute ${zoneName} after ${up ? "a down" : "an up"} day, traded into it and a 15-minute candle closed back ${up ? "above" : "below"} it — the zone was rejected, with the daily and the 1-hour trend`;
-          const stopWhy = `just beyond the far edge of the zone (${px(ev.zone.distal)})`;
-          const days = (ZN_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS) / 86_400;
-          const manage = `Set and leave: the stop is not moved. Close at market if neither level is hit within ${days} trading days.`;
-          candidates.push({
-            strategy: "zones",
-            signal: { key: setup.key, direction: setup.direction, time: setup.time, entry: setup.entry },
-            late: false,
-            row: {
-              entry: setup.entry,
-              stop_loss: setup.stopLoss,
-              take_profit: setup.takeProfit,
-              r_multiple: ZN_TARGET_R,
-              sl_basis: stopWhy,
-              tp_basis: `${ZN_TARGET_R} × the risk; the stop is not moved; closed at market after ${days} trading days if neither is hit`,
-              confidence: 8,
-              confirmations: { "Fresh zone, first return": true, "Rejected within two candles": true, "No deeper than half the zone": true, "With the daily trend": true, "1-hour ADX under 40": true, "1-hour averages agree": true, "Yesterday's candle against the trade": true, "1% or more beyond the 50-day average": true },
-            },
-            describe: `${late ? "recovered late: " : ""}${up ? "buy" : "sell"} at ${px(setup.entry)}, stop ${px(setup.stopLoss)}, target ${px(setup.takeProfit)} (${ZN_TARGET_R}R) — ${ev.zone.kind} zone`,
-            announce: () =>
-              sendStrategySignal({ strategy: "zones", headline: `rejection of a 30-minute ${ev.zone.kind} zone`, pair, direction: setup.direction, entry: setup.entry, stopLoss: setup.stopLoss, takeProfit: setup.takeProfit, targetR: ZN_TARGET_R, why, stopWhy, manage, accountBalance, riskPct: RISK_PCT }),
-          });
-        }
-      }
-    } catch (e) {
-      push("error", (e as Error).message.slice(0, 160), "zones");
-    }
-
-    // ── what may be sent: each strategy's own rules, then the rules between them ──
+    // ── what may be sent ──
     try {
       const sendable: Candidate[] = [];
       for (const c of candidates) {
         const block = await blockOf(c);
         if (!block) sendable.push(c);
         // a candle that is read on more than one scan having been sent on time is not news
-        else if (!(block === ALREADY_SENT && (c.late || c.strategy !== "trend"))) push("skipped", c.late ? `the candle before: ${block}` : block, c.strategy);
+        else if (!(block === ALREADY_SENT && c.late)) push("skipped", c.late ? `the candle before: ${block}` : block, c.strategy);
       }
-      if (contradict(sendable.map((c) => c.signal))) {
-        for (const c of sendable) push("skipped", `${c.describe} — another strategy signalled the opposite way at the same time, so neither is sent`, c.strategy);
-      } else {
+      {
         for (const c of sendable) {
           // a trade recorded a moment ago, on this scan, may now stand in its way
           const block = await blockOf(c);

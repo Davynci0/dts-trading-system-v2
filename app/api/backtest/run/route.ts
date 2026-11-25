@@ -1,8 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
 import { computeMetrics } from "@/lib/backtest/metrics";
-import { runThree, type ThreeTrade } from "@/lib/backtest/three";
-import { STRATEGIES, STRATEGY_LIST } from "@/lib/strategies";
+import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES, type TrendTrade } from "@/lib/backtest/trend";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAuthorizedMutation } from "@/lib/apiGuard";
 import { EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
@@ -31,8 +30,8 @@ async function fetchM15(pair: string, fromMs: number, toMs: number): Promise<Can
 /**
  * POST /api/backtest/run
  *
- * Quick backtest of the three strategies side by side on the last six months,
- * with the scanner's own detection. Stored for the Backtests page. Six months is one market mood — a
+ * Quick backtest of the system on the last six months, with the scanner's own
+ * detection. Stored for the Backtests page. Six months is one market mood — a
  * check that the rules run, not evidence about them. The five-year run lives
  * in scripts/backtest.ts. The multi-year run lives in scripts/backtest.ts.
  */
@@ -44,7 +43,7 @@ export async function POST(req: NextRequest) {
   const to = Date.now();
   const from = to - TRADED_DAYS * DAY_MS;
 
-  let trades: ThreeTrade[];
+  let trades: TrendTrade[];
   try {
     const [m15, h1, daily] = await Promise.all([
       fetchM15(pair, from - WARMUP_DAYS * DAY_MS, to),
@@ -52,22 +51,19 @@ export async function POST(req: NextRequest) {
       fetchCandles({ instrument: pair, granularity: "D", count: 400 }),
     ]);
     if (m15.length < 1000) throw new Error("not enough candles returned");
-    trades = [...runThree(pair, { m15, h1, daily }, from / 1000).together].sort((a, b) => a.exitTime - b.exitTime);
+    trades = runTrendBacktest({ pair, m15, h1, daily, from: from / 1000 });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }
 
   const cut = (from + 0.7 * (to - from)) / 1000;
-  const scope = (g: ThreeTrade[]) => ({
+  const scope = (g: TrendTrade[]) => ({
     inSample: computeMetrics(g.filter((t) => t.entryTime < cut)),
     outOfSample: computeMetrics(g.filter((t) => t.entryTime >= cut)),
     all: computeMetrics(g),
   });
   const scopes: Record<string, unknown> = { combined: scope(trades) };
-  for (const s of STRATEGY_LIST) scopes[`strategy:${s.name} (${s.chart})`] = scope(trades.filter((t) => t.strategy === s.id));
-  for (const type of [...new Set(trades.map((t) => `${STRATEGIES[t.strategy].name}: ${t.entryType}`))].sort()) {
-    scopes[`entry:${type}`] = scope(trades.filter((t) => `${STRATEGIES[t.strategy].name}: ${t.entryType}` === type));
-  }
+  for (const type of TREND_ENTRY_TYPES) scopes[`strategy:${type}`] = scope(trades.filter((t) => entryTypeOf(t) === type));
   scopes["pair:buys"] = scope(trades.filter((t) => t.direction === "long"));
   scopes["pair:sells"] = scope(trades.filter((t) => t.direction === "short"));
 
@@ -81,8 +77,8 @@ export async function POST(req: NextRequest) {
         range_end: new Date(to).toISOString(),
         pairs: [pair],
         timeframes: [EXECUTION_TIMEFRAME],
-        config: { engine: ENGINE_VERSION, system: "three strategies", days: TRADED_DAYS },
-        notes: `Quick run · last ${TRADED_DAYS} days · three strategies side by side`,
+        config: { engine: ENGINE_VERSION, system: "market-structure scalp", days: TRADED_DAYS },
+        notes: `Quick run · last ${TRADED_DAYS} days · market-structure scalp, 1:3, one trade at a time`,
       })
       .select("id")
       .single();

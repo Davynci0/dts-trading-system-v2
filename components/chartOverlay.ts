@@ -35,13 +35,6 @@ export interface OverlayData {
   quiet?: { from: number; to: number; bars: number; label: string }[];
   /** fresh 1-hour supply (sell) and demand (buy) zones */
   sdZones?: { kind: "demand" | "supply"; low: number; high: number; known: number; /** open time of the chart candle the band starts at */ from?: number }[];
-  /** the 1-hour trendlines the trendline strategy trades: the line's price at points along the chart */
-  trendlines?: { kind: "down" | "up"; touches: number; now: number; points: { time: number; price: number }[]; touchPoints?: { time: number; price: number }[]; broken?: "long" | "short" | null }[];
-  /** the trendline strategy's setups inside the chart: bounces, breaks and retests, and whether each was a trade */
-  lineMarks?: { time: number; price: number; type: "bounce" | "break" | "retest"; direction: "long" | "short"; traded: boolean }[];
-  /** the supply and demand strategy's fresh 30-minute zones — `tradable` = on the daily trend's side — and the candles that rejected one */
-  tradeZones?: { kind: "demand" | "supply"; low: number; high: number; touched: boolean; tradable: boolean; /** open time of the chart candle the band starts at */ from?: number }[];
-  zoneMarks?: { time: number; price: number; kind: "demand" | "supply"; direction: "long" | "short"; traded: boolean }[];
   /** the open trade's plan (entry/SL/TP), drawn as a position tool — the system holds one at a time */
   positions?: {
     /** the trade's name as shown on the chart */
@@ -75,8 +68,6 @@ export const EMPTY_OVERLAY: OverlayData = {};
 export const CHART_COLORS = {
   trend: "56,189,248", // sky blue — the breakout levels
   zone: "245,158,11", // amber — support and resistance
-  tori: "192,132,252", // violet — the trendline strategy's lines
-  area: "129,140,248", // indigo — the supply and demand strategy's zones
   demand: "45,212,191", // teal — fresh demand
   supply: "251,113,133", // rose — fresh supply
   muted: "100,116,139",
@@ -262,93 +253,6 @@ class OverlayPaneView implements IPrimitivePaneView {
             ctx.strokeRect(x0, top, W - x0, h);
             ctx.setLineDash([]);
             tag(`${z.kind === "demand" ? "DEMAND" : "SUPPLY"} 1H ${fmt(z.low)}–${fmt(z.high)} · fresh`, x0 + 4, top + (z.kind === "demand" ? h + 10 : -3), rgb, "left", 2, { small: true, dim: true });
-          }
-
-          // ── the 1-hour trendlines: a straight line per trendline, with its touches ──
-          for (const tl of data.trendlines ?? []) {
-            const pts = tl.points.map((p) => [X(p.time), Y(p.price)] as const).filter((p): p is readonly [number, number] => p[0] != null && p[1] != null);
-            if (pts.length < 2) continue;
-            const strong = tl.touches >= 3 && !tl.broken;
-            ctx.save();
-            ctx.strokeStyle = rgba(C.tori, strong ? 0.9 : 0.55);
-            ctx.lineWidth = strong ? 1.5 : 1;
-            ctx.setLineDash(strong ? [] : tl.broken ? [2, 4] : [6, 4]);
-            ctx.beginPath();
-            ctx.moveTo(pts[0][0], pts[0][1]);
-            for (const [x, y] of pts.slice(1)) ctx.lineTo(x, y);
-            ctx.stroke();
-            ctx.restore();
-            const [xe, ye] = pts[pts.length - 1];
-            // where price turned on the line
-            for (const p of tl.touchPoints ?? []) {
-              const [x, y] = [X(p.time), Y(p.price)];
-              if (x != null && y != null) dot(x, y, C.tori, 2.5);
-            }
-            tag(
-              tl.broken ? `1H line broken ${tl.broken === "long" ? "upwards" : "downwards"} · its retest at ${fmt(tl.now)} is a ${tl.broken === "long" ? "buy" : "sell"}` : `1H ${tl.kind === "down" ? "falling" : "rising"} line · ${tl.touches} touches · ${fmt(tl.now)}`,
-              Math.min(xe, W - 4),
-              ye + (tl.kind === "down" ? -4 : 12),
-              C.tori,
-              "right",
-              1,
-              { small: true, dim: !strong }
-            );
-          }
-
-          // ── the trendline strategy's setups: an arrow where a candle bounced off, broke or retested a line ──
-          for (const m of data.lineMarks ?? []) {
-            const [x, y] = [X(m.time), Y(m.price)];
-            if (x == null || y == null) continue;
-            const up = m.direction === "long";
-            const rgb = m.traded ? (up ? C.win : C.loss) : C.muted;
-            const tip = y + (up ? 6 : -6);
-            ctx.save();
-            ctx.fillStyle = rgba(rgb, m.traded ? 0.95 : 0.7);
-            ctx.beginPath();
-            ctx.moveTo(x, tip);
-            ctx.lineTo(x - 4, tip + (up ? 7 : -7));
-            ctx.lineTo(x + 4, tip + (up ? 7 : -7));
-            ctx.closePath();
-            ctx.fill();
-            ctx.restore();
-            const name = m.type === "bounce" ? "bounce" : m.type === "retest" ? "retest" : "break";
-            if (m.traded || m.type === "break") tag(m.traded ? `${name} · ${up ? "buy" : "sell"}` : name, x + 6, tip + (up ? 12 : -6), rgb, "left", 3, { small: true, dim: !m.traded });
-          }
-
-          // ── supply and demand: the fresh 30-minute zones, from where each formed to the right edge ──
-          for (const z of data.tradeZones ?? []) {
-            const [yHi, yLo] = [Y(z.high), Y(z.low)];
-            if (yHi == null || yLo == null) continue;
-            const x0 = Math.max(z.from != null ? (X(z.from) ?? 0) : 0, 0);
-            const top = Math.min(yHi, yLo);
-            const h = Math.max(Math.abs(yLo - yHi), 2);
-            const rgb = z.tradable ? C.area : C.muted;
-            ctx.fillStyle = rgba(rgb, z.tradable ? (z.touched ? 0.3 : 0.18) : 0.07);
-            ctx.fillRect(x0, top, W - x0, h);
-            ctx.strokeStyle = rgba(rgb, z.tradable ? 0.8 : 0.35);
-            ctx.lineWidth = 1;
-            ctx.setLineDash(z.tradable ? [] : [3, 3]);
-            ctx.strokeRect(x0, top, W - x0, h);
-            ctx.setLineDash([]);
-            if (z.tradable) tag(`${z.kind === "demand" ? "DEMAND" : "SUPPLY"} 30m ${fmt(z.low)}–${fmt(z.high)} · ${z.touched ? "price is at it" : `fresh — ${z.kind === "demand" ? "buy" : "sell"} on a rejection`}`, x0 + 4, top + (z.kind === "demand" ? h + 10 : -3), rgb, "left", 2, { small: true });
-          }
-          // a candle that rejected a zone: an arrow at the zone's edge
-          for (const m of data.zoneMarks ?? []) {
-            const [x, y] = [X(m.time), Y(m.price)];
-            if (x == null || y == null) continue;
-            const up = m.direction === "long";
-            const rgb = m.traded ? (up ? C.win : C.loss) : C.muted;
-            const tip = y + (up ? 6 : -6);
-            ctx.save();
-            ctx.fillStyle = rgba(rgb, m.traded ? 0.95 : 0.6);
-            ctx.beginPath();
-            ctx.moveTo(x, tip);
-            ctx.lineTo(x - 4, tip + (up ? 7 : -7));
-            ctx.lineTo(x + 4, tip + (up ? 7 : -7));
-            ctx.closePath();
-            ctx.fill();
-            ctx.restore();
-            if (m.traded) tag(`${m.kind} · ${up ? "buy" : "sell"}`, x + 6, tip + (up ? 12 : -6), rgb, "left", 3, { small: true });
           }
 
           // ── the entry levels: what a 15-minute close has to break ─────────

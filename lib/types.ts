@@ -62,19 +62,20 @@ export type Timeframe = (typeof TIMEFRAMES)[number];
 export const TRADE_TIMEFRAMES = ["M15"] as const satisfies readonly Timeframe[];
 
 /**
- * The three strategies that send signals, each on its own: how a signal of
- * each is stored. The database only accepts the strategy names in its
- * `signals_strategy_check` constraint; removed systems used some of the same
- * names, so a live signal is told apart by the start of its `variant` — the
- * key of its signal candle ("trend:<epoch seconds>", "sd:…", "tl:…"). Rows of
- * the removed systems carry the name of an entry type there ("don30", …).
+ * How a signal of the system (the 15-minute market-structure scalp, "the trend
+ * scalp") is stored. The database only accepts the strategy names in its
+ * `signals_strategy_check` constraint, and "trend" is the one that fits.
+ * Removed systems used the same names, so a live signal is told apart by the
+ * start of its `variant` — the key of its signal candle
+ * ("trend:<epoch seconds>"). Rows of the removed systems carry something else
+ * there ("don30", "tl:…", "sd:…").
  */
 export const TREND_STRATEGY = "trend" as const;
 export const TREND_KEY_PREFIX = "trend:" as const;
-export const STRATEGY_IDS = ["trend", "zones", "trendline"] as const;
+export const STRATEGY_IDS = ["trend"] as const;
 export type StrategyId = (typeof STRATEGY_IDS)[number];
-/** The start of each strategy's signal keys. The stored strategy name is the id itself. */
-export const STRATEGY_KEY_PREFIX: Record<StrategyId, string> = { trend: TREND_KEY_PREFIX, zones: "sd:", trendline: "tl:" };
+/** The start of the signal keys. The stored strategy name is the id itself. */
+export const STRATEGY_KEY_PREFIX: Record<StrategyId, string> = { trend: TREND_KEY_PREFIX };
 
 /** The strategy that sent a signal, or null for a row of a removed system. */
 export function strategyOf(s: { strategy: string; variant?: string | null }): StrategyId | null {

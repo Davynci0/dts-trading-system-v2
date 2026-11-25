@@ -3,8 +3,6 @@ import { EXECUTION_CANDLES, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/anal
 import { buildTrendSeries, structureMarks, trendStateAt, TREND_QUIET_HOURS_UTC, TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MAX_RISK_ATR, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_MIN_RISK_ATR, TREND_REENTRY_MINUTES, TREND_REENTRY_R, TREND_SR_DAYS, TREND_SR_TOUCHES, TREND_TARGET_R, TREND_MAX_CANDLE_ATR, TREND_SD_AHEAD_R } from "@/lib/analysis/trend";
 import { fetchScanCandles } from "@/lib/engine/scanner";
 import { fetchCandles } from "@/lib/oanda";
-import { chartLines, readTrendlines, shownLines, tlDailyTrend, tlSetup, tlTrendFlips, TL_MAX_FLIPS, TL_HISTORY, TL_OPTIONS, TL_SECONDS, TL_TIMEFRAME } from "@/lib/analysis/trendline";
-import { readZones, znContext, znSetup, ZN_ADX_MAX, ZN_HISTORY, ZN_MIN_DISTANCE_PCT } from "@/lib/analysis/zones";
 import type { Candle } from "@/lib/types";
 
 export const maxDuration = 60;
@@ -41,89 +39,13 @@ export async function GET(req: NextRequest) {
 
   try {
     // the read always uses the scanner's own window, however few candles the chart asked for
-    const [data, tlH1, znM15, h4] = await Promise.all([
+    const [data, h4] = await Promise.all([
       fetchScanCandles(instrument, to, Math.max(count, SCAN_HISTORY.m15)),
-      // the trendline strategy reads the 1-hour chart, further back than the trend scalp does
-      fetchCandles({ instrument, granularity: TL_TIMEFRAME, count: TL_HISTORY, to }).catch(() => [] as Candle[]),
-      // supply and demand reads ten days of 15-minute candles and builds its 30-minute zones from them
-      fetchCandles({ instrument, granularity: EXECUTION_TIMEFRAME, count: ZN_HISTORY, to }).catch(() => [] as Candle[]),
       // the 4-hour chart is only shown, never read
       view === "H4" ? fetchCandles({ instrument, granularity: "H4", count: 500, to }).catch(() => [] as Candle[]) : Promise.resolve([] as Candle[]),
     ]);
     const shown = view === "H1" ? data.h1 : view === "H4" ? h4 : data.m15;
     const candles = shown.slice(-count);
-    // the trendline strategy: the lines it trades, and what the last closed 1-hour candle did
-    let trendline = null;
-    if (tlH1.length > 200 && candles.length > 0) {
-      const n = tlH1.length;
-      // the setups of the last three weeks are marked on the chart, the last candle's is the live read
-      const read = readTrendlines(tlH1, TL_OPTIONS, Math.max(0, n - 500));
-      const readAt = tlH1[n - 1].time + TL_SECONDS;
-      const dailyTrend = tlDailyTrend(data.daily, readAt);
-      const flips = tlTrendFlips(data.daily, readAt);
-      // a candle can make more than one setup: the one that gives a trade, else the first
-      const plans = read.events.filter((e) => e.index === n - 1).map((e) => ({ e, ...tlSetup(e, tlH1[n - 1], dailyTrend, e.close, instrument, flips) }));
-      const plan = plans.find((x) => x.setup) ?? plans[0] ?? null;
-      const ev = plan?.e ?? null;
-      trendline = {
-        lines: chartLines(read, shownLines(read, TL_OPTIONS), TL_OPTIONS, candles[0].time, candles[candles.length - 1].time),
-        dailyTrend,
-        /** why no trendline setup would be traded now, if anything stands in the way */
-        blocks: flips > TL_MAX_FLIPS ? [`the daily trend has changed sides ${flips} times in the last ten days`] : [],
-        /** every bounce, break and retest inside the chart, and whether it was a trade */
-        marks: read.events
-          .filter((e) => tlH1[e.index].time >= candles[0].time)
-          .map((e) => ({ time: tlH1[e.index].time, price: read.valueAt(e.line, e.index), type: e.type, direction: e.direction, traded: tlSetup(e, tlH1[e.index], tlDailyTrend(data.daily, e.time), e.close, instrument, tlTrendFlips(data.daily, e.time)).setup != null })),
-        event: ev
-          ? {
-              type: ev.type,
-              direction: ev.direction,
-              kind: ev.line.kind,
-              touches: ev.touches,
-              close: ev.close,
-              time: ev.time,
-              /** the trade it gives, or why it gives none */
-              setup: plan?.setup ? { entry: plan.setup.entry, stopLoss: plan.setup.stopLoss, takeProfit: plan.setup.takeProfit } : null,
-              reason: plan?.reason ?? null,
-            }
-          : null,
-        readAt,
-      };
-    }
-    // supply and demand: the fresh 30-minute zones, and what the 15-minute candles did at them
-    let zones = null;
-    if (znM15.length > 300 && candles.length > 0) {
-      const n = znM15.length;
-      const read = readZones(znM15, 0);
-      const context = znContext(data.h1, data.daily);
-      const readAt = znM15[n - 1].time + 900;
-      const ctx = context(readAt);
-      const dailyTrend = ctx.dailyTrend;
-      const price = znM15[n - 1].close;
-      const distance = (Math.abs(price - ctx.dailyAverage) / price) * 100;
-      // what stands in the way of any zone trade right now, whatever price does at a zone
-      const blocks = [
-        ...(ctx.adx >= ZN_ADX_MAX ? [`the 1-hour ADX is ${ctx.adx.toFixed(0)} (limit ${ZN_ADX_MAX})`] : []),
-        ...(dailyTrend !== 0 && ctx.h1Side !== dailyTrend ? ["the 1-hour averages do not agree with the daily trend"] : []),
-        ...(dailyTrend !== 0 && ctx.yesterday !== -dailyTrend ? [`yesterday was not ${dailyTrend === 1 ? "a down" : "an up"} day`] : []),
-        ...(dailyTrend !== 0 && !(distance >= ZN_MIN_DISTANCE_PCT) ? [`price is only ${distance.toFixed(1)}% from the 50-day average`] : []),
-      ];
-      const plans = read.events.map((e) => ({ e, ...znSetup(e, context(e.time), e.close, instrument) }));
-      const last = plans.filter((x) => x.e.index === n - 1);
-      const now = last.find((x) => x.setup) ?? last[0] ?? null;
-      zones = {
-        dailyTrend,
-        /** why no zone would be traded now, if anything stands in the way */
-        blocks,
-        /** the fresh zones: the ones on the trend's side can give a trade */
-        zones: read.zones.map((z) => ({ kind: z.kind, low: Math.min(z.proximal, z.distal), high: Math.max(z.proximal, z.distal), proximal: z.proximal, known: z.known, touched: z.touched, tradable: (z.kind === "demand" ? 1 : -1) === dailyTrend })),
-        /** every rejection inside the chart, and whether it was a trade */
-        marks: plans.filter((x) => znM15[x.e.index].time >= candles[0].time).map((x) => ({ time: znM15[x.e.index].time, price: x.e.zone.proximal, kind: x.e.zone.kind, direction: x.e.direction, traded: x.setup != null })),
-        event: now ? { kind: now.e.zone.kind, direction: now.e.direction, low: Math.min(now.e.zone.proximal, now.e.zone.distal), high: Math.max(now.e.zone.proximal, now.e.zone.distal), time: now.e.time, setup: now.setup ? { entry: now.setup.entry, stopLoss: now.setup.stopLoss, takeProfit: now.setup.takeProfit } : null, reason: now.reason } : null,
-        readAt,
-      };
-    }
-
     let trend = null;
     if (data.m15.length > TREND_MIN_CANDLES && data.h1.length > TREND_MIN_H1_CANDLES) {
       const ts = buildTrendSeries(data);
@@ -178,7 +100,7 @@ export async function GET(req: NextRequest) {
     const days = data.daily.filter((d) => ![5, 6].includes(new Date(d.time * 1000).getUTCDay()));
     const yesterday = days[days.length - 1];
     const context = { prevDayHigh: yesterday?.high ?? null, prevDayLow: yesterday?.low ?? null, quietHoursUtc: [...TREND_QUIET_HOURS_UTC] };
-    return NextResponse.json({ candles, view, trend, trendline, zones, structure, context, build: process.env.APP_BUILD ?? null, asOf: to ?? null });
+    return NextResponse.json({ candles, view, trend, structure, context, build: process.env.APP_BUILD ?? null, asOf: to ?? null });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }

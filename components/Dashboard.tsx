@@ -4,8 +4,6 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "@/components/Chart";
 import SignalFeed from "@/components/SignalFeed";
 import TrendTracker, { type TrendSummary } from "@/components/TrendTracker";
-import StrategiesPanel, { type TrendlineSummary, type ZonesSummary } from "@/components/StrategiesPanel";
-import { STRATEGIES } from "@/lib/strategies";
 import AskAIButton from "@/components/AskAIButton";
 import { strategyOf, PAIRS, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
 import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
@@ -16,9 +14,7 @@ const LAYERS = [
   { id: "structure", label: "Market structure", color: CHART_COLORS.ink, on: true },
   { id: "context", label: "Day levels and no-trade hours", color: CHART_COLORS.muted, on: true },
   { id: "zones", label: "Support and resistance", color: CHART_COLORS.zone, on: true },
-  { id: "sd", label: "1H supply/demand (trend scalp's filter)", color: CHART_COLORS.demand, on: false },
-  { id: "tori", label: "Trendlines and their setups (1H)", color: CHART_COLORS.tori, on: true },
-  { id: "areas", label: "Supply and demand zones (30m, traded)", color: CHART_COLORS.area, on: true },
+  { id: "sd", label: "Supply and demand (1H)", color: CHART_COLORS.demand, on: true },
   { id: "position", label: "Open trades", color: null, on: true },
   { id: "history", label: "Closed trades", color: null, on: true },
 ] as const;
@@ -27,8 +23,8 @@ type LayerId = (typeof LAYERS)[number]["id"];
 /** The charts on offer: the 15-minute chart the entries are read on, and the two above it for context. */
 const VIEWS = [
   { id: "M15", label: "15m", minutes: 15, note: null },
-  { id: "H1", label: "1h", minutes: 60, note: "1-hour chart: the structure marked is the 1-hour structure the trend scalp takes its trend from, and the trendline strategy reads its lines here." },
-  { id: "H4", label: "4h", minutes: 240, note: "4-hour chart: context only. The trendlines shown are the 1-hour ones, the zones the 30-minute ones." },
+  { id: "H1", label: "1h", minutes: 60, note: "1-hour chart: the structure marked is the 1-hour structure the system takes its trend from. Signals still come from 15-minute candles." },
+  { id: "H4", label: "4h", minutes: 240, note: "4-hour chart: context only. Signals still come from 15-minute candles." },
 ] as const satisfies readonly { id: Timeframe; label: string; minutes: number; note: string | null }[];
 type View = (typeof VIEWS)[number]["id"];
 const DIGITS = 2;
@@ -47,8 +43,6 @@ export default function Dashboard() {
   const [liveCandle, setLiveCandle] = useState<Candle | null>(null);
   const [trend, setTrend] = useState<TrendSummary | null>(null);
   const [marks, setMarks] = useState<{ structure: NonNullable<OverlayData["structure"]>; prevDayHigh: number | null; prevDayLow: number | null; quietHoursUtc: [number, number] } | null>(null);
-  const [trendline, setTrendline] = useState<TrendlineSummary | null>(null);
-  const [zones, setZones] = useState<ZonesSummary | null>(null);
   /** when the analysis was last loaded */
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -83,12 +77,12 @@ export default function Dashboard() {
 
   const shownOverlay = useMemo<OverlayData>(() => {
     const barAt = (epochSec: number) => [...candles].reverse().find((c) => c.time <= epochSec) ?? candles[0];
-    // each strategy can hold one trade
+    // one trade is open at a time
     const positions: NonNullable<OverlayData["positions"]> = [];
     if (candles.length > 0) {
       for (const open of pairSignals.filter((s) => strategyOf(s) !== null && !s.outcome && s.status === "active")) {
         positions.push({
-          label: STRATEGIES[strategyOf(open)!].name.toUpperCase(),
+          label: "TREND SCALP",
           direction: open.direction,
           entry: open.entry,
           stopLoss: open.stop_loss,
@@ -157,14 +151,10 @@ export default function Dashboard() {
       positions: layers.position ? positions : [],
       history: layers.history ? history : [],
       zones: layers.zones && trend ? trend.zones : [],
-      trendlines: layers.tori && trendline ? trendline.lines : [],
-      lineMarks: layers.tori && trendline ? trendline.marks : [],
-      tradeZones: layers.areas && zones && candles.length > 0 ? zones.zones.map((z) => ({ ...z, from: barAt(z.known - 1).time })) : [],
-      zoneMarks: layers.areas && zones ? zones.marks : [],
       sdZones: layers.sd && trend && candles.length > 0 ? trend.sdZones.map((z) => ({ ...z, from: barAt(z.known - 1).time })) : [],
       digits: DIGITS,
     };
-  }, [trend, trendline, zones, marks, layers, pairSignals, candles, view]);
+  }, [trend, marks, layers, pairSignals, candles, view]);
 
   /** One line on what the trend allows right now. */
   const trendLine = useMemo(() => {
@@ -222,13 +212,11 @@ export default function Dashboard() {
           if (jsonCandles.length === 0) throw new Error(`No candles returned for ${pair}`);
           // skip the re-render when nothing changed — but the candle series is part
           // of the signature, so the chart never goes stale in a quiet market
-          const sig = JSON.stringify({ n: jsonCandles.length, t: jsonCandles[jsonCandles.length - 1]?.time ?? null, tr: json.trend ?? null, tl: json.trendline ?? null, zn: json.zones ?? null });
+          const sig = JSON.stringify({ n: jsonCandles.length, t: jsonCandles[jsonCandles.length - 1]?.time ?? null, tr: json.trend ?? null });
           if (!initial && sig === analysisSigRef.current) return;
           analysisSigRef.current = sig;
           setCandles(jsonCandles);
           setTrend(json.trend ?? null);
-          setTrendline(json.trendline ?? null);
-          setZones(json.zones ?? null);
           setMarks(json.structure && json.context ? { structure: json.structure, ...json.context } : null);
           setUpdatedAt(Date.now());
           setAsOf(json.asOf ?? null);
@@ -372,7 +360,6 @@ export default function Dashboard() {
 
       {/* side panels */}
       <aside className="flex w-full shrink-0 flex-col gap-4 overflow-y-auto lg:w-80">
-        <StrategiesPanel signals={pairSignals} trendStatus={trendLine?.text ?? null} trendline={trendline} zones={zones} price={price} digits={DIGITS} />
         <TrendTracker trend={trend} signals={pairSignals} price={price} digits={DIGITS} />
         <SignalFeed />
       </aside>

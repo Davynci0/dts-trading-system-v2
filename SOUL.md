@@ -5,14 +5,11 @@ the strategy, the backtest and the reports, until the owner says otherwise.
 
 ## What the system must be
 
-1. **Three strategies, each working on its own, one trade each** (changed by the owner on
-   25 November 2026; before that: one trade at a time). The three are the trend scalp, supply
-   and demand zones (which replaced Set and Forget the same day, at the owner's request), and
-   the trendline strategy (bounce and break). A strategy sends a new signal only
-   when its own trade is closed — never several open trades on similar entries. **When
-   strategies contradict each other, the trade is not sent**: nothing against another
-   strategy's open trade, and nothing when two signals come at the same time and point
-   opposite ways.
+1. **One trade at a time, one strategy: the trend scalp.** Never several open trades on similar
+   entries with different stops and targets. A new signal is only sent when nothing is open.
+   (For a few hours on 25 November 2026 the owner had three strategies run side by side — the
+   trend scalp, then Set and Forget, a trendline strategy and supply and demand zones — and the
+   same day asked for all but the trend scalp to be removed.)
 2. **A scalping system.** A trade should last between about 1 and 5 hours — not 8, not a day.
    If it has reached neither level by then, it is closed.
 3. **The 15-minute chart**, with higher timeframes for confirmation.
@@ -28,12 +25,6 @@ the strategy, the backtest and the reports, until the owner says otherwise.
 8. **Use each method the way it is meant to be used.** Before building on a strategy, look up
    how traders actually apply it (search the web, read several sources) and implement that —
    do not invent a variant and call it by the method's name.
-
-Rules 2 to 7 were written for the trend scalp and it meets them. The owner asked for the
-trendline strategy and for supply and demand zones by name on 25 November 2026; both are run as
-their methods are taught (rule 8), which means they hold trades for longer than five hours and win
-54% and 60% of them on their own — the three together win 65%. Report each
-strategy's results next to the others', never blended in a way that hides this.
 
 ## How results are tested and reported
 
