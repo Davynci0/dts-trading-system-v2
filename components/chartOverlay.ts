@@ -34,7 +34,7 @@ export interface OverlayData {
   /** stretches of candles in which no new trade is taken (first and last candle open time) */
   quiet?: { from: number; to: number; bars: number; label: string }[];
   /** fresh 1-hour supply (sell) and demand (buy) zones */
-  sdZones?: { kind: "demand" | "supply"; low: number; high: number; known: number }[];
+  sdZones?: { kind: "demand" | "supply"; low: number; high: number; known: number; /** open time of the chart candle the band starts at */ from?: number }[];
   /** Tori Trades' 4-hour trendlines (alerts only): the line's price at points along the chart */
   trendlines?: { kind: "down" | "up"; touches: number; now: number; points: { time: number; price: number }[] }[];
   /** the open trade's plan (entry/SL/TP), drawn as a position tool — the system holds one at a time */
@@ -244,7 +244,7 @@ class OverlayPaneView implements IPrimitivePaneView {
           for (const z of data.sdZones ?? []) {
             const [yHi, yLo] = [Y(z.high), Y(z.low)];
             if (yHi == null || yLo == null) continue;
-            const x0 = Math.max(X(Math.floor(z.known / 900) * 900 - 900) ?? 0, 0);
+            const x0 = Math.max(X(z.from ?? Math.floor(z.known / 900) * 900 - 900) ?? 0, 0);
             const rgb = z.kind === "demand" ? C.demand : C.supply;
             const top = Math.min(yHi, yLo);
             const h = Math.max(Math.abs(yLo - yHi), 2);

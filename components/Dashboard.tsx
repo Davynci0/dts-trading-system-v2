@@ -6,7 +6,7 @@ import SignalFeed from "@/components/SignalFeed";
 import TrendTracker, { type TrendSummary } from "@/components/TrendTracker";
 import ToriPanel, { type ToriSummary } from "@/components/ToriPanel";
 import AskAIButton from "@/components/AskAIButton";
-import { isLiveSignal, PAIRS, TRADE_TIMEFRAMES, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
+import { isLiveSignal, PAIRS, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
 import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
 
 /** What the chart can show on top of the candles. */
@@ -22,10 +22,13 @@ const LAYERS = [
 ] as const;
 type LayerId = (typeof LAYERS)[number]["id"];
 
-/** The chart and the entries run on this timeframe. */
-const timeframe: Timeframe = TRADE_TIMEFRAMES[0];
-/** Length of one chart candle in milliseconds. */
-const CANDLE_MS = ({ M5: 5, M15: 15, M30: 30, H1: 60, H4: 240, D: 1440 } as Record<string, number>)[timeframe] * 60_000;
+/** The charts on offer: the 15-minute chart the entries are read on, and the two above it for context. */
+const VIEWS = [
+  { id: "M15", label: "15m", minutes: 15, note: null },
+  { id: "H1", label: "1h", minutes: 60, note: "1-hour chart: the structure marked is the 1-hour structure the system takes its trend from. Signals still come from 15-minute candles." },
+  { id: "H4", label: "4h", minutes: 240, note: "4-hour chart: context only. Tori's trendlines are read on this chart; signals still come from 15-minute candles." },
+] as const satisfies readonly { id: Timeframe; label: string; minutes: number; note: string | null }[];
+type View = (typeof VIEWS)[number]["id"];
 const DIGITS = 2;
 /** A local clock time, e.g. "13:30" or "13:30:05". */
 const clock = (ms: number, seconds = false) =>
@@ -33,6 +36,11 @@ const clock = (ms: number, seconds = false) =>
 
 export default function Dashboard() {
   const pair: Pair = PAIRS[0];
+  const [view, setView] = useState<View>("M15");
+  const viewInfo = VIEWS.find((v) => v.id === view)!;
+  /** the timeframe of the candles shown, and the length of one of them in milliseconds */
+  const timeframe: Timeframe = view;
+  const CANDLE_MS = viewInfo.minutes * 60_000;
   const [candles, setCandles] = useState<Candle[]>([]);
   const [liveCandle, setLiveCandle] = useState<Candle | null>(null);
   const [trend, setTrend] = useState<TrendSummary | null>(null);
@@ -108,12 +116,14 @@ export default function Dashboard() {
 
     // the stretches of candles that close inside the no-trade hours
     const quiet: NonNullable<OverlayData["quiet"]> = [];
-    if (layers.context && marks) {
+    // (not on the 4-hour chart: its candles are wider than the hours themselves)
+    if (layers.context && marks && view !== "H4") {
       const [qa, qb] = marks.quietHoursUtc;
       const two = (h: number) => `${String(h).padStart(2, "0")}:00`;
       let run: { from: number; to: number; bars: number } | null = null;
       for (const c of candles) {
-        const hour = new Date((c.time + CANDLE_MS / 1000) * 1000).getUTCHours();
+        // a 15-minute candle counts by its close, as in the rules; a 1-hour candle by the hour it covers
+        const hour = new Date((c.time + (view === "M15" ? 900 : 0)) * 1000).getUTCHours();
         if (hour >= qa && hour < qb) {
           if (run) {
             run.to = c.time;
@@ -145,10 +155,10 @@ export default function Dashboard() {
       history: layers.history ? history : [],
       zones: layers.zones && trend ? trend.zones : [],
       trendlines: layers.tori && tori ? tori.lines : [],
-      sdZones: layers.sd && trend ? trend.sdZones : [],
+      sdZones: layers.sd && trend && candles.length > 0 ? trend.sdZones.map((z) => ({ ...z, from: barAt(z.known - 1).time })) : [],
       digits: DIGITS,
     };
-  }, [trend, tori, marks, layers, pairSignals, candles]);
+  }, [trend, tori, marks, layers, pairSignals, candles, view]);
 
   /** One line on what the trend allows right now. */
   const trendLine = useMemo(() => {
@@ -186,7 +196,7 @@ export default function Dashboard() {
     // ?asOf=2026-11-19T07:15Z shows the analysis as it stood at that moment
     const review = new URLSearchParams(window.location.search).get("asOf");
     const loadAnalysis = (initial: boolean) =>
-      fetch(`/api/analysis?instrument=${pair}&granularity=${timeframe}&count=500${review ? `&to=${encodeURIComponent(review)}` : ""}`, { signal: controller.signal })
+      fetch(`/api/analysis?instrument=${pair}&view=${view}&count=500${review ? `&to=${encodeURIComponent(review)}` : ""}`, { signal: controller.signal })
         .then(async (res) => {
           const json = await res.json();
           if (!res.ok) throw new Error(json.error ?? `HTTP ${res.status}`);
@@ -236,7 +246,7 @@ export default function Dashboard() {
     const liveTimer = review
       ? undefined
       : setInterval(() => {
-          fetch(`/api/live?instrument=${pair}&granularity=${timeframe}`, { signal: controller.signal })
+          fetch(`/api/live?instrument=${pair}&granularity=${view}`, { signal: controller.signal })
             .then((r) => r.json())
             .then((j) => {
               if (!stopped && j.candle) setLiveCandle(j.candle);
@@ -250,7 +260,17 @@ export default function Dashboard() {
       clearInterval(taTimer);
       clearInterval(liveTimer);
     };
-  }, [pair]);
+  }, [pair, view]);
+
+  /** Show another chart: the old candles go at once, so nothing of one chart is ever drawn over another. */
+  function changeView(next: View) {
+    if (next === view) return;
+    analysisSigRef.current = "";
+    setCandles([]);
+    setLiveCandle(null);
+    setLoading(true);
+    setView(next);
+  }
 
   async function testTelegram() {
     setTelegramStatus("sending…");
@@ -271,7 +291,20 @@ export default function Dashboard() {
         {/* toolbar */}
         <div className="flex flex-wrap items-center gap-2">
           <span className="rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1.5 text-sm font-medium text-neutral-100">{pair.replace("_", "/")}</span>
-          <span className="rounded border border-neutral-700 bg-neutral-700 px-2.5 py-1.5 text-sm text-white">{timeframe}</span>
+          <div className="flex overflow-hidden rounded border border-neutral-700" role="group" aria-label="Chart timeframe">
+            {VIEWS.map((v) => (
+              <button
+                key={v.id}
+                type="button"
+                onClick={() => changeView(v.id)}
+                aria-pressed={view === v.id}
+                title={v.id === "M15" ? "15-minute chart — the entries are read here" : `${v.label} chart — context`}
+                className={`px-2.5 py-1.5 text-sm transition-colors ${view === v.id ? "bg-neutral-700 text-white" : "bg-neutral-900 text-neutral-400 hover:text-neutral-200"}`}
+              >
+                {v.label}
+              </button>
+            ))}
+          </div>
           <div className="flex overflow-hidden rounded border border-neutral-700">
             {LAYERS.map((l) => (
               <button
@@ -308,6 +341,7 @@ export default function Dashboard() {
         {(trendLine || updatedAt != null) && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-y border-neutral-800 py-2 text-[11px] text-neutral-500">
             {trendLine && <span className={trendLine.tone}>{trendLine.text}</span>}
+            {viewInfo.note && <span className="text-sky-300/80">{viewInfo.note}</span>}
             {updatedAt != null && candles.length > 0 && (
               <span title="Times are in your local time zone">
                 Last closed candle {clock(candles[candles.length - 1].time * 1000 + CANDLE_MS)} · chart updated {clock(updatedAt, true)}
@@ -324,7 +358,7 @@ export default function Dashboard() {
           {loading && candles.length === 0 ? (
             <div className="flex h-full items-center justify-center text-sm text-neutral-500">Loading candles…</div>
           ) : (
-            <Chart candles={candles} overlay={shownOverlay} timeframe={timeframe} liveCandle={liveCandle} viewKey={pair} digits={DIGITS} />
+            <Chart candles={candles} overlay={shownOverlay} timeframe={timeframe} liveCandle={liveCandle} viewKey={`${pair}:${view}`} digits={DIGITS} />
           )}
         </div>
       </div>

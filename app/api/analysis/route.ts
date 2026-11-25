@@ -8,7 +8,7 @@ import { toriChartLines, toriRead, TORI_HISTORY, TORI_SECONDS, TORI_TIMEFRAME } 
 export const maxDuration = 60;
 
 /**
- * GET /api/analysis?instrument=XAU_USD&count=500[&to=<ISO time>]
+ * GET /api/analysis?instrument=XAU_USD&count=500[&view=M15|H1|H4][&to=<ISO time>]
  * Everything the chart draws, from the same code the scanner runs: the
  * 15-minute candles and the system's read of the last closed one — the daily
  * trend, the 1-hour and 15-minute structure, the last swings, the levels an
@@ -19,6 +19,13 @@ export async function GET(req: NextRequest) {
   const sp = req.nextUrl.searchParams;
   const instrument = sp.get("instrument") ?? "XAU_USD";
   const granularity = sp.get("granularity") ?? EXECUTION_TIMEFRAME;
+  // the candles shown: the 15-minute chart the entries are read on, or the 1-hour / 4-hour chart above it.
+  // The read of the system is the same whichever is shown.
+  const viewParam = sp.get("view") ?? EXECUTION_TIMEFRAME;
+  if (!["M15", "H1", "H4"].includes(viewParam)) {
+    return NextResponse.json({ error: "`view` must be M15, H1 or H4" }, { status: 400 });
+  }
+  const view = viewParam as "M15" | "H1" | "H4";
   const count = Math.min(Math.max(Number(sp.get("count") ?? EXECUTION_CANDLES), 100), 5000);
   const toParam = sp.get("to");
   const toMs = toParam ? Date.parse(toParam) : NaN;
@@ -37,7 +44,8 @@ export async function GET(req: NextRequest) {
       // Tori Trades' trendlines are read on the 4-hour chart — shown and alerted, never traded by the system
       fetchCandles({ instrument, granularity: TORI_TIMEFRAME, count: TORI_HISTORY, to }).catch(() => []),
     ]);
-    const candles = data.m15.slice(-count);
+    const shown = view === "H1" ? data.h1 : view === "H4" ? h4 : data.m15;
+    const candles = shown.slice(-count);
     let tori = null;
     if (h4.length > 50 && candles.length > 0) {
       const read = toriRead(h4);
@@ -97,15 +105,16 @@ export async function GET(req: NextRequest) {
         setup: t.setup ? { direction: t.setup.direction, entry: t.setup.entry, stopLoss: t.setup.stopLoss, takeProfit: t.setup.takeProfit, trigger: t.setup.trigger, lockTrigger: t.setup.lockTrigger, lockStop: t.setup.lockStop } : null,
       };
     }
-    // what a chartist would mark by hand: the 15-minute swings and breaks of structure the entries are read from,
-    // yesterday's high and low, and the hours in which no new trade is taken
+    // what a chartist would mark by hand: the swings and breaks of structure of the chart shown (on the 15-minute
+    // chart the ones the entries are read from, on the 1-hour chart the ones the trend is), yesterday's high and
+    // low, and the hours in which no new trade is taken
     const from = candles[0]?.time ?? 0;
-    const marks = structureMarks(data.m15);
+    const marks = structureMarks(shown);
     const structure = { points: marks.points.filter((p) => p.time >= from), breaks: marks.breaks.filter((b) => b.time >= from) };
     const days = data.daily.filter((d) => ![5, 6].includes(new Date(d.time * 1000).getUTCDay()));
     const yesterday = days[days.length - 1];
     const context = { prevDayHigh: yesterday?.high ?? null, prevDayLow: yesterday?.low ?? null, quietHoursUtc: [...TREND_QUIET_HOURS_UTC] };
-    return NextResponse.json({ candles, trend, tori, structure, context, build: process.env.APP_BUILD ?? null, asOf: to ?? null });
+    return NextResponse.json({ candles, view, trend, tori, structure, context, build: process.env.APP_BUILD ?? null, asOf: to ?? null });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }

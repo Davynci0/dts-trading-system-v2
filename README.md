@@ -341,7 +341,7 @@ npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, 
 
 ## Routes
 
-- **On the chart:** the 15-minute market structure the entries are read from — each swing labelled HH, HL, LH or LL, and each close beyond a swing drawn as BOS (the structure continues) or CHoCH (it turns) — yesterday's high and low, and a shaded band over the hours in which no new trade is taken. Each is a layer that can be switched off.
+- **On the chart:** the 15-minute market structure the entries are read from — each swing labelled HH, HL, LH or LL, and each close beyond a swing drawn as BOS (the structure continues) or CHoCH (it turns) — yesterday's high and low, and a shaded band over the hours in which no new trade is taken. Each is a layer that can be switched off. The chart can also show the **1-hour** candles (with the 1-hour structure the trend is read from) and the **4-hour** candles (where Tori's trendlines are read); the system's read and its signals are the same whichever is shown.
 - `/` — dashboard: the 15-minute chart with the levels an entry has to close beyond, the level a stop would go beyond, the open trade (with its stop once the profit lock has moved it) and past results; the panel shows each condition and what is missing. `/?asOf=2026-10-27T16:30Z` shows the chart as it stood at that moment
 - `/backtests` — stored backtest runs of the live rules and the quick run
 - `/login` — Supabase auth
