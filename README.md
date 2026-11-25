@@ -1,13 +1,20 @@
 # DTS — Gold Trading System
 
-Signal-only gold (XAU/USD) trading system: a **market-structure scalp on the 15-minute chart**.
-One trade at a time, a **1:3** target with a **profit lock**, every trade closed within **five
-hours**, with **support and resistance zones** deciding where not to enter and where the stop
-goes, **supply and demand zones** it will not trade into, and no duplicate entries. About **two
-trades in three close in profit**, at about **1.6 trades a trading day**.
+Signal-only gold (XAU/USD) trading system with **three strategies, each working on its own**:
 
-The scanner reads the chart every 15 minutes; when a candle completes an entry, the trade —
-entry, stop loss and take profit — is sent to Telegram. The user reviews each signal and
+| Strategy | Chart | A trade ends at | How often | Alone, 5 years |
+| --- | --- | --- | --- | --- |
+| **Trend scalp** — the market-structure scalp described under [The rules](#the-rules) | 15-minute | 1:3 target, profit lock at +0.4R, five-hour limit | about 1.6 a day | 870 trades, 68% won, +155.9R |
+| **[Set and Forget](#set-and-forget)** — Alex G's swing method | 4-hour | 1:2 target or the stop, never moved | about one every three months | 18 trades, 56% won, +11.2R |
+| **[Trendline](#the-trendline-strategy)** — bounces off and breaks of trendlines, with the daily trend | 1-hour | 1:3 target or the stop, never moved; five-day limit | about three in two weeks | 289 trades, 31% won, +59.4R |
+
+Each strategy holds **one trade of its own**, so up to three can be open at once — but **never in
+opposite directions**: a signal against another strategy's open trade is not sent, and signals
+that come at the same moment and point opposite ways cancel each other
+([the rule between them](#three-strategies-side-by-side)).
+
+The scanner reads the charts every 15 minutes; when a candle completes an entry, the trade —
+entry, stop loss and take profit, labelled with its strategy — is sent to Telegram. The user reviews each signal and
 executes manually — the system never places trades.
 
 The owner's standing requirements for the system and for how it is tested are in
@@ -38,6 +45,8 @@ database needs the files in `supabase/migrations/` that it has not had yet).
 A higher-timeframe candle is only read once it has closed.
 
 ## The rules
+
+These are the rules of the **trend scalp**. The other two strategies have their own, further down.
 
 All of it is in `lib/analysis/trend.ts`, shared by the scanner, the backtest and the chart.
 
@@ -220,23 +229,65 @@ make money on gold. Looking again at the losing trades of two weeks in November,
 Both improve the first two years as well as the last three. The zones' first return is read only
 from closed 1-hour candles, so the backtest knows no more than the scanner does.
 
-## Tori Trades' trendlines (alerts only)
+## Set and Forget
 
-The chart also shows **Tori Trades' trendlines** on the 4-hour chart, drawn the way she teaches
-them in her own threads and her TradeZella playbook: a down line from a swing high to a lower
-swing high (an up line from a swing low to a higher swing low), never crossed by price between
-the two, counting every later swing that returns to it as a touch, and dropped once a candle
-closes through it. Her **break** setup — a full-bodied 4-hour close through a line with three or
-more touches and at least a week of data, a broken down line being a buy idea and a broken up line
-a sell idea, with the stop beyond the opposing trendline (her *safety line*) — is sent to Telegram
-as a 💜 alert, once, within 30 minutes of the candle's close. Her **bounce** (the third touch of a
-line) is shown in the panel only. On gold that is about three break alerts a month.
+Alex G's swing method (fxalexg, Swing Trading Lab), as he teaches it — `lib/analysis/setforget.ts`:
 
-These are alerts for your own judgment, **not signals of the system**: they are recorded in
-`market_state`, never in `signals`, so they do not count as the open trade and do not block one.
-Backtested on five years of gold, her break was about break-even (22 trades, +1R on the 4-hour
-chart; +18R on the 1-hour) and her bounce won fewer than one trade in four, so they were not made
-part of the rules. The code is in `lib/analysis/tori.ts`.
+1. The **weekly, daily and 4-hour** structure agree on a direction (a timeframe only turns when a
+   candle body closes beyond its last structure point).
+2. Price pulls back into an **area of interest**: a weekly or daily level it has turned at three
+   times or more in the last three years.
+3. On the **4-hour chart** the structure shifts back with the trend and an **engulfing candle**
+   confirms it — that close is the entry.
+4. The stop goes beyond the high or low the pullback made; the target is 1:2. **Nothing is moved**
+   and there is no time limit: the trade ends at its stop or at its target, which can take weeks.
+
+On gold the method only holds up with the 4-hour chart as the entry chart: over five years the
+30-minute entry made −16.8R (70 trades) and the 1-hour −3.8R (32), the 2-hour +7.3R (16) and the
+4-hour **+11.2R (18 trades, 10 winners)**. It is rare by nature on a single market — he trades it
+across many pairs. Eighteen trades is too few to prove anything; it is run because the owner asked
+for it, at the version that did not lose.
+
+## The trendline strategy
+
+Trendlines drawn the way Tori Trades teaches them — a falling line from a swing high to a lower
+swing high (a rising line from a swing low to a higher swing low), never crossed by price between
+the two, every later swing that returns to it a touch, dropped once a candle closes through it —
+read on the **1-hour chart** and traded **with the daily trend** (the last close against its
+50-day average). `lib/analysis/trendline.ts`:
+
+- **Bounce:** in an uptrend, a 1-hour candle comes back to a rising line (two touches or more, a
+  week of data) and closes up, away from it — buy. The stop goes just beyond the line.
+- **Break:** in an uptrend, a full-bodied 1-hour candle closes up through a falling line with
+  three touches or more — the pullback is over — buy. The stop goes beyond the *safety line* (the
+  rising line on the other side), or beyond the break candle when none can be drawn.
+- Mirrored for sells. The stop is never closer than 0.5 ATR, and a setup whose stop would be more
+  than 3 ATR away is left alone. Target 1:3. Nothing is moved; closed at market after five
+  trading days.
+
+Five years of gold: **289 trades, 31% won, +59.4R** (+47.1R with the costs doubled; last three
+years 194 trades, +35.2R), worst drawdown 18R, **13 losses in a row** at worst, one losing year in
+five (−7R). It makes its money from few, large winners: with the trend scalp's profit lock it won
+60% of its trades and *lost* money (−3R), and closed after five hours it made +14R instead of +59R.
+So it does not meet the 60% win rate or the five-hour limit of SOUL.md, and cannot without losing
+its edge. Every neighbouring setting tested (touches, line age, stop limits, targets from 1:2.5
+to 1:4) was also profitable. The lines it trades are drawn on the chart.
+
+## Three strategies side by side
+
+`lib/strategies.ts`. Each strategy takes a signal only when it holds no trade of its own. Between
+them there is one rule: **no contradicting trades** —
+
+- a signal that is opposite to another strategy's open trade is not sent;
+- signals found on the same scan that point in opposite directions are all dropped.
+
+All three trade with the larger trend, so this is rare: in the five-year replay it stopped 3
+signals. Replayed together (the [backtest](#backtesting)): **1,174 trades, 59% won, +226.5R**,
+against 870 trades, 68% and +155.9R for the trend scalp alone — more profit and more trades (1.9
+a day in the last year against 1.6), but a **lower win rate**, a **deeper worst drawdown (16.6R
+against 9.5R)** and a **longer losing run (13 against 5)**, because the trendline strategy loses
+two trades in three. Three trades open at once risk three times the stake of one; that happened
+less than 1% of the time, two at once 2%.
 
 ## Scanning
 
@@ -257,9 +308,13 @@ part of the rules. The code is in `lib/analysis/tori.ts`.
 - A signal is only sent within 20 minutes of its candle's close (`MAX_ENTRY_AGE_MIN`). A scan
   that runs later — after an outage, or at the weekend — does not send a trade at a price that
   is no longer there.
-- One trade at a time: nothing is sent while a trade is open. A signal candle that has been
-  traded once is not traded again. Within 60 minutes of the last entry, a signal on the same
-  side within 1R of that entry's price is not sent (the scan says why).
+- One trade a strategy: a strategy sends nothing while its own trade is open, and a signal candle
+  that has been traded once is not traded again. For the trend scalp, within 60 minutes of the
+  last entry a signal on the same side within 1R of that entry's price is not sent. Nothing is
+  sent against another strategy's open trade, and opposite signals of the same scan cancel each
+  other (the scan says why).
+- The trendline strategy is read when a 1-hour candle has just closed, Set and Forget when a
+  4-hour candle has; a scan 15 minutes late still finds them, entered at the price then.
 - Trades left open by a removed strategy are still followed to their stop, target or time
   limit; they do not block new signals.
 - `vercel.json` keeps one daily cron as a fallback (Vercel's Hobby plan allows one run per
@@ -283,7 +338,20 @@ target, then the time limit. Candles are cached in `.cache/`. The `/backtests` p
 stored runs of the live rules and its **Quick run** button backtests the last six months on
 the server.
 
-XAU/USD, to 2026-11-24, in R (1R = the risk of one trade):
+XAU/USD, to 2026-11-24, in R (1R = the risk of one trade). The three strategies side by side:
+
+| | Trades | A day | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| **5 years** | **1,174** | **0.91** | **59%** | **+226.5R** | **+182.8R** | **16.6R** | **13** |
+| **Last 3 years** | 972 | 1.25 | 60% | +184.9R | +152.7R | 16.6R | 13 |
+| of which Trend scalp (5 years) | 868 | 0.67 | 68% | +154.8R | | 9.5R | 5 |
+| of which Set and Forget | 18 | 0.01 | 56% | +11.2R | | 2.1R | 2 |
+| of which Trendline | 288 | 0.22 | 32% | +60.5R | | 18.0R | 13 |
+
+By year, oldest first: +25.1R (53% won), +16.5R (54%), +15.9R (53%), +71.4R (62%), +97.7R (61%).
+The last twelve months: 495 trades, 1.91 a trading day. The worst day was −3.4R.
+
+The trend scalp on its own, which the rest of this section is about:
 
 | | Trades | A week | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
 | --- | --- | --- | --- | --- | --- | --- | --- |
@@ -336,13 +404,13 @@ XAU/USD, to 2026-11-24, in R (1R = the risk of one trade):
 ## Verification
 
 ```bash
-npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, filters, support/resistance, supply/demand, oversized candles, entries, stop, profit lock, Tori trendlines, backtest, settlement, send rules, duplicates
+npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, filters, support/resistance, supply/demand, oversized candles, entries, stop, profit lock, the trendline strategy, the rule between the three strategies, backtest, settlement, send rules, duplicates
 ```
 
 ## Routes
 
-- **On the chart:** the 15-minute market structure the entries are read from — each swing labelled HH, HL, LH or LL, and each close beyond a swing drawn as BOS (the structure continues) or CHoCH (it turns) — yesterday's high and low, and a shaded band over the hours in which no new trade is taken. Each is a layer that can be switched off. The chart can also show the **1-hour** candles (with the 1-hour structure the trend is read from) and the **4-hour** candles (where Tori's trendlines are read); the system's read and its signals are the same whichever is shown.
-- `/` — dashboard: the 15-minute chart with the levels an entry has to close beyond, the level a stop would go beyond, the open trade (with its stop once the profit lock has moved it) and past results; the panel shows each condition and what is missing. `/?asOf=2026-10-27T16:30Z` shows the chart as it stood at that moment
+- **On the chart:** the 15-minute market structure the entries are read from — each swing labelled HH, HL, LH or LL, and each close beyond a swing drawn as BOS (the structure continues) or CHoCH (it turns) — yesterday's high and low, and a shaded band over the hours in which no new trade is taken. Each is a layer that can be switched off. The chart can also show the **1-hour** candles (with the 1-hour structure the trend is read from) and the **4-hour** candles (where Set and Forget takes its entries); the read of the strategies and their signals are the same whichever is shown. The 1-hour trendlines the trendline strategy trades are drawn on all three.
+- `/` — dashboard: the 15-minute chart with the levels an entry has to close beyond, the level a stop would go beyond, the open trades, each labelled with its strategy (with its stop once the profit lock has moved it) and past results; the panels show each condition of the trend scalp and what is missing, and for all three strategies what each holds and what it is waiting for. `/?asOf=2026-10-27T16:30Z` shows the chart as it stood at that moment
 - `/backtests` — stored backtest runs of the live rules and the quick run
 - `/login` — Supabase auth
 - `/api/candles` — OANDA candle proxy (key stays server-side)

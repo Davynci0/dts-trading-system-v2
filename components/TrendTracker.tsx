@@ -1,6 +1,6 @@
 "use client";
 
-import { isLiveSignal, type Signal } from "@/lib/types";
+import { strategyOf, type Signal } from "@/lib/types";
 
 /** The system's read of the last closed 15-minute candle, as /api/analysis reports it. */
 export interface TrendSummary {
@@ -59,13 +59,14 @@ const shape = (t: number) => (t === 1 ? "bullish" : t === -1 ? "bearish" : "not 
  */
 export default function TrendTracker({ trend, signals, price, digits = 2 }: { trend: TrendSummary | null; signals: Signal[]; price: number | null; digits?: number }) {
   const px = (n: number) => n.toFixed(digits);
-  const open = signals.find((s) => isLiveSignal(s) && !s.outcome && s.status === "active");
+  // this panel is the trend scalp's: the trades of the other two strategies are shown in the panel below
+  const open = signals.find((s) => strategyOf(s) === "trend" && !s.outcome && s.status === "active");
   const met = trend ? trend.checks.filter((c) => c.met).length : 0;
   const total = trend?.checks.length ?? 8;
   const headline = !trend
     ? null
     : open
-      ? { text: "A trade is open — no new signal until it closes", tone: "text-sky-300" }
+      ? { text: "A trend scalp is open — no new one until it closes", tone: "text-sky-300" }
       : trend.setup
         ? { text: `${trend.setup.direction === "long" ? "Buy" : "Sell"} signal on the last 15-minute candle (${trend.setup.trigger})`, tone: trend.setup.direction === "long" ? "text-emerald-400" : "text-rose-400" }
         : trend.blocked
@@ -78,7 +79,7 @@ export default function TrendTracker({ trend, signals, price, digits = 2 }: { tr
   return (
     <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
       <div className="mb-2 flex items-baseline justify-between">
-        <h2 className="text-sm font-semibold text-neutral-100">Structure scalp (15-minute)</h2>
+        <h2 className="text-sm font-semibold text-neutral-100">Trend scalp (15-minute)</h2>
         <span className="text-xs text-neutral-500">{trend ? `${met}/${total} conditions` : ""}</span>
       </div>
       {!trend || !headline ? (
@@ -172,7 +173,7 @@ export default function TrendTracker({ trend, signals, price, digits = 2 }: { tr
           </ul>
           <p className="mt-3 text-[10px] leading-relaxed text-neutral-600">
             Read on the 15-minute candle that closed at {clock(trend.readAt * 1000)}. Support/resistance zones are where {trend.srTouches} or more 1-hour swing highs or lows of the last {trend.srDays} days sit together; a candle that has just closed through one is not traded. Nor is a candle {trend.maxCandleAtr} ATR long or longer, or a {up ? "buy with a fresh 1-hour supply" : "sell with a fresh 1-hour demand"} zone less than {trend.sdAheadR}R ahead (a zone is a small base that price left with a strong candle, fresh until price comes back to it). The stop goes just beyond the {up ? "support" : "resistance"} zone behind the entry, or else beyond the {up ? "low" : "high"} of the last two candles
-            {stopSwing != null ? ` (${px(stopSwing)})` : ""}, never closer than {trend.minRiskAtr} ATR or further than {trend.maxRiskAtr} ATR. Take-profit 1:{trend.targetR}; at +{trend.lockAtR}R the stop moves to +{trend.lockToR}R; closed at market after {trend.holdHours} hours. One trade at a time, and no new trade on the same side within {trend.reentryR}R of the last entry for {trend.reentryMinutes} minutes; about two in three close in profit.
+            {stopSwing != null ? ` (${px(stopSwing)})` : ""}, never closer than {trend.minRiskAtr} ATR or further than {trend.maxRiskAtr} ATR. Take-profit 1:{trend.targetR}; at +{trend.lockAtR}R the stop moves to +{trend.lockToR}R; closed at market after {trend.holdHours} hours. One trade of this strategy at a time, and no new trade on the same side within {trend.reentryR}R of the last entry for {trend.reentryMinutes} minutes; about two in three close in profit.
           </p>
         </>
       )}

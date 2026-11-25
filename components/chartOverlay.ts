@@ -35,7 +35,7 @@ export interface OverlayData {
   quiet?: { from: number; to: number; bars: number; label: string }[];
   /** fresh 1-hour supply (sell) and demand (buy) zones */
   sdZones?: { kind: "demand" | "supply"; low: number; high: number; known: number; /** open time of the chart candle the band starts at */ from?: number }[];
-  /** Tori Trades' 4-hour trendlines (alerts only): the line's price at points along the chart */
+  /** the 1-hour trendlines the trendline strategy trades: the line's price at points along the chart */
   trendlines?: { kind: "down" | "up"; touches: number; now: number; points: { time: number; price: number }[] }[];
   /** the open trade's plan (entry/SL/TP), drawn as a position tool — the system holds one at a time */
   positions?: {
@@ -70,7 +70,7 @@ export const EMPTY_OVERLAY: OverlayData = {};
 export const CHART_COLORS = {
   trend: "56,189,248", // sky blue — the breakout levels
   zone: "245,158,11", // amber — support and resistance
-  tori: "192,132,252", // violet — Tori Trades' trendlines
+  tori: "192,132,252", // violet — the trendline strategy's lines
   demand: "45,212,191", // teal — fresh demand
   supply: "251,113,133", // rose — fresh supply
   muted: "100,116,139",
@@ -258,7 +258,7 @@ class OverlayPaneView implements IPrimitivePaneView {
             tag(`${z.kind === "demand" ? "DEMAND" : "SUPPLY"} 1H ${fmt(z.low)}–${fmt(z.high)} · fresh`, x0 + 4, top + (z.kind === "demand" ? h + 10 : -3), rgb, "left", 2, { small: true, dim: true });
           }
 
-          // ── Tori Trades' 4-hour trendlines: a straight line per trendline, with its touches ──
+          // ── the 1-hour trendlines: a straight line per trendline, with its touches ──
           for (const tl of data.trendlines ?? []) {
             const pts = tl.points.map((p) => [X(p.time), Y(p.price)] as const).filter((p): p is readonly [number, number] => p[0] != null && p[1] != null);
             if (pts.length < 2) continue;
@@ -273,7 +273,7 @@ class OverlayPaneView implements IPrimitivePaneView {
             ctx.stroke();
             ctx.restore();
             const [xe, ye] = pts[pts.length - 1];
-            tag(`Tori 4H ${tl.kind === "down" ? "down" : "up"} line · ${tl.touches} touches · ${fmt(tl.now)}`, Math.min(xe, W - 4), ye + (tl.kind === "down" ? -4 : 12), C.tori, "right", 1, { small: true, dim: !strong });
+            tag(`1H ${tl.kind === "down" ? "falling" : "rising"} line · ${tl.touches} touches · ${fmt(tl.now)}`, Math.min(xe, W - 4), ye + (tl.kind === "down" ? -4 : 12), C.tori, "right", 1, { small: true, dim: !strong });
           }
 
           // ── the entry levels: what a 15-minute close has to break ─────────

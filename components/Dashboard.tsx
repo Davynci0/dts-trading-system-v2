@@ -4,9 +4,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Chart from "@/components/Chart";
 import SignalFeed from "@/components/SignalFeed";
 import TrendTracker, { type TrendSummary } from "@/components/TrendTracker";
-import ToriPanel, { type ToriSummary } from "@/components/ToriPanel";
+import StrategiesPanel, { type SetForgetSummary, type TrendlineSummary } from "@/components/StrategiesPanel";
+import { STRATEGIES } from "@/lib/strategies";
 import AskAIButton from "@/components/AskAIButton";
-import { isLiveSignal, PAIRS, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
+import { strategyOf, PAIRS, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
 import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
 
 /** What the chart can show on top of the candles. */
@@ -16,7 +17,7 @@ const LAYERS = [
   { id: "context", label: "Day levels and no-trade hours", color: CHART_COLORS.muted, on: true },
   { id: "zones", label: "Support and resistance", color: CHART_COLORS.zone, on: true },
   { id: "sd", label: "Supply and demand (1H)", color: CHART_COLORS.demand, on: true },
-  { id: "tori", label: "Tori trendlines (4H)", color: CHART_COLORS.tori, on: true },
+  { id: "tori", label: "Trendlines (1H)", color: CHART_COLORS.tori, on: true },
   { id: "position", label: "Open trades", color: null, on: true },
   { id: "history", label: "Closed trades", color: null, on: true },
 ] as const;
@@ -25,8 +26,8 @@ type LayerId = (typeof LAYERS)[number]["id"];
 /** The charts on offer: the 15-minute chart the entries are read on, and the two above it for context. */
 const VIEWS = [
   { id: "M15", label: "15m", minutes: 15, note: null },
-  { id: "H1", label: "1h", minutes: 60, note: "1-hour chart: the structure marked is the 1-hour structure the system takes its trend from. Signals still come from 15-minute candles." },
-  { id: "H4", label: "4h", minutes: 240, note: "4-hour chart: context only. Tori's trendlines are read on this chart; signals still come from 15-minute candles." },
+  { id: "H1", label: "1h", minutes: 60, note: "1-hour chart: the structure marked is the 1-hour structure the trend scalp takes its trend from, and the trendline strategy reads its lines here." },
+  { id: "H4", label: "4h", minutes: 240, note: "4-hour chart: Set and Forget takes its entries here. The trendlines shown are the 1-hour ones." },
 ] as const satisfies readonly { id: Timeframe; label: string; minutes: number; note: string | null }[];
 type View = (typeof VIEWS)[number]["id"];
 const DIGITS = 2;
@@ -45,7 +46,8 @@ export default function Dashboard() {
   const [liveCandle, setLiveCandle] = useState<Candle | null>(null);
   const [trend, setTrend] = useState<TrendSummary | null>(null);
   const [marks, setMarks] = useState<{ structure: NonNullable<OverlayData["structure"]>; prevDayHigh: number | null; prevDayLow: number | null; quietHoursUtc: [number, number] } | null>(null);
-  const [tori, setTori] = useState<ToriSummary & { lines: { kind: "down" | "up"; touches: number; now: number; points: { time: number; price: number }[] }[] } | null>(null);
+  const [trendline, setTrendline] = useState<TrendlineSummary | null>(null);
+  const [setforget, setSetforget] = useState<SetForgetSummary | null>(null);
   /** when the analysis was last loaded */
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,12 +82,12 @@ export default function Dashboard() {
 
   const shownOverlay = useMemo<OverlayData>(() => {
     const barAt = (epochSec: number) => [...candles].reverse().find((c) => c.time <= epochSec) ?? candles[0];
-    // one trade is open at a time
+    // each strategy can hold one trade
     const positions: NonNullable<OverlayData["positions"]> = [];
     if (candles.length > 0) {
-      for (const open of pairSignals.filter((s) => isLiveSignal(s) && !s.outcome && s.status === "active")) {
+      for (const open of pairSignals.filter((s) => strategyOf(s) !== null && !s.outcome && s.status === "active")) {
         positions.push({
-          label: "TREND",
+          label: STRATEGIES[strategyOf(open)!].name.toUpperCase(),
           direction: open.direction,
           entry: open.entry,
           stopLoss: open.stop_loss,
@@ -154,11 +156,11 @@ export default function Dashboard() {
       positions: layers.position ? positions : [],
       history: layers.history ? history : [],
       zones: layers.zones && trend ? trend.zones : [],
-      trendlines: layers.tori && tori ? tori.lines : [],
+      trendlines: layers.tori && trendline ? trendline.lines : [],
       sdZones: layers.sd && trend && candles.length > 0 ? trend.sdZones.map((z) => ({ ...z, from: barAt(z.known - 1).time })) : [],
       digits: DIGITS,
     };
-  }, [trend, tori, marks, layers, pairSignals, candles, view]);
+  }, [trend, trendline, marks, layers, pairSignals, candles, view]);
 
   /** One line on what the trend allows right now. */
   const trendLine = useMemo(() => {
@@ -216,12 +218,13 @@ export default function Dashboard() {
           if (jsonCandles.length === 0) throw new Error(`No candles returned for ${pair}`);
           // skip the re-render when nothing changed — but the candle series is part
           // of the signature, so the chart never goes stale in a quiet market
-          const sig = JSON.stringify({ n: jsonCandles.length, t: jsonCandles[jsonCandles.length - 1]?.time ?? null, tr: json.trend ?? null, to: json.tori ?? null });
+          const sig = JSON.stringify({ n: jsonCandles.length, t: jsonCandles[jsonCandles.length - 1]?.time ?? null, tr: json.trend ?? null, tl: json.trendline ?? null, sf: json.setforget ?? null });
           if (!initial && sig === analysisSigRef.current) return;
           analysisSigRef.current = sig;
           setCandles(jsonCandles);
           setTrend(json.trend ?? null);
-          setTori(json.tori ?? null);
+          setTrendline(json.trendline ?? null);
+          setSetforget(json.setforget ?? null);
           setMarks(json.structure && json.context ? { structure: json.structure, ...json.context } : null);
           setUpdatedAt(Date.now());
           setAsOf(json.asOf ?? null);
@@ -365,8 +368,8 @@ export default function Dashboard() {
 
       {/* side panels */}
       <aside className="flex w-full shrink-0 flex-col gap-4 overflow-y-auto lg:w-80">
+        <StrategiesPanel signals={pairSignals} trendStatus={trendLine?.text ?? null} trendline={trendline} setforget={setforget} digits={DIGITS} />
         <TrendTracker trend={trend} signals={pairSignals} price={price} digits={DIGITS} />
-        <ToriPanel tori={tori} digits={DIGITS} />
         <SignalFeed />
       </aside>
     </div>

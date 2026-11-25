@@ -28,7 +28,7 @@ const fmt = {
   stamp: (iso: string | null) => (iso ? new Date(iso).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false }) : "?"),
 };
 
-const scopeLabel = (scope: string) => scope.replace(/^(strategy|pair|year|grade):/, "").replace("_", "/");
+const scopeLabel = (scope: string) => scope.replace(/^(strategy|entry|pair|year|grade):/, "").replace("_", "/");
 
 /** Colour by sign only when the average is statistically distinguishable from zero. */
 function verdict(m: MetricsCore): string {
@@ -76,9 +76,9 @@ function MetricTable({ rows, segment }: { rows: ResultRow[]; segment: Segment })
 }
 
 /**
- * Backtest results: stored runs of the system that sends live signals (the
- * 15-minute market-structure scalp) — five years, with the first two and the
- * last three next to it.
+ * Backtest results: stored runs of the three strategies that send live
+ * signals, side by side — five years, with the first two and the last three
+ * next to it.
  */
 export default function BacktestsPage() {
   const [run, setRun] = useState<RunRow | null>(null);
@@ -126,7 +126,8 @@ export default function BacktestsPage() {
   const sections: [string, ResultRow[], boolean][] = [
     ["Combined", results.filter((r) => r.scope === "combined"), true],
     ["Per year", rowsOf("year:"), false],
-    ["By entry", rowsOf("strategy:"), true],
+    ["By strategy", rowsOf("strategy:"), true],
+    ["By entry", rowsOf("entry:"), true],
     ["By key level", rowsOf("grade:"), true],
     ["Buys and sells", rowsOf("pair:"), true],
   ];
@@ -144,10 +145,11 @@ export default function BacktestsPage() {
         <div>
           <h1 className="text-lg font-semibold text-neutral-100">Backtest Results</h1>
           <p className="mt-1 max-w-3xl text-xs text-neutral-500">
-            The market-structure scalp (15-minute chart, 1:3 target, one trade at a time, closed within five hours)
-            replayed on five years of gold with the scanner&apos;s own detection: a signal on a closed 15-minute candle
-            fills at the next candle&apos;s open, the full spread + slippage is charged once, and a candle that touches
-            both the stop and the target counts as a loss.
+            The three strategies — the trend scalp (15-minute chart), Set and Forget (4-hour chart) and the trendline
+            strategy (1-hour chart) — replayed side by side on five years of gold with the scanner&apos;s own detection:
+            each holds one trade at a time and none is taken against another&apos;s open trade. A signal on a closed
+            candle fills at the next 15-minute open, the full spread + slippage is charged once, and a candle that
+            touches both the stop and the target counts as a loss.
           </p>
         </div>
         <button

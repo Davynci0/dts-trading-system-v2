@@ -2,7 +2,8 @@ import type { createAdminClient } from "@/lib/supabase/admin";
 import { fetchCandles } from "@/lib/oanda";
 import { TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS } from "@/lib/analysis/trend";
 import { sendStopMoved } from "@/lib/telegram";
-import { isLiveSignal } from "@/lib/types";
+import { strategyOf } from "@/lib/types";
+import { TL_MAX_HOLD_BARS } from "@/lib/analysis/trendline";
 
 export interface SettleInput {
   direction: "long" | "short";
@@ -201,7 +202,7 @@ export async function scoreOpenSignals(
           .from("signals")
           .update({ trail_stop: followed.trailStop, ...(res ? {} : { trail_checked_at: new Date(followed.checkedAt).toISOString() }) })
           .eq("id", r.id);
-      } else if (isLiveSignal(r)) {
+      } else if (strategyOf(r) === "trend") {
         const followed = followTrade({ ...r, firedAt }, candles, { maxHoldBars: TREND_MAX_HOLD_BARS, lock: LIVE_LOCK });
         res = followed.settlement;
         // the profit lock has moved the stop of a trade that is still open: record it once, and say so once
@@ -211,6 +212,12 @@ export async function scoreOpenSignals(
             await sendStopMoved({ pair: r.pair, direction: r.direction, entry: r.entry, stop: followed.stop, takeProfit: r.take_profit, lockedR: TREND_LOCK_TO_R }).catch(() => undefined);
           }
         }
+      } else if (strategyOf(r) === "trendline") {
+        // the stop is not moved; closed at market after five trading days
+        res = settleSignal({ ...r, firedAt }, candles, TL_MAX_HOLD_BARS);
+      } else if (strategyOf(r) === "setforget") {
+        // set and forget: the stop or the target, however long it takes
+        res = settleSignal({ ...r, firedAt }, candles, Infinity);
       } else {
         res = settleSignal({ ...r, firedAt }, candles, LEGACY_MAX_HOLD_BARS);
       }

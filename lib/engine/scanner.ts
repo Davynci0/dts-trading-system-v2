@@ -1,5 +1,6 @@
-import type { Candle, Pair, SignalDirection } from "@/lib/types";
-import { TREND_KEY_PREFIX, TREND_STRATEGY } from "@/lib/types";
+import type { Candle, Pair, SignalDirection, StrategyId } from "@/lib/types";
+import { STRATEGY_IDS, strategyOf, TREND_KEY_PREFIX, TREND_STRATEGY } from "@/lib/types";
+import { conflictBlock, contradict, STRATEGIES } from "@/lib/strategies";
 import { fetchCandles } from "@/lib/oanda";
 import { EXECUTION_BAR_SECONDS, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/analysis/execution";
 import {
@@ -21,8 +22,9 @@ import {
   type TrendSetup,
 } from "@/lib/analysis/trend";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
-import { sendToriAlert, sendTrendSignal } from "@/lib/telegram";
-import { toriRead, TORI_HISTORY, TORI_TIMEFRAME } from "@/lib/analysis/tori";
+import { sendStrategySignal, sendTrendSignal } from "@/lib/telegram";
+import { readTrendlines, tlDailyTrend, tlSetup, TL_HISTORY, TL_MAX_HOLD_BARS, TL_MIN_RISK_ATR, TL_OPTIONS, TL_SECONDS, TL_TARGET_R, TL_TIMEFRAME } from "@/lib/analysis/trendline";
+import { buildSfSeries, sfSetupAt, SF_ENTRY_SECONDS, SF_HISTORY, SF_LIVE, SF_LIVE_ENTRY } from "@/lib/analysis/setforget";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export interface ScanEvent {
@@ -39,9 +41,10 @@ export interface ScanSummary {
   events: ScanEvent[];
 }
 
-/** Share of the account one trade risks. One trade is open at a time; the
- *  five-year backtest's worst drawdown was 27 times the risk of one trade and
- *  its longest losing run 7 trades, so the default is half a percent.
+/** Share of the account one trade risks. Each of the three strategies can
+ *  hold a trade, so up to three times this can be at risk at once; the
+ *  five-year backtest's worst drawdown was 17 times the risk of one trade and
+ *  its longest losing run 13 trades, so the default is half a percent.
  *  Override with RISK_PCT (e.g. 0.01 for one percent); the older name
  *  FIB_RISK_PCT is still read. */
 export const RISK_PCT = (() => {
@@ -54,9 +57,6 @@ export const ACCOUNT_BALANCE = (() => {
   const raw = Number(process.env.ACCOUNT_BALANCE);
   return Number.isFinite(raw) && raw > 0 ? raw : 500;
 })();
-
-/** A Tori alert is only sent within this many minutes of its 4-hour candle's close. */
-const TORI_ALERT_MAX_AGE_MIN = 30;
 
 /** A signal is entered at the close of its candle. A scan that runs later than
  *  this many minutes after that close (missed runs, the weekend) must not send
@@ -86,10 +86,10 @@ const CANDLE_RETRY_MS = 4000;
  * feed may not have marked that candle complete yet: when the newest candle is
  * exactly one behind, ask again instead of reading the old one.
  */
-async function fetchFreshCandles(pair: string, now: number): Promise<{ data: Awaited<ReturnType<typeof fetchScanCandles>>; retries: number }> {
+async function fetchFreshCandles(pair: string, now: number, to?: string): Promise<{ data: Awaited<ReturnType<typeof fetchScanCandles>>; retries: number }> {
   const expected = Math.floor(now / 1000 / EXECUTION_BAR_SECONDS) * EXECUTION_BAR_SECONDS - EXECUTION_BAR_SECONDS;
   for (let retries = 0; ; retries++) {
-    const data = await fetchScanCandles(pair);
+    const data = await fetchScanCandles(pair, to);
     const last = data.m15[data.m15.length - 1]?.time ?? 0;
     if (last !== expected - EXECUTION_BAR_SECONDS || retries >= CANDLE_RETRIES) return { data, retries };
     await new Promise((resolve) => setTimeout(resolve, CANDLE_RETRY_MS));
@@ -104,7 +104,7 @@ export function scanLogKey(now: number, source: "schedule" | "manual"): string {
   return `scan:${source}:${Math.floor(now / (EXECUTION_BAR_SECONDS * 1000)) % SCAN_LOG_SLOTS}`;
 }
 
-/** An earlier signal of the system, as far as the send rules need it. */
+/** An earlier signal of a strategy, as far as the send rules need it. */
 export interface EarlierSignal {
   variant: string | null;
   direction: SignalDirection;
@@ -134,7 +134,13 @@ export function lastEntryOf(earlier: EarlierSignal[]): LastEntry | null {
   return last;
 }
 
+/** An earlier signal with the strategy name it is stored under. */
+export interface StoredSignal extends EarlierSignal {
+  strategy: string;
+}
+
 const ALREADY_SENT = "this signal has already been sent";
+const isOpen = (r: EarlierSignal) => r.status === "active" && r.outcome == null;
 
 /**
  * Why a new trade may not be sent, or null when it may:
@@ -167,24 +173,86 @@ export function sendBlock(earlier: EarlierSignal[], trade: { key: string; direct
 }
 
 /**
- * One scan: settle the open trades, then read the last closed 15-minute candle
- * of each pair (lib/analysis/trend.ts) — and the one before it, in case the
- * scan that should have read it did not run. A candle that completes an entry
- * is stored and sent to Telegram — unless the send rules above forbid it or the
+ * Why a signal of `strategy` may not be sent, or null when it may. `rows` are
+ * the earlier signals of all three strategies.
+ *  - Its own rules first: the trend scalp's send rules above; for the other
+ *    two, a setup is traded once and the strategy holds one trade at a time.
+ *  - Then the rule between strategies: nothing is sent against another
+ *    strategy's open trade (lib/strategies.ts).
+ */
+export function strategyBlock(rows: StoredSignal[], strategy: StrategyId, trade: { key: string; direction: SignalDirection; time: number; entry: number }, late = false): string | null {
+  const own = rows.filter((r) => strategyOf(r) === strategy);
+  let block: string | null = null;
+  if (strategy === "trend") block = sendBlock(own, trade, late);
+  else if (own.some((r) => r.variant === trade.key)) block = ALREADY_SENT;
+  else {
+    const open = own.find(isOpen);
+    if (open) block = `the ${STRATEGIES[strategy].name} ${open.direction === "long" ? "buy" : "sell"} is still open — one trade a strategy`;
+  }
+  if (block) return block;
+  const open = rows.filter(isOpen).flatMap((r) => {
+    const id = strategyOf(r);
+    return id ? [{ strategy: id, direction: r.direction }] : [];
+  });
+  return conflictBlock(open, { strategy, direction: trade.direction });
+}
+
+/** The strategies that send signals: all three, unless ENABLED_STRATEGIES names fewer (e.g. "trend,setforget"). A strategy left out sends nothing new; its open trade is still followed to its end. */
+export const ENABLED_STRATEGIES: StrategyId[] = (() => {
+  const named = (process.env.ENABLED_STRATEGIES ?? "").split(",").map((x) => x.trim().toLowerCase());
+  const chosen = STRATEGY_IDS.filter((id) => named.includes(id));
+  return chosen.length > 0 ? chosen : [...STRATEGY_IDS];
+})();
+
+/** A signal a scan has found, before the send rules are applied. */
+interface Candidate {
+  strategy: StrategyId;
+  /** the signal as the send rules see it: `time` is when its candle closed (epoch seconds) */
+  signal: { key: string; direction: SignalDirection; time: number; entry: number };
+  /** found on the candle before the newest: its own scan did not send it */
+  late: boolean;
+  /** the columns of the stored trade */
+  row: { entry: number; stop_loss: number; take_profit: number } & Record<string, unknown>;
+  /** the trade in a line, for the scan log */
+  describe: string;
+  announce: () => Promise<void>;
+}
+
+/**
+ * One scan: settle the open trades, then let each of the three strategies read
+ * its own chart —
+ *  - the trend scalp the last closed 15-minute candle (and the one before it,
+ *    in case the scan that should have read it did not run);
+ *  - the trendline strategy the 1-hour candle that has just closed;
+ *  - Set and Forget the 4-hour candle that has just closed.
+ * A candle that completes an entry is stored and sent to Telegram — unless the
+ * strategy's own send rules forbid it, it contradicts another strategy, or the
  * candle closed too long ago. Every scan leaves a row in market_state, written
  * when it starts and again when it is done, so one that did not run or failed
  * can be seen afterwards.
  */
-export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; sendTelegrams?: boolean; now?: number; source?: "schedule" | "manual" }): Promise<ScanSummary> {
-  const { pairs, accountBalance = ACCOUNT_BALANCE, sendTelegrams = true, source = "manual" } = opts;
+export async function runScan(opts: {
+  pairs: Pair[];
+  accountBalance?: number;
+  sendTelegrams?: boolean;
+  now?: number;
+  source?: "schedule" | "manual";
+  /** read the charts as they stood at `now` and say what would be sent — nothing is stored, settled, logged or sent */
+  dryRun?: boolean;
+}): Promise<ScanSummary> {
+  const { pairs, accountBalance = ACCOUNT_BALANCE, sendTelegrams = true, source = "manual", dryRun = false } = opts;
   const now = opts.now ?? Date.now();
+  /** a dry run reads the candles that had closed by `now` */
+  const to = dryRun && opts.now != null ? new Date(now).toISOString() : undefined;
+  // asked for a past moment, the data feed also returns the candle that was still forming then — as it ended up
+  const closedBy = (candles: Candle[], seconds: number) => (to ? candles.filter((c) => c.time + seconds <= now / 1000) : candles);
   const supabase = createAdminClient();
   const events: ScanEvent[] = [];
   let units = 0;
   const lastCandle: Record<string, string> = {};
   // the log never gets in the way of a signal
   const log = async (status: "started" | "done") => {
-    if (!supabase) return;
+    if (!supabase || dryRun) return;
     await supabase
       .from("market_state")
       .upsert(
@@ -197,19 +265,19 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
 
   // a trade that reached its stop or target since the last scan is closed first,
   // so it does not block the next one
-  await scoreOpenSignals(supabase, { force: true }).catch((e) => {
+  if (!dryRun) await scoreOpenSignals(supabase, { force: true }).catch((e) => {
     events.push({ pair: "ALL", timeframe: EXECUTION_TIMEFRAME, strategy: TREND_STRATEGY, kind: "error", detail: `open trades could not be settled: ${(e as Error).message.slice(0, 120)}` });
     return 0;
   });
 
   for (const pair of pairs) {
     units++;
-    const push = (kind: ScanEvent["kind"], detail: string) => events.push({ pair, timeframe: EXECUTION_TIMEFRAME, strategy: TREND_STRATEGY, kind, detail });
+    const push = (kind: ScanEvent["kind"], detail: string, strategy: StrategyId = TREND_STRATEGY) => events.push({ pair, timeframe: EXECUTION_TIMEFRAME, strategy, kind, detail });
 
     let data: Awaited<ReturnType<typeof fetchScanCandles>>;
     try {
-      const fresh = await fetchFreshCandles(pair, now);
-      data = fresh.data;
+      const fresh = await fetchFreshCandles(pair, now, to);
+      data = { m15: closedBy(fresh.data.m15, EXECUTION_BAR_SECONDS), h1: closedBy(fresh.data.h1, 3600), daily: closedBy(fresh.data.daily, 86_400) };
       const last = data.m15[data.m15.length - 1];
       if (last) lastCandle[pair] = `${new Date((last.time + EXECUTION_BAR_SECONDS) * 1000).toISOString()}${fresh.retries ? ` (asked ${fresh.retries + 1} times)` : ""}`;
     } catch (e) {
@@ -217,68 +285,41 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
       continue;
     }
 
-    // Tori Trades' trendlines on the 4-hour chart: an alert, once per setup. It never touches the
-    // signals table, so it neither counts as the open trade nor blocks one. Only her main setup — the
-    // break of a 3-touch line, about three a month on gold — goes to Telegram; bounces (about two a
-    // week) are shown on the dashboard only.
-    try {
-      const ev = toriRead(await fetchCandles({ instrument: pair, granularity: TORI_TIMEFRAME, count: TORI_HISTORY })).event;
-      if (ev && ev.type === "break") {
-        const ageMin = (now / 1000 - ev.time) / 60;
-        // a setup whose candle closed a while ago has been alerted already, or is too late to act on
-        if (ageMin <= TORI_ALERT_MAX_AGE_MIN && supabase) {
-          // the unique (pair, timeframe, kind, dedupe_key) row is the record that this setup was alerted
-          const { error: dupe } = await supabase
-            .from("market_state")
-            .insert({ pair, timeframe: TORI_TIMEFRAME, kind: "trendline", dedupe_key: ev.key, payload: { type: ev.type, direction: ev.direction, kind: ev.line.kind, touches: ev.line.touches, close: ev.close, stop: ev.stop, time: ev.time } });
-          if (!dupe) {
-            if (sendTelegrams) await sendToriAlert({ pair, type: ev.type, direction: ev.direction, kind: ev.line.kind, touches: ev.line.touches, close: ev.close, stop: ev.stop, safety: ev.safety }).catch((e) => push("error", `Tori alert recorded but Telegram failed: ${(e as Error).message.slice(0, 120)}`));
-            push("watching", `Tori ${ev.type} alert: ${ev.direction === "long" ? "buy" : "sell"} idea, ${ev.line.touches}-touch ${ev.line.kind} line, close ${ev.close.toFixed(2)}`);
-          }
-        }
-      }
-    } catch (e) {
-      push("error", `Tori trendlines: ${(e as Error).message.slice(0, 120)}`);
-    }
-
-    /** Checks the send rules, records the trade, and returns true when it may be announced. */
-    const record = async (setup: { key: string; direction: SignalDirection; time: number; entry: number }, row: Record<string, unknown>, late: boolean): Promise<boolean> => {
-      const ageMin = (now / 1000 - setup.time) / 60;
-      if (ageMin > MAX_ENTRY_AGE_MIN) {
-        push("skipped", `signal candle closed ${Math.round(ageMin)} min ago — too late to enter (limit ${MAX_ENTRY_AGE_MIN} min)`);
-        return false;
-      }
-      if (!supabase) {
-        // without the database there is no way to know what is already open or already sent
-        push("skipped", "a setup was found but the database is unavailable — nothing sent");
-        return false;
-      }
-      const { data: rows, error } = await supabase
-        .from("signals")
-        .select("variant, direction, status, outcome, outcome_at, entry, stop_loss")
-        .eq("pair", pair)
-        .eq("strategy", TREND_STRATEGY)
-        // only this system's rows — the removed 30-minute system stored its trades under the same name
-        .like("variant", `${TREND_KEY_PREFIX}%`)
-        .order("created_at", { ascending: false })
-        .limit(300);
-      if (error) {
-        push("skipped", `a setup was found but earlier signals could not be read: ${error.message}`);
-        return false;
-      }
-      const block = sendBlock((rows ?? []) as EarlierSignal[], setup, late);
-      if (block) {
-        // the candle before the newest one is read on every scan; its signal having been sent on time is not news
-        if (!(late && block === ALREADY_SENT)) push("skipped", late ? `the candle before: ${block}` : block);
-        return false;
-      }
-      const { error: insertError } = await supabase.from("signals").insert({ pair, direction: setup.direction, strategy: TREND_STRATEGY, variant: setup.key, status: "active", ...row });
-      if (insertError) {
-        push("skipped", `the trade could not be recorded (${insertError.message}) — not sent`);
-        return false;
-      }
-      return true;
+    /** The earlier signals of the three strategies on this pair — the last 300 and every open one. Read once a scan, and kept current as trades are recorded. */
+    let known: StoredSignal[] | null = null;
+    const earlierSignals = async (): Promise<StoredSignal[] | string> => {
+      if (known) return known;
+      // without the database there is no way to know what is already open or already sent
+      if (!supabase) return "the database is unavailable";
+      const cols = "strategy, variant, direction, status, outcome, outcome_at, entry, stop_loss";
+      const rows = () => supabase.from("signals").select(cols).eq("pair", pair).in("strategy", [...STRATEGY_IDS]);
+      const [recent, open] = await Promise.all([rows().order("created_at", { ascending: false }).limit(300), rows().eq("status", "active").is("outcome", null).limit(50)]);
+      const failed = recent.error ?? open.error;
+      if (failed) return `earlier signals could not be read: ${failed.message}`;
+      const seen = new Set<string>();
+      known = ([...(recent.data ?? []), ...(open.data ?? [])] as StoredSignal[]).filter((r) => {
+        const id = `${r.strategy}|${r.variant}`;
+        // only the three live strategies — removed systems stored their trades under the same names
+        if (strategyOf(r) === null || seen.has(id)) return false;
+        seen.add(id);
+        return true;
+      });
+      return known;
     };
+    /** Why a candidate may not be sent, or null. */
+    const blockOf = async (c: Candidate): Promise<string | null> => {
+      const ageMin = (now / 1000 - c.signal.time) / 60;
+      if (ageMin > MAX_ENTRY_AGE_MIN) return `signal candle closed ${Math.round(ageMin)} min ago — too late to enter (limit ${MAX_ENTRY_AGE_MIN} min)`;
+      const rows = await earlierSignals();
+      if (typeof rows === "string") return `a setup was found but ${rows} — nothing sent`;
+      return strategyBlock(rows, c.strategy, c.signal, c.late);
+    };
+    const candidates: Candidate[] = [];
+    const px = (n: number) => n.toFixed(2);
+    /** the price a trade found now is entered at: the close of the newest 15-minute candle */
+    const priceNow = data.m15[data.m15.length - 1]?.close;
+    /** seconds since the last candle of `seconds` length closed, given the open time of any candle of that length */
+    const sinceClose = (anyOpen: number, seconds: number) => (((now / 1000 - anyOpen) % seconds) + seconds) % seconds;
 
     try {
       if (data.m15.length <= TREND_MIN_CANDLES || data.h1.length <= TREND_MIN_H1_CANDLES) {
@@ -286,9 +327,11 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
         continue;
       }
       const series = buildTrendSeries(data);
-      const newest = series.n - 1;
+      // a strategy that is switched off reads nothing
+      const newest = ENABLED_STRATEGIES.includes("trend") ? series.n - 1 : -9;
       // the candle before the newest first: a signal its own scan did not send is recovered while it is young enough
       for (const i of [newest - 1, newest]) {
+      if (i < 0) continue;
       const late = i < newest;
       if (late && series.candles[newest].time - series.candles[i].time !== EXECUTION_BAR_SECONDS) continue;
       const state = trendStateAt(series, i, pair);
@@ -320,41 +363,182 @@ export async function runScan(opts: { pairs: Pair[]; accountBalance?: number; se
             ? `${TREND_MIN_RISK_ATR} ATR away — ${swingName} is closer than that`
             : `${TREND_MAX_RISK_ATR} ATR away — ${swingName} is further than that`;
       const holdHours = hoursOf(TREND_MAX_HOLD_BARS);
+      const lateMinutes = late ? Math.round((now / 1000 - signal.time) / 60) : undefined;
       // the send rules are applied to the signal itself; what is stored and sent is the trade as it can be entered now
-      const recorded = await record(signal, {
-        entry: setup.entry,
-        stop_loss: setup.stopLoss,
-        take_profit: setup.takeProfit,
-        r_multiple: TREND_TARGET_R,
-        sl_basis: stopWhy,
-        tp_basis: `${TREND_TARGET_R} × the risk; the stop moves to +${TREND_LOCK_TO_R}R once price reaches +${TREND_LOCK_AT_R}R (${setup.lockTrigger.toFixed(2)}); closed at market after ${holdHours} hours if neither is hit`,
-        confidence: state.checks.filter((x) => x.met).length,
-        confirmations: { ...Object.fromEntries(state.checks.map((x) => [x.label, x.met])), [`Entry: ${setup.trigger}`]: true },
-      }, late);
-      if (!recorded) continue;
-      if (sendTelegrams) {
-        await sendTrendSignal({
-          pair,
-          direction: setup.direction,
+      candidates.push({
+        strategy: "trend",
+        signal,
+        late,
+        row: {
           entry: setup.entry,
-          stopLoss: setup.stopLoss,
-          takeProfit: setup.takeProfit,
-          trigger: setup.trigger,
-          why,
-          stopWhy,
-          targetR: TREND_TARGET_R,
-          lockTrigger: setup.lockTrigger,
-          lockStop: setup.lockStop,
-          lockAtR: TREND_LOCK_AT_R,
-          lockToR: TREND_LOCK_TO_R,
-          holdHours,
-          trendDays: TREND_DAYS,
-          accountBalance,
-          riskPct: RISK_PCT,
-          lateMinutes: late ? Math.round((now / 1000 - signal.time) / 60) : undefined,
-        }).catch((e) => push("error", `the trade was recorded but Telegram failed: ${(e as Error).message.slice(0, 120)}`));
+          stop_loss: setup.stopLoss,
+          take_profit: setup.takeProfit,
+          r_multiple: TREND_TARGET_R,
+          sl_basis: stopWhy,
+          tp_basis: `${TREND_TARGET_R} × the risk; the stop moves to +${TREND_LOCK_TO_R}R once price reaches +${TREND_LOCK_AT_R}R (${setup.lockTrigger.toFixed(2)}); closed at market after ${holdHours} hours if neither is hit`,
+          confidence: state.checks.filter((x) => x.met).length,
+          confirmations: { ...Object.fromEntries(state.checks.map((x) => [x.label, x.met])), [`Entry: ${setup.trigger}`]: true },
+        },
+        describe: `${late ? "recovered late: " : ""}${up ? "buy" : "sell"} at ${setup.entry.toFixed(2)}, stop ${setup.stopLoss.toFixed(2)}, target ${setup.takeProfit.toFixed(2)} (${TREND_TARGET_R}R) — ${setup.trigger}`,
+        announce: () =>
+          sendTrendSignal({
+            pair,
+            direction: setup.direction,
+            entry: setup.entry,
+            stopLoss: setup.stopLoss,
+            takeProfit: setup.takeProfit,
+            trigger: setup.trigger,
+            why,
+            stopWhy,
+            targetR: TREND_TARGET_R,
+            lockTrigger: setup.lockTrigger,
+            lockStop: setup.lockStop,
+            lockAtR: TREND_LOCK_AT_R,
+            lockToR: TREND_LOCK_TO_R,
+            holdHours,
+            trendDays: TREND_DAYS,
+            accountBalance,
+            riskPct: RISK_PCT,
+            lateMinutes,
+          }),
+      });
       }
-      push("signal", `${late ? "recovered late: " : ""}${up ? "buy" : "sell"} at ${setup.entry.toFixed(2)}, stop ${setup.stopLoss.toFixed(2)}, target ${setup.takeProfit.toFixed(2)} (${TREND_TARGET_R}R) — ${setup.trigger}`);
+    } catch (e) {
+      push("error", (e as Error).message.slice(0, 160));
+    }
+
+    // ── the trendline strategy: the 1-hour candle that has just closed ──
+    try {
+      const lastH1 = data.h1[data.h1.length - 1];
+      if (ENABLED_STRATEGIES.includes("trendline") && lastH1 && priceNow != null && sinceClose(lastH1.time, TL_SECONDS) <= MAX_ENTRY_AGE_MIN * 60) {
+        const h1 = closedBy(await fetchCandles({ instrument: pair, granularity: TL_TIMEFRAME, count: TL_HISTORY, to }), TL_SECONDS);
+        const n = h1.length;
+        const ev = readTrendlines(h1, TL_OPTIONS).events[0];
+        // only the candle that has just closed: an older one was read by its own scan
+        if (ev && ev.index === n - 1 && (now / 1000 - ev.time) / 60 <= MAX_ENTRY_AGE_MIN) {
+          const { setup, reason } = tlSetup(ev, h1[n - 1], tlDailyTrend(data.daily, ev.time), priceNow, pair);
+          const lineName = `${ev.line.touches}-touch ${ev.line.kind === "up" ? "rising" : "falling"} trendline`;
+          if (!setup) push("watching", `${ev.type} of a ${lineName}: no trade — ${reason}`, "trendline");
+          else {
+            const up = setup.direction === "long";
+            const why =
+              setup.type === "bounce"
+                ? `a 1-hour candle came back to a ${lineName} (at ${px(setup.line.value)}) and closed ${up ? "up" : "down"}, away from it — with the daily trend`
+                : `a full-bodied 1-hour candle closed ${up ? "above" : "below"} a ${lineName} (at ${px(setup.line.value)}) — the pullback against the daily trend is over`;
+            const stopWhy =
+              setup.stopBasis === "safety line"
+                ? `beyond the safety line (the ${up ? "rising" : "falling"} trendline on the other side)`
+                : setup.stopBasis === "line"
+                  ? "just beyond the trendline"
+                  : setup.stopBasis === "signal candle"
+                    ? `beyond the ${up ? "low" : "high"} of the signal candle — no safety line can be drawn`
+                    : `${TL_MIN_RISK_ATR} ATR away — the line is closer than that`;
+            const days = (TL_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS) / 86_400;
+            const manage = `Set and leave: the stop is not moved. Close at market if neither level is hit within ${days} trading days.`;
+            candidates.push({
+              strategy: "trendline",
+              signal: { key: setup.key, direction: setup.direction, time: setup.time, entry: setup.entry },
+              late: false,
+              row: {
+                entry: setup.entry,
+                stop_loss: setup.stopLoss,
+                take_profit: setup.takeProfit,
+                r_multiple: TL_TARGET_R,
+                sl_basis: stopWhy,
+                tp_basis: `${TL_TARGET_R} × the risk; the stop is not moved; closed at market after ${days} trading days if neither is hit`,
+                confidence: 3,
+                confirmations: { [`Trendline ${setup.type}`]: true, "With the daily trend": true, "Stop within the limits": true },
+              },
+              describe: `${up ? "buy" : "sell"} at ${px(setup.entry)}, stop ${px(setup.stopLoss)}, target ${px(setup.takeProfit)} (${TL_TARGET_R}R) — trendline ${setup.type}`,
+              announce: () =>
+                sendStrategySignal({ strategy: "trendline", headline: `1-hour trendline ${setup.type}`, pair, direction: setup.direction, entry: setup.entry, stopLoss: setup.stopLoss, takeProfit: setup.takeProfit, targetR: TL_TARGET_R, why, stopWhy, manage, accountBalance, riskPct: RISK_PCT }),
+            });
+          }
+        }
+      }
+    } catch (e) {
+      push("error", (e as Error).message.slice(0, 160), "trendline");
+    }
+
+    // ── Set and Forget: the 4-hour candle that has just closed ──
+    try {
+      const seconds = SF_ENTRY_SECONDS[SF_LIVE_ENTRY];
+      const lastDay = data.daily[data.daily.length - 1];
+      // 4-hour candles open on the same clock as the daily candle, so its close can be told without asking for it
+      if (ENABLED_STRATEGIES.includes("setforget") && lastDay && priceNow != null && sinceClose(lastDay.time, seconds) <= MAX_ENTRY_AGE_MIN * 60) {
+        const [h4, daily, weekly] = (
+          await Promise.all([
+            fetchCandles({ instrument: pair, granularity: SF_LIVE_ENTRY, count: SF_HISTORY.h4, to }),
+            fetchCandles({ instrument: pair, granularity: "D", count: SF_HISTORY.daily, to }),
+            fetchCandles({ instrument: pair, granularity: "W", count: SF_HISTORY.weekly, to }),
+          ])
+        ).map((c, k) => closedBy(c, [seconds, 86_400, 604_800][k]));
+        const series = buildSfSeries({ entry: h4, h4, daily, weekly, entrySeconds: seconds }, SF_LIVE);
+        const i = series.n - 1;
+        const closed = i >= 0 ? h4[i].time + seconds : 0;
+        const setup = i >= 2 && (now / 1000 - closed) / 60 <= MAX_ENTRY_AGE_MIN ? sfSetupAt(series, i, pair, SF_LIVE, priceNow) : null;
+        if (setup) {
+          const up = setup.direction === "long";
+          const why = `the weekly, daily and 4-hour trend is ${up ? "up" : "down"}; price pulled back into a ${setup.zone.tf} area of interest (${px(setup.zone.low)}–${px(setup.zone.high)}, ${setup.zone.touches} touches), the 4-hour chart shifted structure back ${up ? "up" : "down"} and an engulfing candle confirmed it`;
+          const stopWhy = `beyond the ${up ? "low" : "high"} the pullback made (${px(setup.pullback)})`;
+          const manage = "Set and forget: the stop is never moved, not even to break-even. The trade ends at its stop or at its target — that can take days or weeks.";
+          candidates.push({
+            strategy: "setforget",
+            signal: { key: setup.key, direction: setup.direction, time: closed, entry: setup.entry },
+            late: false,
+            row: {
+              entry: setup.entry,
+              stop_loss: setup.stopLoss,
+              take_profit: setup.takeProfit,
+              r_multiple: setup.targetR,
+              sl_basis: stopWhy,
+              tp_basis: `${setup.targetR} × the risk; the stop is never moved; held until the stop or the target is hit`,
+              confidence: 5,
+              confirmations: { "Weekly, daily and 4-hour agree": true, "Pullback into an area of interest": true, "Shift of structure on the 4-hour chart": true, "Engulfing candle": true, "Stop and target within the limits": true },
+            },
+            describe: `${up ? "buy" : "sell"} at ${px(setup.entry)}, stop ${px(setup.stopLoss)}, target ${px(setup.takeProfit)} (${setup.targetR}R) — Set and Forget`,
+            announce: () =>
+              sendStrategySignal({ strategy: "setforget", headline: "4-hour shift of structure at an area of interest", pair, direction: setup.direction, entry: setup.entry, stopLoss: setup.stopLoss, takeProfit: setup.takeProfit, targetR: setup.targetR, why, stopWhy, manage, accountBalance, riskPct: RISK_PCT }),
+          });
+        }
+      }
+    } catch (e) {
+      push("error", (e as Error).message.slice(0, 160), "setforget");
+    }
+
+    // ── what may be sent: each strategy's own rules, then the rules between them ──
+    try {
+      const sendable: Candidate[] = [];
+      for (const c of candidates) {
+        const block = await blockOf(c);
+        if (!block) sendable.push(c);
+        // a candle that is read on more than one scan having been sent on time is not news
+        else if (!(block === ALREADY_SENT && (c.late || c.strategy !== "trend"))) push("skipped", c.late ? `the candle before: ${block}` : block, c.strategy);
+      }
+      if (contradict(sendable.map((c) => c.signal))) {
+        for (const c of sendable) push("skipped", `${c.describe} — another strategy signalled the opposite way at the same time, so neither is sent`, c.strategy);
+      } else {
+        for (const c of sendable) {
+          // a trade recorded a moment ago, on this scan, may now stand in its way
+          const block = await blockOf(c);
+          if (block) {
+            push("skipped", c.late ? `the candle before: ${block}` : block, c.strategy);
+            continue;
+          }
+          if (dryRun) {
+            push("signal", `(dry run, nothing sent) ${c.describe}`, c.strategy);
+            (known as StoredSignal[] | null)?.unshift({ strategy: c.strategy, variant: c.signal.key, direction: c.signal.direction, status: "active", outcome: null, outcome_at: null, entry: c.row.entry, stop_loss: c.row.stop_loss });
+            continue;
+          }
+          const { error: insertError } = await supabase!.from("signals").insert({ pair, direction: c.signal.direction, strategy: c.strategy, variant: c.signal.key, status: "active", ...c.row });
+          if (insertError) {
+            push("skipped", `the trade could not be recorded (${insertError.message}) — not sent`, c.strategy);
+            continue;
+          }
+          (known as StoredSignal[] | null)?.unshift({ strategy: c.strategy, variant: c.signal.key, direction: c.signal.direction, status: "active", outcome: null, outcome_at: null, entry: c.row.entry, stop_loss: c.row.stop_loss });
+          if (sendTelegrams) await c.announce().catch((e) => push("error", `the trade was recorded but Telegram failed: ${(e as Error).message.slice(0, 120)}`, c.strategy));
+          push("signal", c.describe, c.strategy);
+        }
       }
     } catch (e) {
       push("error", (e as Error).message.slice(0, 160));

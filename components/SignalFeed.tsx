@@ -1,16 +1,20 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { isLiveSignal, type Signal } from "@/lib/types";
+import { isLiveSignal, strategyOf, type Signal } from "@/lib/types";
+import { STRATEGIES } from "@/lib/strategies";
 
 const fmtTime = (iso: string) =>
   new Date(iso).toLocaleString(undefined, { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit", hour12: false });
 const px = (n: number) => n.toFixed(2);
 const signedR = (r: number | null) => (r == null ? "" : `${r >= 0 ? "+" : "−"}${Math.abs(r).toFixed(2)}R`);
 
-const strategyName = (s: Signal) => (isLiveSignal(s) ? "Trend" : `${s.strategy} (removed strategy)`);
+const strategyName = (s: Signal) => {
+  const id = strategyOf(s);
+  return id ? STRATEGIES[id].name : `${s.strategy} (removed strategy)`;
+};
 
-/** Closed trades of the live trend entries: how many, how many won, and the total in R. */
+/** Closed trades of the three live strategies: how many, how many won, and the total in R. */
 function record(signals: Signal[]) {
   const closed = signals.filter((s) => isLiveSignal(s) && s.outcome != null && s.outcome_r != null);
   if (closed.length === 0) return null;
@@ -99,7 +103,7 @@ export default function SignalFeed() {
               )}
               {s.outcome ? (
                 <div className={`mt-1 font-medium ${(s.outcome_r ?? 0) > 0 ? "text-teal-400" : (s.outcome_r ?? 0) < 0 ? "text-red-400" : "text-neutral-500"}`}>
-                  ↳ {s.outcome === "win" ? "Closed in profit" : s.outcome === "loss" ? "Stopped out" : "Closed at the time limit"}
+                  ↳ {s.outcome === "win" ? (strategyOf(s) === "trend" || s.outcome_price !== s.take_profit ? "Closed in profit" : "Target reached") : s.outcome === "loss" ? "Stopped out" : "Closed at the time limit"}
                   {s.outcome_price != null ? ` at ${px(s.outcome_price)}` : ""} · {signedR(s.outcome_r)}
                   {s.outcome_at && ` · ${fmtTime(s.outcome_at)}`}
                 </div>

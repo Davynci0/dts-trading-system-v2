@@ -1,12 +1,17 @@
 # Standing rules for this trading system
 
-These are the owner's requirements, stated on 23 and 24 November 2026. They apply to every change to
+These are the owner's requirements, stated on 23, 24 and 25 November 2026. They apply to every change to
 the strategy, the backtest and the reports, until the owner says otherwise.
 
 ## What the system must be
 
-1. **One trade at a time.** Never several open trades on similar entries with different stops
-   and targets. A new signal is only sent when nothing is open.
+1. **Three strategies, each working on its own, one trade each** (changed by the owner on
+   25 November 2026; before that: one trade at a time). The three are the trend scalp, Set and
+   Forget, and the trendline strategy (bounce and break). A strategy sends a new signal only
+   when its own trade is closed — never several open trades on similar entries. **When
+   strategies contradict each other, the trade is not sent**: nothing against another
+   strategy's open trade, and nothing when two signals come at the same time and point
+   opposite ways.
 2. **A scalping system.** A trade should last between about 1 and 5 hours — not 8, not a day.
    If it has reached neither level by then, it is closed.
 3. **The 15-minute chart**, with higher timeframes for confirmation.
@@ -22,6 +27,12 @@ the strategy, the backtest and the reports, until the owner says otherwise.
 8. **Use each method the way it is meant to be used.** Before building on a strategy, look up
    how traders actually apply it (search the web, read several sources) and implement that —
    do not invent a variant and call it by the method's name.
+
+Rules 2 to 7 were written for the trend scalp and it meets them. The owner asked for Set and
+Forget and the trendline strategy by name on 25 November 2026; both are run as their methods are
+taught (rule 8), which means they hold trades for longer than five hours and win fewer than 60%
+of them — the README says by how much. Report their results next to the trend scalp's, never
+blended in a way that hides this.
 
 ## How results are tested and reported
 
