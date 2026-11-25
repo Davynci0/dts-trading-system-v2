@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { EXECUTION_CANDLES, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/analysis/execution";
-import { buildTrendSeries, trendStateAt, TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MAX_RISK_ATR, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_MIN_RISK_ATR, TREND_REENTRY_MINUTES, TREND_REENTRY_R, TREND_SR_DAYS, TREND_SR_TOUCHES, TREND_TARGET_R, TREND_MAX_CANDLE_ATR, TREND_SD_AHEAD_R } from "@/lib/analysis/trend";
+import { buildTrendSeries, structureMarks, trendStateAt, TREND_QUIET_HOURS_UTC, TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MAX_RISK_ATR, TREND_MIN_CANDLES, TREND_MIN_H1_CANDLES, TREND_MIN_RISK_ATR, TREND_REENTRY_MINUTES, TREND_REENTRY_R, TREND_SR_DAYS, TREND_SR_TOUCHES, TREND_TARGET_R, TREND_MAX_CANDLE_ATR, TREND_SD_AHEAD_R } from "@/lib/analysis/trend";
 import { fetchScanCandles } from "@/lib/engine/scanner";
 import { fetchCandles } from "@/lib/oanda";
 import { toriChartLines, toriRead, TORI_HISTORY, TORI_SECONDS, TORI_TIMEFRAME } from "@/lib/analysis/tori";
@@ -97,7 +97,15 @@ export async function GET(req: NextRequest) {
         setup: t.setup ? { direction: t.setup.direction, entry: t.setup.entry, stopLoss: t.setup.stopLoss, takeProfit: t.setup.takeProfit, trigger: t.setup.trigger, lockTrigger: t.setup.lockTrigger, lockStop: t.setup.lockStop } : null,
       };
     }
-    return NextResponse.json({ candles, trend, tori, build: process.env.APP_BUILD ?? null, asOf: to ?? null });
+    // what a chartist would mark by hand: the 15-minute swings and breaks of structure the entries are read from,
+    // yesterday's high and low, and the hours in which no new trade is taken
+    const from = candles[0]?.time ?? 0;
+    const marks = structureMarks(data.m15);
+    const structure = { points: marks.points.filter((p) => p.time >= from), breaks: marks.breaks.filter((b) => b.time >= from) };
+    const days = data.daily.filter((d) => ![5, 6].includes(new Date(d.time * 1000).getUTCDay()));
+    const yesterday = days[days.length - 1];
+    const context = { prevDayHigh: yesterday?.high ?? null, prevDayLow: yesterday?.low ?? null, quietHoursUtc: [...TREND_QUIET_HOURS_UTC] };
+    return NextResponse.json({ candles, trend, tori, structure, context, build: process.env.APP_BUILD ?? null, asOf: to ?? null });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }

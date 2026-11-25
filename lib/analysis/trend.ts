@@ -879,3 +879,75 @@ export function lateEntry(setup: TrendSetup, since: Candle[], pair = "XAU_USD"):
     lockStop: entry + dir * TREND_LOCK_TO_R * risk,
   };
 }
+
+/** A confirmed swing, for the chart: how it compares with the swing of its kind before it. */
+export interface StructurePoint {
+  /** open time of the candle that made it (epoch seconds) */
+  time: number;
+  price: number;
+  kind: "high" | "low";
+  /** HH higher high · LH lower high · HL higher low · LL lower low · H / L the first of its kind */
+  label: "HH" | "LH" | "HL" | "LL" | "H" | "L";
+}
+
+/** A candle that closed beyond the last unbroken swing. */
+export interface StructureBreak {
+  /** open time of the candle that closed beyond the swing */
+  time: number;
+  /** the swing's price, and the open time of the candle that made it */
+  level: number;
+  levelTime: number;
+  dir: 1 | -1;
+  /** BOS: a break with the structure (it continues) · CHoCH: a break against it (it turns) */
+  kind: "BOS" | "CHoCH";
+}
+
+/**
+ * The swings and the breaks of structure of a series, for drawing — the same
+ * read as readStructure: a swing has `k` lower highs (higher lows) on each
+ * side, and structure only breaks on a CLOSE beyond the last unbroken swing.
+ */
+export function structureMarks(candles: Candle[], k: number = TREND_SWING): { points: StructurePoint[]; breaks: StructureBreak[] } {
+  const points: StructurePoint[] = [];
+  const breaks: StructureBreak[] = [];
+  let high = { index: -1, price: NaN, broken: true };
+  let low = { index: -1, price: NaN, broken: true };
+  let lastHigh = NaN;
+  let lastLow = NaN;
+  let dir = 0;
+  for (let i = 0; i < candles.length; i++) {
+    const p = i - k;
+    if (p >= k) {
+      let isHigh = true;
+      let isLow = true;
+      for (let q = p - k; q <= p + k; q++) {
+        if (q === p) continue;
+        if (candles[q].high >= candles[p].high) isHigh = false;
+        if (candles[q].low <= candles[p].low) isLow = false;
+      }
+      if (isHigh) {
+        const price = candles[p].high;
+        points.push({ time: candles[p].time, price, kind: "high", label: Number.isNaN(lastHigh) ? "H" : price > lastHigh ? "HH" : "LH" });
+        lastHigh = price;
+        high = { index: p, price, broken: false };
+      }
+      if (isLow) {
+        const price = candles[p].low;
+        points.push({ time: candles[p].time, price, kind: "low", label: Number.isNaN(lastLow) ? "L" : price > lastLow ? "HL" : "LL" });
+        lastLow = price;
+        low = { index: p, price, broken: false };
+      }
+    }
+    const close = candles[i].close;
+    if (!high.broken && close > high.price) {
+      high.broken = true;
+      breaks.push({ time: candles[i].time, level: high.price, levelTime: candles[high.index].time, dir: 1, kind: dir === -1 ? "CHoCH" : "BOS" });
+      dir = 1;
+    } else if (!low.broken && close < low.price) {
+      low.broken = true;
+      breaks.push({ time: candles[i].time, level: low.price, levelTime: candles[low.index].time, dir: -1, kind: dir === 1 ? "CHoCH" : "BOS" });
+      dir = -1;
+    }
+  }
+  return { points, breaks };
+}

@@ -35,6 +35,7 @@ import {
   TREND_SR_TOUCHES,
   TREND_SR_WIDTH_ATR,
   lateEntry,
+  structureMarks,
   srZones,
   zonesAt,
   supplyDemandZones,
@@ -376,6 +377,33 @@ console.log("\nrules, on the generated market");
     "when costs are more than 6% of even the widest stop there is no trade, and the panel says why",
     near(small.costShare!, 10 * states[one.i].costShare!, 1e-9) && small.costShare! > 0.06 && small.setup == null && !!small.blocked?.startsWith("the candles are too small") && small.checks[6].met === false && small.checks.slice(0, 6).every((c) => c.met)
   );
+}
+
+// ───────────── the structure drawn on the chart ─────────────
+console.log("\nchart structure");
+{
+  const marks = structureMarks(m15);
+  const legChanges = m15.map((_, i) => i).filter((i) => i > 0 && st.leg[i] !== st.leg[i - 1]);
+  check(
+    "every break drawn is a break the rules read, on the same candle and the same side",
+    marks.breaks.length === legChanges.length && legChanges.every((i, k) => marks.breaks[k].time === m15[i].time && marks.breaks[k].dir === st.dir[i]),
+    `${marks.breaks.length} breaks`
+  );
+  check(
+    "a break closes beyond the swing it names; BOS continues the structure, CHoCH turns it",
+    marks.breaks.every((b, k) => {
+      const c = m15.find((x) => x.time === b.time)!;
+      const prev = k === 0 ? 0 : marks.breaks[k - 1].dir;
+      return (b.dir === 1 ? c.close > b.level : c.close < b.level) && b.levelTime < b.time && b.kind === (prev === -b.dir ? "CHoCH" : "BOS");
+    }) && marks.breaks.some((b) => b.kind === "CHoCH") && marks.breaks.some((b) => b.kind === "BOS")
+  );
+  const highs = marks.points.filter((p) => p.kind === "high");
+  const lows = marks.points.filter((p) => p.kind === "low");
+  check(
+    "swing labels compare each swing with the one of its kind before it",
+    highs.every((p, k) => (k === 0 ? p.label === "H" : p.label === (p.price > highs[k - 1].price ? "HH" : "LH"))) && lows.every((p, k) => (k === 0 ? p.label === "L" : p.label === (p.price > lows[k - 1].price ? "HL" : "LL")))
+  );
+  check("the last swings drawn are the ones the rules hold", highs[highs.length - 1].price === st.swingHigh[m15.length - 1] && lows[lows.length - 1].price === st.swingLow[m15.length - 1]);
 }
 
 // ───────────── support and resistance ─────────────

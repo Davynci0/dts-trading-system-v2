@@ -24,6 +24,15 @@ export interface OverlayData {
   } | null;
   /** support/resistance zones: bands where several 1-hour swing highs/lows sit */
   zones?: { low: number; high: number; touches: number }[];
+  /** the 15-minute market structure: each swing with its label, and each close beyond a swing */
+  structure?: {
+    points: { time: number; price: number; kind: "high" | "low"; label: string }[];
+    breaks: { time: number; level: number; levelTime: number; dir: 1 | -1; kind: "BOS" | "CHoCH" }[];
+  } | null;
+  /** yesterday's high and low */
+  dayLevels?: { high: number; low: number } | null;
+  /** stretches of candles in which no new trade is taken (first and last candle open time) */
+  quiet?: { from: number; to: number; bars: number; label: string }[];
   /** fresh 1-hour supply (sell) and demand (buy) zones */
   sdZones?: { kind: "demand" | "supply"; low: number; high: number; known: number }[];
   /** Tori Trades' 4-hour trendlines (alerts only): the line's price at points along the chart */
@@ -144,6 +153,66 @@ class OverlayPaneView implements IPrimitivePaneView {
             ctx.fill();
           };
           const side = (direction: "long" | "short") => (direction === "long" ? "BUY" : "SELL");
+
+          // ── the hours with no new trades: a faint band behind everything ──
+          for (const q of data.quiet ?? []) {
+            const [xa, xb] = [X(q.from), X(q.to)];
+            if (xa == null || xb == null) continue;
+            const half = q.bars > 1 ? (xb - xa) / (q.bars - 1) / 2 : 3;
+            ctx.fillStyle = rgba(C.muted, 0.09);
+            ctx.fillRect(xa - half, 0, xb - xa + 2 * half, mediaSize.height);
+            if (xb - xa > 60) tag(q.label, xa - half + 4, 12, C.muted, "left", 8, { small: true, dim: true });
+          }
+
+          // ── yesterday's high and low ─────────────────────────────────────
+          if (data.dayLevels) {
+            for (const [name, price] of [["yesterday's high", data.dayLevels.high], ["yesterday's low", data.dayLevels.low]] as const) {
+              const y = Y(price);
+              if (y == null) continue;
+              line(0, W, y, C.ink, 0.3, 1, [1, 5]);
+              tag(`${name} ${fmt(price)}`, 8, y - 3, C.ink, "left", 7, { small: true, dim: true });
+            }
+          }
+
+          // ── market structure: breaks first (lines), then the swing labels ──
+          if (data.structure) {
+            ctx.font = FONT_SMALL;
+            ctx.textBaseline = "alphabetic";
+            for (const b of data.structure.breaks) {
+              const xb = X(b.time);
+              const y = Y(b.level);
+              if (xb == null || y == null) continue;
+              const xa = Math.max(X(b.levelTime) ?? 0, 0);
+              const rgb = b.dir === 1 ? C.win : C.loss;
+              const turn = b.kind === "CHoCH";
+              segment(xa, y, xb, y, rgb, turn ? 0.95 : 0.6, turn ? 1.5 : 1, turn ? [] : [3, 3]);
+              if (xb - xa >= (turn ? 34 : 22)) {
+                ctx.textAlign = "center";
+                ctx.fillStyle = rgba(rgb, turn ? 1 : 0.75);
+                ctx.fillText(b.kind, (xa + xb) / 2, y + (b.dir === 1 ? -3 : 10));
+              }
+            }
+            let lastTop = -Infinity;
+            let lastBottom = -Infinity;
+            for (const p of data.structure.points) {
+              const x = X(p.time);
+              const y = Y(p.price);
+              if (x == null || y == null) continue;
+              const top = p.kind === "high";
+              // labels that would sit on top of each other are left out; the swing itself is still marked
+              const room = x - (top ? lastTop : lastBottom) >= 18;
+              const bullish = p.label === "HH" || p.label === "HL";
+              const rgb = p.label.length === 1 ? C.muted : bullish ? C.win : C.loss;
+              dot(x, y + (top ? -3 : 3), rgb, 1.5);
+              if (!room) continue;
+              ctx.textAlign = "center";
+              ctx.fillStyle = rgba(rgb, 0.9);
+              ctx.fillText(p.label, x, y + (top ? -8 : 15));
+              if (top) lastTop = x;
+              else lastBottom = x;
+            }
+            ctx.textAlign = "left";
+          }
 
           // ── results: settled trades ──────────────────────────────────────
           for (const h of data.history ?? []) {

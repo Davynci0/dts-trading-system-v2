@@ -11,7 +11,9 @@ import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
 
 /** What the chart can show on top of the candles. */
 const LAYERS = [
-  { id: "trend", label: "Entry levels and swings", color: CHART_COLORS.trend, on: true },
+  { id: "trend", label: "Entry levels", color: CHART_COLORS.trend, on: true },
+  { id: "structure", label: "Market structure", color: CHART_COLORS.ink, on: true },
+  { id: "context", label: "Day levels and no-trade hours", color: CHART_COLORS.muted, on: true },
   { id: "zones", label: "Support and resistance", color: CHART_COLORS.zone, on: true },
   { id: "sd", label: "Supply and demand (1H)", color: CHART_COLORS.demand, on: true },
   { id: "tori", label: "Tori trendlines (4H)", color: CHART_COLORS.tori, on: true },
@@ -34,6 +36,7 @@ export default function Dashboard() {
   const [candles, setCandles] = useState<Candle[]>([]);
   const [liveCandle, setLiveCandle] = useState<Candle | null>(null);
   const [trend, setTrend] = useState<TrendSummary | null>(null);
+  const [marks, setMarks] = useState<{ structure: NonNullable<OverlayData["structure"]>; prevDayHigh: number | null; prevDayLow: number | null; quietHoursUtc: [number, number] } | null>(null);
   const [tori, setTori] = useState<ToriSummary & { lines: { kind: "down" | "up"; touches: number; now: number; points: { time: number; price: number }[] }[] } | null>(null);
   /** when the analysis was last loaded */
   const [updatedAt, setUpdatedAt] = useState<number | null>(null);
@@ -103,7 +106,31 @@ export default function Dashboard() {
       }
     }
 
+    // the stretches of candles that close inside the no-trade hours
+    const quiet: NonNullable<OverlayData["quiet"]> = [];
+    if (layers.context && marks) {
+      const [qa, qb] = marks.quietHoursUtc;
+      const two = (h: number) => `${String(h).padStart(2, "0")}:00`;
+      let run: { from: number; to: number; bars: number } | null = null;
+      for (const c of candles) {
+        const hour = new Date((c.time + CANDLE_MS / 1000) * 1000).getUTCHours();
+        if (hour >= qa && hour < qb) {
+          if (run) {
+            run.to = c.time;
+            run.bars++;
+          } else run = { from: c.time, to: c.time, bars: 1 };
+        } else if (run) {
+          quiet.push({ ...run, label: `no new trades (${two(qa)}–${two(qb)} UTC)` });
+          run = null;
+        }
+      }
+      if (run) quiet.push({ ...run, label: `no new trades (${two(qa)}–${two(qb)} UTC)` });
+    }
+
     return {
+      structure: layers.structure && marks ? marks.structure : null,
+      dayLevels: layers.context && marks && marks.prevDayHigh != null && marks.prevDayLow != null ? { high: marks.prevDayHigh, low: marks.prevDayLow } : null,
+      quiet,
       trend:
         layers.trend && trend && trend.levels.length > 0 && trend.dailyTrend !== 0
           ? {
@@ -121,7 +148,7 @@ export default function Dashboard() {
       sdZones: layers.sd && trend ? trend.sdZones : [],
       digits: DIGITS,
     };
-  }, [trend, tori, layers, pairSignals, candles]);
+  }, [trend, tori, marks, layers, pairSignals, candles]);
 
   /** One line on what the trend allows right now. */
   const trendLine = useMemo(() => {
@@ -185,6 +212,7 @@ export default function Dashboard() {
           setCandles(jsonCandles);
           setTrend(json.trend ?? null);
           setTori(json.tori ?? null);
+          setMarks(json.structure && json.context ? { structure: json.structure, ...json.context } : null);
           setUpdatedAt(Date.now());
           setAsOf(json.asOf ?? null);
           setError(null);
