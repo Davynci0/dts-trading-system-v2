@@ -10,18 +10,18 @@ function parsePairs(req: NextRequest, body: Record<string, unknown> | null): Pai
   return (raw?.length ? raw : [...PAIRS]).filter((p): p is Pair => (PAIRS as readonly string[]).includes(p));
 }
 
-async function handle(req: NextRequest, body: Record<string, unknown> | null) {
+async function handle(req: NextRequest, body: Record<string, unknown> | null, source: "schedule" | "manual") {
   // the scheduler sends Authorization: Bearer $CRON_SECRET
   const secret = process.env.CRON_SECRET;
   if (secret && req.headers.get("authorization") !== `Bearer ${secret}` && !body) {
     return NextResponse.json({ error: "unauthorized" }, { status: 401 });
   }
-  return NextResponse.json(await runScan({ pairs: parsePairs(req, body) }));
+  return NextResponse.json(await runScan({ pairs: parsePairs(req, body), source }));
 }
 
 /** GET — the scheduler's entry point, every 15 minutes. */
 export async function GET(req: NextRequest) {
-  return handle(req, null);
+  return handle(req, null, "schedule");
 }
 
 /** POST — manual/dashboard trigger. Body: { pairs?: string[] }.
@@ -32,5 +32,5 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "forbidden" }, { status: 403 });
   }
   const body = (await req.json().catch(() => null)) as Record<string, unknown> | null;
-  return handle(req, body);
+  return handle(req, body, "manual");
 }

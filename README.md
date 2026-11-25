@@ -243,6 +243,17 @@ part of the rules. The code is in `lib/analysis/tori.ts`.
 - A scheduler (cron-job.org) calls `/api/scan` every 15 minutes with
   `Authorization: Bearer $CRON_SECRET`. Each scan first settles the open trade on 15-minute
   candles, then reads the last closed 15-minute candle.
+- **A missed scan.** Each scan also reads the candle before the newest one. A signal that candle
+  gave and that was never sent is recovered while it is under 20 minutes old, marked ⏰ LATE: the
+  original stop, the entry at the current price, the target re-worked to 1:3 from there — unless
+  its stop or target has been reached. The send rules are applied as they stood when its own
+  candle closed, so a trade that was open then still blocks it. Over five years, entering one
+  candle late made +0.11R a trade (68% won) against +0.18R on time. Two missed scans in a row
+  still lose a signal.
+- **A slow candle.** If the candle that has just closed is not there yet, the scan asks again
+  (twice, four seconds apart) instead of reading the old one.
+- **The scan log.** Every scan writes a row to `market_state` (`scan:schedule:<slot>`) when it
+  starts and when it is done, with the candle it read and what it did; a week is kept.
 - A signal is only sent within 20 minutes of its candle's close (`MAX_ENTRY_AGE_MIN`). A scan
   that runs later — after an outage, or at the weekend — does not send a trade at a price that
   is no longer there.

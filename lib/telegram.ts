@@ -70,6 +70,8 @@ export async function sendTrendSignal(opts: {
   trendDays: number;
   accountBalance: number;
   riskPct: number;
+  /** minutes since the signal candle closed, when the signal was recovered late */
+  lateMinutes?: number;
 }): Promise<void> {
   const px = (n: number) => n.toFixed(2);
   const risk = Math.abs(opts.entry - opts.stopLoss);
@@ -77,7 +79,8 @@ export async function sendTrendSignal(opts: {
   const up = opts.direction === "long";
   await sendTelegramMessage(
     [
-      `🚨 *SIGNAL: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (15-minute ${opts.trigger})`,
+      `${opts.lateMinutes == null ? "🚨 *SIGNAL" : "⏰ *LATE SIGNAL"}: ${pairLabel(opts.pair)} ${dirLabel(opts.direction)}* (15-minute ${opts.trigger})`,
+      ...(opts.lateMinutes == null ? [] : [`_Found ${opts.lateMinutes} minutes late: the scan that should have sent it did not. The stop is the original one; the entry, the target and the profit lock are worked out from the price now._`]),
       `*Entry:* \`${px(opts.entry)}\` (at market)`,
       `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(risk)} away, ${opts.stopWhy}`,
       `*Take profit:* \`${px(opts.takeProfit)}\` — ${px(reward)} away (1:${opts.targetR})`,

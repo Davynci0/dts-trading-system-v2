@@ -34,6 +34,7 @@ import {
   TREND_SR_DAYS,
   TREND_SR_TOUCHES,
   TREND_SR_WIDTH_ATR,
+  lateEntry,
   srZones,
   zonesAt,
   supplyDemandZones,
@@ -47,7 +48,7 @@ import {
 import { tradeCost } from "../lib/analysis/instruments";
 import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES } from "../lib/backtest/trend";
 import { followTrade, LIVE_LOCK, settleSignal } from "../lib/engine/outcomes";
-import { lastEntryOf, sendBlock, type EarlierSignal } from "../lib/engine/scanner";
+import { lastEntryOf, scanLogKey, sendBlock, type EarlierSignal } from "../lib/engine/scanner";
 import { toriRead, TORI_BREAK_TOUCHES, TORI_MIN_SPAN_BARS, TORI_BODY_MIN } from "../lib/analysis/tori";
 import { isLiveSignal, TREND_STRATEGY, type Candle } from "../lib/types";
 
@@ -635,6 +636,25 @@ console.log("\nsend rules");
   check("a sell more than 1R away from the last one is sent", sendBlock([last], sell(30, 89.9)) == null && sendBlock([last], sell(30, 110.1)) == null);
   check(`a sell more than ${TREND_REENTRY_MINUTES} minutes after the last entry is sent`, sendBlock([last], sell(61, 100)) == null);
   check("a buy straight after a sell is not a re-entry", sendBlock([last], { ...sell(15, 100), direction: "long" as const }) == null);
+
+  // a signal recovered late: its candle closed at L, one candle ago
+  const L = T + 7200;
+  const lateSell = { key: `trend:${L - 900}`, direction: "short" as const, time: L, entry: 60 };
+  const before = (outcomeAt: number | null): EarlierSignal => ({ ...row("short", outcomeAt == null, `trend:${L - 4500}`), outcome_at: outcomeAt == null ? null : new Date(outcomeAt * 1000).toISOString() });
+  check("late: a signal that was sent on time is not sent again", sendBlock([row("short", false, `trend:${L - 900}`)], lateSell, true) === "this signal has already been sent");
+  check("late: sent when nothing was open at its candle's close", sendBlock([], lateSell, true) == null && sendBlock([before(L - 1800)], lateSell, true) == null && sendBlock([before(L - 900)], lateSell, true) == null);
+  check("late: a trade open when its candle closed still blocks it, though it has closed since", !!sendBlock([before(L)], lateSell, true)?.includes("was open when that candle closed") && sendBlock([before(L)], lateSell) == null);
+  check("late: blocked while that trade is still open", sendBlock([before(null)], lateSell, true) != null);
+  check("late: nothing is sent once a newer signal has been", sendBlock([{ ...row("short", false, `trend:${L}`), outcome_at: new Date(L * 1000).toISOString() }], lateSell, true) === "a newer signal has already been sent");
+  check("late: the re-entry rule looks at the trade before it", !!sendBlock([{ ...row("short", false, `trend:${L - 2700}`, 62), outcome_at: new Date((L - 2700) * 1000).toISOString() }], { ...lateSell, entry: 60 }, true)?.includes("no new sell within"));
+
+  const c = (high: number, low: number, close: number): Candle => ({ time: 0, open: 100, high, low, close, volume: 1 });
+  const base = { ...setups.find((x) => x.s.setup!.direction === "long")!.s.setup!, direction: "long" as const, entry: 100, stopLoss: 80, risk: 20, takeProfit: 160 };
+  const le = lateEntry(base, [c(106, 98, 105)]);
+  check("a late entry keeps the stop and works the target and the lock out from the new price", !!le && le.entry === 105 && le.stopLoss === 80 && near(le.risk, 25) && near(le.takeProfit, 180) && near(le.lockTrigger, 115) && near(le.lockStop, 110) && le.key === base.key);
+  check("no late entry once the stop or the target has been reached, or with no candle since", lateEntry(base, [c(106, 80, 105)]) == null && lateEntry(base, [c(160, 99, 150)]) == null && lateEntry(base, []) == null);
+  check("no late entry when the costs are more than 6% of what is left", lateEntry(base, [c(101, 80.5, 81)]) == null);
+  check("the scan log keeps one row a 15-minute slot and starts again after a week", scanLogKey(T * 1000, "schedule") === scanLogKey((T + 7 * 86400) * 1000, "schedule") && scanLogKey(T * 1000, "schedule") !== scanLogKey((T + 900) * 1000, "schedule") && scanLogKey(T * 1000, "schedule") !== scanLogKey(T * 1000, "manual"));
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

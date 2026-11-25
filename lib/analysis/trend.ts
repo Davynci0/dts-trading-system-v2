@@ -851,3 +851,31 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
     setup,
   };
 }
+
+/**
+ * A signal found one or more candles late (the scan that should have sent it
+ * did not run): the same trade entered at the latest close, with the original
+ * stop and the target and the profit lock re-worked from the new price.
+ * `since` are the candles closed after the signal candle. Null when there is
+ * nothing left to take: the stop or the target has been reached, price is
+ * beyond the stop, or the costs are more than the limit of what is left.
+ * Over five years such entries made +0.11R a trade against +0.18R on time.
+ */
+export function lateEntry(setup: TrendSetup, since: Candle[], pair = "XAU_USD"): TrendSetup | null {
+  const last = since[since.length - 1];
+  if (!last) return null;
+  const dir = setup.direction === "long" ? 1 : -1;
+  const done = since.some((c) => (dir === 1 ? c.low <= setup.stopLoss || c.high >= setup.takeProfit : c.high >= setup.stopLoss || c.low <= setup.takeProfit));
+  if (done) return null;
+  const entry = last.close;
+  const risk = dir * (entry - setup.stopLoss);
+  if (!(risk > 0) || tradeCost(pair) / risk > TREND_MAX_COST_SHARE) return null;
+  return {
+    ...setup,
+    entry,
+    risk,
+    takeProfit: entry + dir * TREND_TARGET_R * risk,
+    lockTrigger: entry + dir * TREND_LOCK_AT_R * risk,
+    lockStop: entry + dir * TREND_LOCK_TO_R * risk,
+  };
+}
