@@ -17,6 +17,8 @@ export interface OverlayData {
     direction: "long" | "short";
     /** the last swing and each channel; `armed` is false while price is already beyond the level */
     levels: { label: string; price: number; armed: boolean }[];
+    /** the broken swing the pullback entry is waiting at */
+    pullback?: { level: number; touched: boolean } | null;
     /** false while the trend readings do not agree */
     ready: boolean;
     /** the high (sell) / low (buy) of the last two candles: a new trade's stop goes just beyond it */
@@ -300,6 +302,12 @@ class OverlayPaneView implements IPrimitivePaneView {
               const live = t.ready && g.armed;
               line(0, W, y, C.trend, live ? 0.7 : 0.3, 1, [8, 4]);
               tag(`${side(t.direction)} on a 15-min close ${up ? "above" : "below"} ${fmt(price)} (${g.names.join(", ")})${t.ready ? (g.armed ? "" : " · already beyond") : " · trend not confirmed"}`, 8, y + (up ? -3 : 13), C.trend, "left", 3, { small: true, dim: !live });
+            }
+            // the pullback entry: the broken swing price has to come back to, and close back beyond
+            const yP = t.pullback ? Y(t.pullback.level) : null;
+            if (t.pullback && yP != null) {
+              line(0, W, yP, C.trend, 0.7, 1.5, [3, 3]);
+              tag(`pullback level ${fmt(t.pullback.level)} · ${t.pullback.touched ? `price is back at it — ${side(t.direction)} on a close back ${up ? "above" : "below"}` : `${side(t.direction)} when price comes back here and closes back ${up ? "above" : "below"}`}`, 8, yP + (up ? 13 : -3), C.trend, "left", 3, { small: true });
             }
             // the last two candles' extreme on the other side: where a new trade's stop would go
             const yS = t.stopSwing != null ? Y(t.stopSwing) : null;

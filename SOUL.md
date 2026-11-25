@@ -22,6 +22,9 @@ the strategy, the backtest and the reports, until the owner says otherwise.
    downtrend, expect price to come up a little and then continue down: sell the pullback, not
    the low. The stop goes where the structure says the idea is wrong (beyond the swing), not
    at an arbitrary distance.
+   (Since 25 November 2026 one of the entries is exactly this: after a break of structure,
+   price comes back to the swing it broke and closes back beyond it; the stop goes beyond the
+   pullback. And after a full loss there is no new trade until the trading day ends.)
 7. **A win rate over 60%, consistently** — in the whole test and year by year, not only on
    average. When trades lose, go back to the losing trades, find out why they lost, and fix
    that; then test again.

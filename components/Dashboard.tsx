@@ -146,6 +146,7 @@ export default function Dashboard() {
           ? {
               direction: trend.dailyTrend === 1 ? "long" : "short",
               levels: trend.levels,
+              pullback: trend.pullback && !trend.pullback.entry ? { level: trend.pullback.level, touched: trend.pullback.touched } : null,
               ready: !trend.blocked,
               // the level a new trade's stop would go beyond
               stopSwing: trend.stopLevel,

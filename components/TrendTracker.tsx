@@ -27,6 +27,8 @@ export interface TrendSummary {
   blocked: string | null;
   /** the levels the next 15-minute candle has to close beyond for an entry */
   levels: { label: string; price: number; armed: boolean }[];
+  /** the pullback being waited for after the last break of structure with the trend */
+  pullback?: { dir: 1 | -1; level: number; extreme: number; touched: boolean; entry: boolean } | null;
   minRiskAtr: number;
   maxRiskAtr: number;
   targetR: number;
@@ -158,6 +160,15 @@ export default function TrendTracker({ trend, signals, price, digits = 2 }: { tr
                 <span>{px(l.price)}</span>
               </li>
             ))}
+            {trend.pullback && !trend.pullback.entry && (
+              <li className="flex justify-between text-sky-300">
+                <span>
+                  {up ? "buy" : "sell"} the pullback to the broken swing {up ? "high" : "low"}
+                  {trend.pullback.touched ? ` — price is back at it; waiting for a close ${up ? "above" : "below"}` : " — waiting for price to come back"}
+                </span>
+                <span>{px(trend.pullback.level)}</span>
+              </li>
+            )}
             {[...trend.zones].reverse().map((z) => (
               <li key={`z${z.low}`} className="flex justify-between">
                 <span>

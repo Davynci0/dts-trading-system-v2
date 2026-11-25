@@ -69,6 +69,8 @@ export async function GET(req: NextRequest) {
         confirmed: t.confirmed,
         blocked: t.blocked,
         levels: t.levels,
+        /** the pullback being waited for after the last break of structure with the trend */
+        pullback: t.pullback,
         minRiskAtr: TREND_MIN_RISK_ATR,
         maxRiskAtr: TREND_MAX_RISK_ATR,
         targetR: TREND_TARGET_R,

@@ -12,7 +12,7 @@ import { tradeCost } from "./instruments";
  *    bullish, and it stays that way until the other side is broken.
  *  - THE TREND is the 1-hour structure, and the daily chart has to agree: the
  *    last closed day on the same side of its 50-day average.
- *  - THREE ENTRIES, each on the close of a 15-minute candle, with the trend:
+ *  - FOUR ENTRIES, each on the close of a 15-minute candle, with the trend:
  *      break of structure   in a downtrend price comes back up, makes a lower
  *                           high, and then closes below the last swing low —
  *                           the pullback is over and the trend continues
@@ -24,6 +24,14 @@ import { tradeCost } from "./instruments";
  *                           ordinary candle is NOT an entry: those 120 trades
  *                           lost money in both halves of the five-year test,
  *                           while breakouts on a momentum candle won 79%
+ *      pullback             after a break of structure with the trend, price
+ *                           comes back to the level it broke (to within 0.25
+ *                           ATR, within four hours) and a candle closes back
+ *                           beyond it in the trend's direction — "sell the
+ *                           pullback, not the low". The stop goes beyond the
+ *                           pullback's own high or low; a pullback whose
+ *                           stop would be more than 2 ATR away is not traded.
+ *                           This entry is taken at any hour.
  *  - THE STOP IS SET BY THE PRICE ACTION, not by a fixed distance: just beyond
  *    the high of the last two candles for a sell — the small pullback the
  *    trade is leaving behind — and the low of the last two for a buy. It is
@@ -55,9 +63,13 @@ import { tradeCost } from "./instruments";
  *    last trade's risk) away from that entry. Re-entering the same move at
  *    the same price straight after a trade closed made nothing over five
  *    years.
+ *  - NO MORE TRADES AFTER A FULL LOSS: when a trade has lost 0.9R or more, no
+ *    new trade is taken until the trading day ends (17:00 New York). It is
+ *    what keeps one bad day from becoming three or four losses in a row.
  *  - FOUR CONDITIONS THAT COME FROM THE LOSING TRADES — each lost in both
  *    halves of the test: an exhausted trend (1-hour ADX 40 or more), the
- *    London morning and the US data hour (07:00–14:00 UTC), an entry in the
+ *    London morning and the US data hour (07:00–14:00 UTC; the pullback entry
+ *    is the one entry that works then, and is taken), an entry in the
  *    wrong half of the last 24 hours' range, and a price within 1% of the
  *    50-day average (no real daily trend).
  *  - SIX CONFIRMATIONS, OF WHICH FIVE ARE NEEDED — what the trades that made
@@ -115,6 +127,15 @@ export const TREND_REENTRY_MINUTES = 60;
 /** … unless price is more than this many times the last trade's risk away from that entry. */
 export const TREND_REENTRY_R = 1;
 /** Support and resistance: 1-hour swing points of the last this many days … */
+/** The pullback entry: after a 15-minute break of structure with the trend, price comes back to the level it broke within this many candles (four hours)… */
+export const TREND_PULLBACK_BARS = 16;
+/** …to within this many ATR of it, and a candle then closes back beyond the level in the trend's direction. */
+export const TREND_PULLBACK_TOUCH_ATR = 0.25;
+/** After a trade that lost this much of its risk or more (a full loss), no new trade for the rest of the trading day. */
+export const TREND_DAY_STOP_R = 0.9;
+/** The trading day ends at this hour in New York (the daily candle's close). */
+export const TREND_DAY_END_NY_HOUR = 17;
+
 export const TREND_SR_DAYS = 30;
 /** … grouped into zones no taller than this share of a day's average range (daily ATR) … */
 export const TREND_SR_WIDTH_ATR = 0.15;
@@ -242,6 +263,40 @@ export function reentryBlock(last: LastEntry | null, next: { direction: SignalDi
   const side = last.direction === "long" ? "buy" : "sell";
   return `a ${side} was entered at ${last.entry.toFixed(2)} ${Math.round(minutes)} min ago — no new ${side} within ${TREND_REENTRY_R}R of it (${(last.entry - TREND_REENTRY_R * last.risk).toFixed(2)}–${(last.entry + TREND_REENTRY_R * last.risk).toFixed(2)}) for ${TREND_REENTRY_MINUTES} minutes`;
 }
+
+/** Is New York on summer time at `t` (epoch seconds)? Second Sunday of March to the first Sunday of November. */
+function newYorkSummer(t: number): boolean {
+  const year = new Date(t * 1000).getUTCFullYear();
+  const sunday = (month: number, nth: number) => {
+    const first = new Date(Date.UTC(year, month, 1)).getUTCDay();
+    return Date.UTC(year, month, 1 + ((7 - first) % 7) + 7 * (nth - 1), 7) / 1000;
+  };
+  return t >= sunday(2, 2) && t < sunday(10, 1);
+}
+
+/** The trading day `t` (epoch seconds) falls in, as a day number: a day runs from 17:00 New York to 17:00 New York. */
+export function tradingDay(t: number): number {
+  return Math.floor((t - (TREND_DAY_END_NY_HOUR + (newYorkSummer(t) ? 4 : 5)) * 3600) / 86400);
+}
+
+/** How the last closed trade ended, as the day-stop rule needs it. */
+export interface LastResult {
+  /** when it was closed (epoch seconds) */
+  exitTime: number;
+  /** its result in R, before costs */
+  r: number;
+}
+
+/**
+ * Why no new trade is taken after a full loss, or null when one may be: the
+ * last trade lost TREND_DAY_STOP_R or more and closed in the trading day the
+ * new trade would be entered in. `time` is when the new trade would be entered.
+ */
+export function dayStopBlock(last: LastResult | null, time: number): string | null {
+  if (!last || !(last.r <= -TREND_DAY_STOP_R) || tradingDay(last.exitTime) !== tradingDay(time)) return null;
+  return `the last trade was a full loss (${last.r.toFixed(1)}R) — no new trade until the trading day ends at ${TREND_DAY_END_NY_HOUR}:00 New York`;
+}
+
 /** No trade when the spread and slippage are more than this share of the risk. */
 export const TREND_MAX_COST_SHARE = 0.06;
 /** History needed before the reads have settled: 15-minute candles for the ATR, the longest channel and the swings; 1-hour candles for the structure. */
@@ -631,7 +686,52 @@ export function zonesAt(s: TrendSeries, i: number): SrZone[] {
   return zones;
 }
 
-export type TrendTrigger = "break of structure" | "breakout" | "momentum candle" | "breakout and momentum candle";
+export type TrendTrigger = "break of structure" | "breakout" | "momentum candle" | "breakout and momentum candle" | "pullback to the broken level";
+
+/** The pullback the system is waiting for, or has just had, after the last 15-minute break of structure. */
+export interface Pullback {
+  /** the side of the break: +1 a swing high was broken, −1 a swing low */
+  dir: 1 | -1;
+  /** the swing high / swing low the break closed beyond */
+  level: number;
+  /** the lowest low (after a break up) / highest high (after a break down) since the break */
+  extreme: number;
+  /** price has come back to within TREND_PULLBACK_TOUCH_ATR of the level */
+  touched: boolean;
+  /** candle i is the entry: the first candle, after the touch, to close back beyond the level in the break's direction */
+  entry: boolean;
+}
+
+/**
+ * The pullback after the last break of structure, as it stands at the close of
+ * 15-minute candle `i` — or null when there is none to wait for: no break in
+ * the last TREND_PULLBACK_BARS candles, the structure has been broken again, or
+ * the entry has already been given on an earlier candle (one entry a break).
+ */
+export function pullbackAt(s: TrendSeries, i: number): Pullback | null {
+  const st = s.structure;
+  let b = -1;
+  for (let k = i - 1; k >= 1 && k >= i - TREND_PULLBACK_BARS; k--) {
+    if (st.leg[k] !== st.leg[k - 1]) {
+      b = k;
+      break;
+    }
+  }
+  if (b < 0 || st.leg[i] !== st.leg[b] || st.dir[b] === 0) return null;
+  const dir = st.dir[b] as 1 | -1;
+  const level = dir === 1 ? st.swingHigh[b] : st.swingLow[b];
+  if (!Number.isFinite(level) || !Number.isFinite(st.origin[b])) return null;
+  let touched = false;
+  let extreme = dir === 1 ? Infinity : -Infinity;
+  for (let j = b + 1; j <= i; j++) {
+    const c = s.candles[j];
+    extreme = dir === 1 ? Math.min(extreme, c.low) : Math.max(extreme, c.high);
+    const near = level + dir * TREND_PULLBACK_TOUCH_ATR * s.atr[j - 1];
+    if (dir === 1 ? c.low <= near : c.high >= near) touched = true;
+    if (touched && dir * (c.close - level) > 0 && dir * (c.close - c.open) > 0) return j === i ? { dir, level, extreme, touched, entry: true } : null;
+  }
+  return { dir, level, extreme, touched, entry: false };
+}
 
 export interface TrendSetup {
   direction: SignalDirection;
@@ -649,8 +749,10 @@ export interface TrendSetup {
   /** the profit lock: once price reaches `lockTrigger`, the stop is moved to `lockStop` */
   lockTrigger: number;
   lockStop: number;
-  /** the level the stop is set beyond: the far edge of the support/resistance zone behind the entry, or the high (sell) / low (buy) of the last two candles */
+  /** the level the stop is set beyond: the far edge of the support/resistance zone behind the entry, the high (sell) / low (buy) of the last two candles, or — for a pullback entry — the pullback's own high / low */
   swing: number;
+  /** for a pullback entry: the broken swing high / low price came back to */
+  level: number | null;
   /** "zone" when the stop sits just beyond a support/resistance zone; "swing" when it sits just beyond the last two candles; "nearest" / "furthest" when that level was closer or further than the limits and the stop was set at the limit */
   stopBasis: "zone" | "swing" | "nearest" | "furthest";
   /** the zone the stop sits beyond, when it does */
@@ -703,6 +805,8 @@ export interface TrendState {
   /** the six trend confirmations, and how many are met — a trade needs TREND_CONFIRMATIONS_MIN */
   confirmations: { label: string; met: boolean }[];
   confirmed: number;
+  /** the pullback being waited for on the trend's side after the last break of structure, if there is one */
+  pullback: Pullback | null;
   /** the signal candle's length in ATR */
   candleAtr: number | null;
   setup: TrendSetup | null;
@@ -840,6 +944,23 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
     }
   }
 
+  // the pullback entry: price back at the level the last break of structure broke, and a close back beyond it.
+  // Its stop goes just beyond the pullback's own low (buy) / high (sell); further than the limit, there is no trade.
+  const pullAny = daily !== 0 ? pullbackAt(s, i) : null;
+  const pullback = pullAny && pullAny.dir === dir ? pullAny : null;
+  let pullPlan: { risk: number; swing: number; basis: TrendSetup["stopBasis"] } | null = null;
+  if (pullback?.entry && atr > 0) {
+    const price = entry ?? c.close;
+    const raw = dir * (price - (pullback.extreme - dir * TREND_STOP_BUFFER_ATR * atr));
+    if (raw > 0 && raw <= TREND_MAX_RISK_ATR * atr) {
+      const risk = Math.max(raw, TREND_MIN_RISK_ATR * atr);
+      if (tradeCost(pair) / risk <= TREND_MAX_COST_SHARE) pullPlan = { risk, swing: pullback.extreme, basis: raw < TREND_MIN_RISK_ATR * atr ? "nearest" : "swing" };
+    }
+  }
+  // which entry this candle is: one of the three on the close, outside the quiet hours — otherwise the pullback, at any hour
+  const usePull = !(trigger != null && plan != null && !quiet) && pullPlan != null;
+  const hasEntry = usePull || (trigger != null && plan != null);
+
   // the signal candle's size, and the fresh supply/demand zones as they stood at its close
   const candleAtr = atr > 0 ? (c.high - c.low) / atr : NaN;
   const oversized = candleAtr >= TREND_MAX_CANDLE_ATR;
@@ -848,7 +969,7 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
   let sdAhead: SdZone | null = null;
   if (daily !== 0) {
     const price = entry ?? c.close;
-    const risk = plan?.risk ?? NaN;
+    const risk = (usePull ? pullPlan : plan)?.risk ?? NaN;
     for (const z of freshSd) {
       if (z.kind !== (dir === 1 ? "supply" : "demand")) continue;
       const inside = dir * (price - z.proximal) >= 0 && dir * (z.distal - price) >= 0;
@@ -869,7 +990,10 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
     },
     { label: `Trend not exhausted: 1-hour ADX ${Number.isFinite(adx) ? adx.toFixed(0) : "?"} (must be under ${TREND_ADX_MAX})`, met: fresh },
     { label: `A real daily trend: price ${Number.isFinite(distancePct) ? Math.max(distancePct, 0).toFixed(1) : "?"}% ${dir === 1 ? "above" : "below"} the ${TREND_DAYS}-day average (needs ${TREND_MIN_DISTANCE_PCT}%)`, met: clear },
-    { label: `Not the London morning or the US data hour (${quietHours} UTC)`, met: !quiet },
+    {
+      label: quiet ? `London morning and US data hour (${quietHours} UTC): only the pullback entry is traded` : `Not the London morning or the US data hour (${quietHours} UTC)`,
+      met: !quiet || usePull,
+    },
     { label: `Trend confirmations: ${confirmed} of ${confirmations.length} (at least ${TREND_CONFIRMATIONS_MIN})`, met: enough },
     {
       label: `In the ${dir === 1 ? "upper" : "lower"} half of the last 24 hours' range (now ${Number.isFinite(rangePosition) ? (rangePosition * 100).toFixed(0) : "?"}% of the way ${dir === 1 ? "up" : "down"})`,
@@ -895,8 +1019,8 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
       met: sdAhead == null,
     },
     {
-      label: `Entry: a 15-minute close ${dir === 1 ? "above" : "below"} the last swing ${dir === 1 ? "high" : "low"}, or a ${dir === 1 ? "rising" : "falling"} candle of ${TREND_MOMENTUM_ATR} ATR or more (a close beyond the ${dir === 1 ? "high" : "low"} of the last ${TREND_BREAKOUT_BARS.map(hours).join(", ")} hours only counts on such a candle)`,
-      met: trigger != null && plan != null,
+      label: `Entry: a 15-minute close ${dir === 1 ? "above" : "below"} the last swing ${dir === 1 ? "high" : "low"}, or a ${dir === 1 ? "rising" : "falling"} candle of ${TREND_MOMENTUM_ATR} ATR or more (a close beyond the ${dir === 1 ? "high" : "low"} of the last ${TREND_BREAKOUT_BARS.map(hours).join(", ")} hours only counts on such a candle) — or a pullback to the level the last break of structure broke, and a close back ${dir === 1 ? "above" : "below"} it`,
+      met: hasEntry,
     },
   ];
 
@@ -908,30 +1032,32 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
   else if (!Number.isFinite(adx)) blocked = "not enough 1-hour history yet";
   else if (!fresh) blocked = `the trend is exhausted — 1-hour ADX ${adx.toFixed(0)}, no new trade at ${TREND_ADX_MAX} or more`;
   else if (!clear) blocked = `no real daily trend — price is ${Math.max(distancePct, 0).toFixed(1)}% ${dir === 1 ? "above" : "below"} the ${TREND_DAYS}-day average, it needs ${TREND_MIN_DISTANCE_PCT}%`;
-  else if (quiet) blocked = `the London morning and the US data hour (${quietHours} UTC) — no new trade`;
   else if (!enough) blocked = `only ${confirmed} of ${confirmations.length} trend confirmations — a trade needs ${TREND_CONFIRMATIONS_MIN}`;
   else if (!placed) blocked = `price is in the ${dir === 1 ? "lower" : "upper"} half of the last 24 hours' range — ${dir === 1 ? "buys" : "sells"} wait for the ${dir === 1 ? "upper" : "lower"} half`;
   else if (!affordable) blocked = `the candles are too small — costs would be ${pct(costShare)} of even the widest stop (limit ${TREND_MAX_COST_SHARE * 100}%)`;
-  else if (trigger && brokeZone) blocked = `this candle closed through the ${dir === 1 ? "resistance" : "support"} zone at ${brokeZone.low.toFixed(2)}–${brokeZone.high.toFixed(2)} — no trade until price has tested it`;
-  else if (trigger && oversized) blocked = `this candle is ${candleAtr.toFixed(1)} ATR long — no trade on a candle of ${TREND_MAX_CANDLE_ATR} ATR or more`;
-  else if (trigger && plan && sdAhead) blocked = `a fresh 1-hour ${sdAhead.kind} zone (${Math.min(sdAhead.proximal, sdAhead.distal).toFixed(2)}–${Math.max(sdAhead.proximal, sdAhead.distal).toFixed(2)}) is less than ${TREND_SD_AHEAD_R}R ahead — no ${dir === 1 ? "buy into supply" : "sell into demand"}`;
+  else if (quiet && !usePull) blocked = `the London morning and the US data hour (${quietHours} UTC) — only a pullback to a broken level is traded`;
+  else if (hasEntry && brokeZone) blocked = `this candle closed through the ${dir === 1 ? "resistance" : "support"} zone at ${brokeZone.low.toFixed(2)}–${brokeZone.high.toFixed(2)} — no trade until price has tested it`;
+  else if (hasEntry && oversized) blocked = `this candle is ${candleAtr.toFixed(1)} ATR long — no trade on a candle of ${TREND_MAX_CANDLE_ATR} ATR or more`;
+  else if (hasEntry && sdAhead) blocked = `a fresh 1-hour ${sdAhead.kind} zone (${Math.min(sdAhead.proximal, sdAhead.distal).toFixed(2)}–${Math.max(sdAhead.proximal, sdAhead.distal).toFixed(2)}) is less than ${TREND_SD_AHEAD_R}R ahead — no ${dir === 1 ? "buy into supply" : "sell into demand"}`;
 
   let setup: TrendSetup | null = null;
-  if (!blocked && enough && side && trigger && plan && !brokeZone && !oversized && !sdAhead) {
+  const entryPlan = usePull ? pullPlan : trigger ? plan : null;
+  if (!blocked && enough && side && entryPlan && (usePull || !quiet) && !brokeZone && !oversized && !sdAhead) {
     const price = entry ?? c.close;
     setup = {
       direction: side,
-      trigger,
-      breakoutBars,
+      trigger: usePull ? "pullback to the broken level" : trigger!,
+      breakoutBars: usePull ? null : breakoutBars,
       entry: price,
-      stopLoss: price - dir * plan.risk,
-      takeProfit: price + dir * TREND_TARGET_R * plan.risk,
-      risk: plan.risk,
-      lockTrigger: price + dir * TREND_LOCK_AT_R * plan.risk,
-      lockStop: price + dir * TREND_LOCK_TO_R * plan.risk,
-      swing: plan.swing,
-      stopBasis: plan.basis,
-      zone: plan.zone,
+      stopLoss: price - dir * entryPlan.risk,
+      takeProfit: price + dir * TREND_TARGET_R * entryPlan.risk,
+      risk: entryPlan.risk,
+      lockTrigger: price + dir * TREND_LOCK_AT_R * entryPlan.risk,
+      lockStop: price + dir * TREND_LOCK_TO_R * entryPlan.risk,
+      swing: entryPlan.swing,
+      stopBasis: entryPlan.basis,
+      zone: usePull ? null : (plan?.zone ?? null),
+      level: usePull && pullback ? pullback.level : null,
       atr,
       confirmed,
       time: c.time + M15,
@@ -942,6 +1068,7 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
   return {
     confirmations,
     confirmed,
+    pullback,
     dailyTrend: daily,
     dailyAverage: finite(s.dailyAverage[i]),
     h1Trend: hourly,

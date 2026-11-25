@@ -36,6 +36,12 @@ import {
   TREND_SR_TOUCHES,
   TREND_SR_WIDTH_ATR,
   lateEntry,
+  dayStopBlock,
+  pullbackAt,
+  tradingDay,
+  TREND_DAY_STOP_R,
+  TREND_PULLBACK_BARS,
+  TREND_PULLBACK_TOUCH_ATR,
   structureMarks,
   srZones,
   zonesAt,
@@ -50,7 +56,7 @@ import {
 import { tradeCost } from "../lib/analysis/instruments";
 import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES } from "../lib/backtest/trend";
 import { followTrade, LIVE_LOCK, settleSignal } from "../lib/engine/outcomes";
-import { lastEntryOf, scanLogKey, sendBlock, type EarlierSignal } from "../lib/engine/scanner";
+import { lastEntryOf, lastResultOf, scanLogKey, sendBlock, type EarlierSignal } from "../lib/engine/scanner";
 import { isLiveSignal, strategyOf, TREND_STRATEGY, type Candle } from "../lib/types";
 
 let failed = 0;
@@ -225,8 +231,8 @@ console.log("\nrules, on the generated market");
   const kinds = (t: string) => setups.filter((x) => x.s.setup!.trigger === t).length;
   check(
     "the market produces every kind of signal (the checks below are not empty)",
-    kinds("break of structure") >= 20 && kinds("breakout and momentum candle") >= 5 && kinds("momentum candle") >= 20 && setups.some((x) => x.s.setup!.direction === "long") && setups.some((x) => x.s.setup!.direction === "short"),
-    `${setups.length} setups: structure ${kinds("break of structure")}, breakout ${kinds("breakout")}, momentum ${kinds("momentum candle")}, both ${kinds("breakout and momentum candle")}`
+    kinds("break of structure") >= 20 && kinds("breakout and momentum candle") >= 5 && kinds("momentum candle") >= 20 && kinds("pullback to the broken level") >= 10 && setups.some((x) => x.s.setup!.direction === "long") && setups.some((x) => x.s.setup!.direction === "short"),
+    `${setups.length} setups: structure ${kinds("break of structure")}, breakout ${kinds("breakout")}, momentum ${kinds("momentum candle")}, both ${kinds("breakout and momentum candle")}, pullback ${kinds("pullback to the broken level")}`
   );
   check("a breakout on an ordinary candle is not an entry: every breakout traded is a momentum candle too", kinds("breakout") === 0);
   const ok = (f: (x: (typeof setups)[number], dir: number) => boolean) => setups.every((x) => f(x, x.s.setup!.direction === "long" ? 1 : -1));
@@ -246,7 +252,47 @@ console.log("\nrules, on the generated market");
   // the four conditions that come from the losing trades
   check(`never once the 1-hour ADX is ${TREND_ADX_MAX} or more`, TREND_ADX_MAX === 40 && ok((x) => series.h1Adx[x.i] < 40) && states.some((s) => s.blocked?.startsWith("the trend is exhausted")));
   const closeHour = (i: number) => new Date((m15[i].time + M15) * 1000).getUTCHours();
-  check("never on a candle that closes in the London morning or the US data hour, 07:00 to 14:00 UTC", TREND_QUIET_HOURS_UTC.join() === "7,14" && ok((x) => closeHour(x.i) < 7 || closeHour(x.i) >= 14) && states.some((s) => s.blocked?.startsWith("the London morning")));
+  const isPull = (x: (typeof setups)[number]) => x.s.setup!.trigger === "pullback to the broken level";
+  const inQuiet = (i: number) => closeHour(i) >= 7 && closeHour(i) < 14;
+  check(
+    "on a candle that closes in the London morning or the US data hour, 07:00 to 14:00 UTC, only the pullback entry is traded",
+    TREND_QUIET_HOURS_UTC.join() === "7,14" && ok((x) => !inQuiet(x.i) || isPull(x)) && setups.some((x) => inQuiet(x.i) && isPull(x)) && states.some((s) => s.blocked?.startsWith("the London morning")),
+    `${setups.filter((x) => inQuiet(x.i)).length} pullback entries in those hours`
+  );
+  // the pullback entry, worked out again from the candles
+  const pulls = setups.filter(isPull);
+  const pullFacts = pulls.map(({ i, s }) => {
+    const u = s.setup!;
+    const d = u.direction === "long" ? 1 : -1;
+    let b = i - 1;
+    while (b >= 1 && st.leg[b] === st.leg[b - 1]) b--;
+    const level = d === 1 ? st.swingHigh[b] : st.swingLow[b];
+    let extreme = d === 1 ? Infinity : -Infinity;
+    let touched = false;
+    for (let j = b + 1; j <= i; j++) {
+      extreme = d === 1 ? Math.min(extreme, m15[j].low) : Math.max(extreme, m15[j].high);
+      if (d === 1 ? m15[j].low <= level + TREND_PULLBACK_TOUCH_ATR * series.atr[j - 1] : m15[j].high >= level - TREND_PULLBACK_TOUCH_ATR * series.atr[j - 1]) touched = true;
+    }
+    return { i, u, d, b, level, extreme, touched };
+  });
+  check(
+    "a pullback entry follows a break of structure with the trend by no more than four hours, and the structure has not been broken again",
+    TREND_PULLBACK_BARS === 16 && pullFacts.every((f) => f.b >= 1 && f.i - f.b <= 16 && st.dir[f.b] === f.d && st.leg[f.i] === st.leg[f.b])
+  );
+  check(
+    "…price has come back to within 0.25 ATR of the level that break closed beyond, and the signal candle closes back beyond it, in the trend's direction",
+    TREND_PULLBACK_TOUCH_ATR === 0.25 && pullFacts.every((f) => f.touched && near(f.u.level!, f.level) && f.d * (m15[f.i].close - f.level) > 0 && f.d * (m15[f.i].close - m15[f.i].open) > 0)
+  );
+  check(
+    "…its stop is 0.2 ATR beyond the pullback's own low (buy) or high (sell), and a pullback whose stop would be more than 2 ATR away is not traded",
+    pullFacts.every((f) => near(f.u.swing, f.extreme) && f.d * (f.u.entry - (f.extreme - f.d * TREND_STOP_BUFFER_ATR * series.atr[f.i])) <= TREND_MAX_RISK_ATR * series.atr[f.i] + 1e-9 && f.u.stopBasis !== "furthest" && f.u.stopBasis !== "zone") &&
+      states.some((s, i) => s.pullback?.entry === true && !s.setup && !s.blocked && s.dailyTrend !== 0 && (s.dailyTrend as number) * (m15[i].close - (s.pullback.extreme - (s.dailyTrend as number) * TREND_STOP_BUFFER_ATR * series.atr[i])) > TREND_MAX_RISK_ATR * series.atr[i])
+  );
+  check(
+    "…one entry a break: the candles after a pullback entry are not pullback entries of the same break",
+    pullFacts.every((f) => { for (let j = f.i + 1; j < m15.length && st.leg[j] === st.leg[f.b]; j++) if (pullbackAt(series, j) != null) return false; return true; })
+  );
+  check("the pullback the panel shows is the trend's own: never the level of a break against it", states.every((s) => !s.pullback || s.pullback.dir === s.dailyTrend));
   check(
     `every trade has at least ${TREND_CONFIRMATIONS_MIN} of the six trend confirmations, and one short of them is refused with the reason`,
     setups.every((x) => states[x.i].confirmations.length === 6 && states[x.i].confirmed === states[x.i].confirmations.filter((c) => c.met).length && states[x.i].confirmed >= TREND_CONFIRMATIONS_MIN && x.s.setup!.confirmed === states[x.i].confirmed) &&
@@ -306,7 +352,7 @@ console.log("\nrules, on the generated market");
   check("most stops are set by the candles or by a support/resistance zone, not by a limit", basis("swing").length + basis("zone").length > setups.length / 2, `candles ${basis("swing").length}, zone ${basis("zone").length} of ${setups.length}`);
   check(
     "without a zone, the level is the low of the last two candles for a buy and their high for a sell — the same for every entry",
-    TREND_STOP_BARS === 2 && setups.filter((x) => x.s.setup!.stopBasis !== "zone").every((x) => { const d = x.s.setup!.direction === "long" ? 1 : -1; return near(x.s.setup!.swing, d === 1 ? Math.min(m15[x.i].low, m15[x.i - 1].low) : Math.max(m15[x.i].high, m15[x.i - 1].high)); })
+    TREND_STOP_BARS === 2 && setups.filter((x) => x.s.setup!.stopBasis !== "zone" && x.s.setup!.trigger !== "pullback to the broken level").every((x) => { const d = x.s.setup!.direction === "long" ? 1 : -1; return near(x.s.setup!.swing, d === 1 ? Math.min(m15[x.i].low, m15[x.i - 1].low) : Math.max(m15[x.i].high, m15[x.i - 1].high)); })
   );
   check(
     "the stop sits 0.2 ATR beyond that level",
@@ -491,6 +537,11 @@ console.log("\nbacktest");
 const trades = runTrendBacktest({ pair: "XAU_USD", m15, h1, daily });
 {
   check("the generated market is traded", trades.length >= 100, `${trades.length} trades`);
+  // the day stop: after a full loss, nothing more that trading day
+  const priceR = (t: (typeof trades)[number]) => ((t.direction === "long" ? 1 : -1) * (t.exitPrice - t.entry)) / Math.abs(t.entry - t.stopLoss);
+  const afterFullLoss = (list: typeof trades) => list.filter((t, k) => k > 0 && priceR(list[k - 1]) <= -TREND_DAY_STOP_R && tradingDay(list[k - 1].exitTime) === tradingDay(t.entryTime)).length;
+  const free = runTrendBacktest({ pair: "XAU_USD", m15, h1, daily, dayStop: false });
+  check("after a full loss no trade is entered for the rest of that trading day — and without the rule there would be", afterFullLoss(trades) === 0 && afterFullLoss(free) > 0 && trades.some((t) => priceR(t) <= -TREND_DAY_STOP_R), `${afterFullLoss(free)} such trades without the rule, ${free.length - trades.length} fewer trades with it`);
   check("one trade at a time: a trade is entered only after the one before it has closed", TREND_MAX_OPEN === 1 && trades.every((t, k) => k === 0 || t.entryTime >= trades[k - 1].exitTime));
   // the re-entry rule: no trade on the same side within an hour of the last entry and within 1R of its price
   const dupes = trades.filter((t, k) => {
@@ -564,7 +615,7 @@ const trades = runTrendBacktest({ pair: "XAU_USD", m15, h1, daily });
   const from = trades[Math.floor(trades.length / 2)].entryTime;
   const later = runTrendBacktest({ pair: "XAU_USD", m15, h1, daily, from });
   check("`from` keeps only trades entered at or after it", later.length > 0 && later.every((t) => t.entryTime >= from));
-  check("every trade counts under exactly one of the three entries", trades.every((t) => TREND_ENTRY_TYPES.includes(entryTypeOf(t))) && TREND_ENTRY_TYPES.reduce((n, type) => n + trades.filter((t) => entryTypeOf(t) === type).length, 0) === trades.length);
+  check("every trade counts under exactly one of the four entries", TREND_ENTRY_TYPES.length === 4 && trades.every((t) => TREND_ENTRY_TYPES.includes(entryTypeOf(t))) && TREND_ENTRY_TYPES.reduce((n, type) => n + trades.filter((t) => entryTypeOf(t) === type).length, 0) === trades.length);
 }
 
 // ───────────── settlement: the live system follows a trade exactly as the backtest does ─────────────
@@ -622,6 +673,15 @@ console.log("\nsend rules");
   check("one trade at a time: nothing is sent while a trade is open, the same way or the other", sendBlock([row("long", true)], trade) != null && sendBlock([row("short", true)], trade) != null);
   check("a signal candle is sent once, even after its trade has closed", sendBlock([row("long", false, "trend:1")], trade) != null);
   check("a closed trade of another candle is not in the way", sendBlock([row("long", false, "trend:0", 80)], trade) == null);
+  // the day stop: a full loss closes the trading day (17:00 New York to 17:00 New York)
+  const D = Date.UTC(2026, 0, 14, 15) / 1000; // a Wednesday in winter, 10:00 New York
+  const closed = (r: number, at: number): EarlierSignal => ({ ...row("long", false, `trend:${at - 3600}`, 5000, 4990), outcome: r > 0 ? "win" : "loss", outcome_r: r, outcome_at: new Date((at - 900) * 1000).toISOString() });
+  const next = (at: number) => ({ key: `trend:${at - 900}`, direction: "short" as const, time: at, entry: 100 });
+  check("the trading day runs from 17:00 to 17:00 New York, summer and winter", tradingDay(Date.UTC(2026, 0, 14, 21, 59) / 1000) + 1 === tradingDay(Date.UTC(2026, 0, 14, 22) / 1000) && tradingDay(Date.UTC(2026, 6, 15, 20, 59) / 1000) + 1 === tradingDay(Date.UTC(2026, 6, 15, 21) / 1000) && tradingDay(Date.UTC(2026, 6, 15, 21) / 1000) === tradingDay(Date.UTC(2026, 6, 16, 20, 59) / 1000));
+  check(`after a full loss (${TREND_DAY_STOP_R}R or more) nothing is sent for the rest of that trading day`, TREND_DAY_STOP_R === 0.9 && !!sendBlock([closed(-1, D)], next(D + 900))?.includes("full loss") && !!sendBlock([closed(-0.9, D)], next(D + 6 * 3600))?.includes("full loss"));
+  check("…and trading starts again when the next trading day does", sendBlock([closed(-1, D)], next(D + 7 * 3600)) == null && sendBlock([closed(-1, D)], next(D + 7 * 3600 - 900)) != null);
+  check("a small loss, a trade closed at the moved stop or a win does not stop the day", sendBlock([closed(-0.5, D)], next(D + 900)) == null && sendBlock([closed(0.2, D)], next(D + 900)) == null && sendBlock([closed(3, D)], next(D + 900)) == null);
+  check("the day stop reads the trade that closed last", lastResultOf([closed(-1, D - 7200), closed(0.2, D)])?.r === 0.2 && sendBlock([closed(-1, D - 7200), closed(0.2, D)], next(D + 900)) == null && dayStopBlock(null, D) == null);
   // re-entry: the last trade, a sell at 100 (1R = 10) whose signal candle closed at T
   const T = 1_800_000_000;
   const last = row("short", false, `trend:${T - 900}`);

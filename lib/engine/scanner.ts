@@ -15,9 +15,11 @@ import {
   TREND_MIN_H1_CANDLES,
   TREND_MIN_RISK_ATR,
   TREND_TARGET_R,
+  dayStopBlock,
   lateEntry,
   reentryBlock,
   type LastEntry,
+  type LastResult,
   type TrendSetup,
 } from "@/lib/analysis/trend";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
@@ -39,8 +41,8 @@ export interface ScanSummary {
 }
 
 /** Share of the account one trade risks. One trade is open at a time; the
- *  five-year backtest's worst drawdown was 10 times the risk of one trade and
- *  its longest losing run 5 trades, so the default is half a percent.
+ *  five-year backtest's worst drawdown was 7 times the risk of one trade and
+ *  its longest losing run 3 trades, so the default is half a percent.
  *  Override with RISK_PCT (e.g. 0.01 for one percent); the older name
  *  FIB_RISK_PCT is still read. */
 export const RISK_PCT = (() => {
@@ -108,6 +110,8 @@ export interface EarlierSignal {
   outcome: string | null;
   /** open time of the candle that closed the trade */
   outcome_at?: string | null;
+  /** the result in R, once the trade is closed */
+  outcome_r?: number | null;
   entry: number;
   stop_loss: number;
 }
@@ -130,6 +134,18 @@ export function lastEntryOf(earlier: EarlierSignal[]): LastEntry | null {
   return last;
 }
 
+/** How the trade that closed last ended, as the day-stop rule needs it — null when none has closed yet. */
+export function lastResultOf(earlier: EarlierSignal[]): LastResult | null {
+  let last: LastResult | null = null;
+  for (const r of earlier) {
+    if (keyTime(r.variant) == null || r.outcome == null || r.outcome_at == null || r.outcome_r == null) continue;
+    const exitTime = Date.parse(r.outcome_at) / 1000 + EXECUTION_BAR_SECONDS;
+    if (!Number.isFinite(exitTime) || (last && exitTime <= last.exitTime)) continue;
+    last = { exitTime, r: Number(r.outcome_r) };
+  }
+  return last;
+}
+
 /** An earlier signal with the strategy name it is stored under. */
 export interface StoredSignal extends EarlierSignal {
   strategy: string;
@@ -142,7 +158,9 @@ const ALREADY_SENT = "this signal has already been sent";
  *  - this signal candle has already been traded;
  *  - a trade is already open — the system holds one at a time;
  *  - it would duplicate the last trade: the same side, within an hour of its
- *    entry and within 1R of its price (reentryBlock).
+ *    entry and within 1R of its price (reentryBlock);
+ *  - the last trade was a full loss and the trading day it closed in has not
+ *    ended yet (dayStopBlock).
  *
  * `late` = the signal belongs to an earlier candle whose scan did not run. The
  * rules are then applied as they stood when THAT candle closed — a trade that
@@ -164,7 +182,7 @@ export function sendBlock(earlier: EarlierSignal[], trade: { key: string; direct
   }
   const open = earlier.filter((r) => r.status === "active" && r.outcome == null);
   if (open.length >= TREND_MAX_OPEN) return `a ${open[0].direction === "long" ? "buy" : "sell"} is already open — one trade at a time`;
-  return reentryBlock(lastEntryOf(earlier), trade);
+  return reentryBlock(lastEntryOf(earlier), trade) ?? dayStopBlock(lastResultOf(earlier), trade.time);
 }
 
 /** A signal a scan has found, before the send rules are applied. */
@@ -250,7 +268,7 @@ export async function runScan(opts: {
       if (known) return known;
       // without the database there is no way to know what is already open or already sent
       if (!supabase) return "the database is unavailable";
-      const cols = "strategy, variant, direction, status, outcome, outcome_at, entry, stop_loss";
+      const cols = "strategy, variant, direction, status, outcome, outcome_at, outcome_r, entry, stop_loss";
       const rows = () => supabase.from("signals").select(cols).eq("pair", pair).in("strategy", [...STRATEGY_IDS]);
       const [recent, open] = await Promise.all([rows().order("created_at", { ascending: false }).limit(300), rows().eq("status", "active").is("outcome", null).limit(50)]);
       const failed = recent.error ?? open.error;
@@ -296,7 +314,9 @@ export async function runScan(opts: {
       const c = series.candles[i];
       const hoursOf = (bars: number) => (bars * EXECUTION_BAR_SECONDS) / 3600;
       const why =
-        setup.trigger === "break of structure"
+        setup.trigger === "pullback to the broken level" && setup.level != null
+          ? `price came back to the swing ${up ? "high" : "low"} it broke (${setup.level.toFixed(2)}) and closed back ${up ? "above" : "below"} it — the pullback, not the ${up ? "high" : "low"}`
+          : setup.trigger === "break of structure"
           ? `the pullback ended — a 15-minute close ${up ? "above the last swing high" : "below the last swing low"}`
           : [
               setup.breakoutBars != null ? `a 15-minute close ${up ? "above" : "below"} the ${up ? "high" : "low"} of the last ${hoursOf(setup.breakoutBars)} hours` : null,
@@ -305,7 +325,7 @@ export async function runScan(opts: {
               .filter(Boolean)
               .join(", and ");
       // where the stop comes from, in words
-      const swingName = `the ${up ? "low" : "high"} of the last two candles (${setup.swing.toFixed(2)})`;
+      const swingName = setup.trigger === "pullback to the broken level" ? `the ${up ? "low" : "high"} of the pullback (${setup.swing.toFixed(2)})` : `the ${up ? "low" : "high"} of the last two candles (${setup.swing.toFixed(2)})`;
       const stopWhy =
         setup.stopBasis === "zone" && setup.zone
           ? `just beyond the ${up ? "support" : "resistance"} zone at ${setup.zone.low.toFixed(2)}–${setup.zone.high.toFixed(2)} (${setup.zone.touches} touches on the 1-hour chart)`
