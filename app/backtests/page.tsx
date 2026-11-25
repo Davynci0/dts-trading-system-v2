@@ -145,8 +145,8 @@ export default function BacktestsPage() {
         <div>
           <h1 className="text-lg font-semibold text-neutral-100">Backtest Results</h1>
           <p className="mt-1 max-w-3xl text-xs text-neutral-500">
-            The three strategies — the trend scalp (15-minute chart), Set and Forget (4-hour chart) and the trendline
-            strategy (1-hour chart) — replayed side by side on five years of gold with the scanner&apos;s own detection:
+            The three strategies — the trend scalp (15-minute chart), supply and demand (30-minute zones) and the
+            trendline strategy (1-hour chart) — replayed side by side on five years of gold with the scanner&apos;s own detection:
             each holds one trade at a time and none is taken against another&apos;s open trade. A signal on a closed
             candle fills at the next 15-minute open, the full spread + slippage is charged once, and a candle that
             touches both the stop and the target counts as a loss.

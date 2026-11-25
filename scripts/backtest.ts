@@ -6,11 +6,10 @@ import { WebSocket } from "ws";
  * own detection, each on its own and then side by side under the rule between
  * them (lib/strategies.ts) —
  *  - the trend scalp on the 15-minute chart (lib/analysis/trend.ts);
- *  - Set and Forget on the 4-hour chart (lib/analysis/setforget.ts);
+ *  - supply and demand: 30-minute zones entered on the 15-minute chart (lib/analysis/zones.ts);
  *  - the trendline strategy on the 1-hour chart (lib/analysis/trendline.ts).
  * A signal on a closed candle is filled at the next 15-minute open; the full
- * spread + slippage is charged once (and financing for every night a Set and
- * Forget trade is held).
+ * spread + slippage is charged once.
  *
  * The window is always the same: FIVE YEARS, with the LAST THREE printed next
  * to it, and a second pass that doubles the costs (see SOUL.md).
@@ -22,13 +21,13 @@ import { WebSocket } from "ws";
 import { computeMetrics, type ScopedMetrics } from "@/lib/backtest/metrics";
 import { runThree, type ThreeTrade } from "@/lib/backtest/three";
 import { TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS, TREND_TARGET_R } from "@/lib/analysis/trend";
-import { SF_LIVE, SF_LIVE_ENTRY } from "@/lib/analysis/setforget";
+import { ZN_ADX_MAX, ZN_MAX_DEPTH, ZN_MAX_HOLD_BARS, ZN_TARGET_R, ZN_WAIT_BARS } from "@/lib/analysis/zones";
 import { TL_MAX_HOLD_BARS, TL_OPTIONS, TL_TARGET_R, TL_TIMEFRAME } from "@/lib/analysis/trendline";
 import { STRATEGIES, STRATEGY_LIST } from "@/lib/strategies";
 import { EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { BACKTEST_YEARS, loadPairData, loadSwingData, RECENT_YEARS, windowEnd } from "./research-data";
+import { BACKTEST_YEARS, loadPairData, RECENT_YEARS, windowEnd } from "./research-data";
 
 const SAVE = process.argv.slice(2).some((a) => a.startsWith("--save"));
 const PAIR = "XAU_USD";
@@ -91,8 +90,8 @@ async function save(trades: T[]): Promise<void> {
       range_start: new Date(START * 1000).toISOString(),
       range_end: new Date(END * 1000).toISOString(),
       pairs: [PAIR],
-      timeframes: [EXECUTION_TIMEFRAME, TL_TIMEFRAME, SF_LIVE_ENTRY],
-      notes: `${BACKTEST_YEARS} years · three strategies side by side (trend scalp, Set and Forget, trendline), one trade each, never in opposite directions · XAU/USD`,
+      timeframes: [EXECUTION_TIMEFRAME, "M30", TL_TIMEFRAME],
+      notes: `${BACKTEST_YEARS} years · three strategies side by side (trend scalp, supply and demand, trendline), one trade each, never in opposite directions · XAU/USD`,
       config: {
         engine: ENGINE_VERSION,
         years: BACKTEST_YEARS,
@@ -100,10 +99,10 @@ async function save(trades: T[]): Promise<void> {
         system: "three strategies",
         rules: {
           trend: { targetR: TREND_TARGET_R, lock: [TREND_LOCK_AT_R, TREND_LOCK_TO_R], maxHoldBars: TREND_MAX_HOLD_BARS },
-          setforget: { entry: SF_LIVE_ENTRY, sync: SF_LIVE.sync, targetR: SF_LIVE.targetR, zoneTouches: SF_LIVE.zoneTouches },
+          zones: { zoneChart: "M30", waitBars: ZN_WAIT_BARS, maxDepth: ZN_MAX_DEPTH, adxMax: ZN_ADX_MAX, targetR: ZN_TARGET_R, maxHoldBars: ZN_MAX_HOLD_BARS },
           trendline: { chart: TL_TIMEFRAME, breakTouches: TL_OPTIONS.breakTouches, bounceTouches: TL_OPTIONS.bounceTouches, minSpanBars: TL_OPTIONS.minSpanBars, targetR: TL_TARGET_R, maxHoldBars: TL_MAX_HOLD_BARS },
         },
-        costs: "full spread + slippage per trade; financing per night for Set and Forget",
+        costs: "full spread + slippage per trade",
       },
     })
     .select("id")
@@ -117,9 +116,7 @@ async function save(trades: T[]): Promise<void> {
 }
 
 async function main() {
-  const scalp = await loadPairData(PAIR);
-  const swing = await loadSwingData(PAIR);
-  const data = { m15: scalp.m15, h1: scalp.h1, h4: swing.h4, daily: scalp.daily, dailyLong: swing.daily, weekly: swing.weekly };
+  const data = await loadPairData(PAIR);
   const base = runThree(PAIR, data, START, 1);
   const stressed = runThree(PAIR, data, START, 2);
   const recent = between(RECENT, END);

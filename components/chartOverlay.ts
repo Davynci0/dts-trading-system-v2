@@ -39,9 +39,9 @@ export interface OverlayData {
   trendlines?: { kind: "down" | "up"; touches: number; now: number; points: { time: number; price: number }[]; touchPoints?: { time: number; price: number }[]; broken?: "long" | "short" | null }[];
   /** the trendline strategy's setups inside the chart: bounces, breaks and retests, and whether each was a trade */
   lineMarks?: { time: number; price: number; type: "bounce" | "break" | "retest"; direction: "long" | "short"; traded: boolean }[];
-  /** Set and Forget's areas of interest (weekly and daily levels price has turned at), and the pullback's extreme its stop would go beyond */
-  areas?: { low: number; high: number; touches: number; tf: "weekly" | "daily"; active?: boolean }[];
-  pullback?: { price: number; side: "long" | "short" } | null;
+  /** the supply and demand strategy's fresh 30-minute zones — `tradable` = on the daily trend's side — and the candles that rejected one */
+  tradeZones?: { kind: "demand" | "supply"; low: number; high: number; touched: boolean; tradable: boolean; /** open time of the chart candle the band starts at */ from?: number }[];
+  zoneMarks?: { time: number; price: number; kind: "demand" | "supply"; direction: "long" | "short"; traded: boolean }[];
   /** the open trade's plan (entry/SL/TP), drawn as a position tool — the system holds one at a time */
   positions?: {
     /** the trade's name as shown on the chart */
@@ -76,7 +76,7 @@ export const CHART_COLORS = {
   trend: "56,189,248", // sky blue — the breakout levels
   zone: "245,158,11", // amber — support and resistance
   tori: "192,132,252", // violet — the trendline strategy's lines
-  area: "129,140,248", // indigo — Set and Forget's areas of interest
+  area: "129,140,248", // indigo — the supply and demand strategy's zones
   demand: "45,212,191", // teal — fresh demand
   supply: "251,113,133", // rose — fresh supply
   muted: "100,116,139",
@@ -315,24 +315,40 @@ class OverlayPaneView implements IPrimitivePaneView {
             if (m.traded || m.type === "break") tag(m.traded ? `${name} · ${up ? "buy" : "sell"}` : name, x + 6, tip + (up ? 12 : -6), rgb, "left", 3, { small: true, dim: !m.traded });
           }
 
-          // ── Set and Forget: the areas of interest, and the level its stop would go beyond ──
-          for (const z of data.areas ?? []) {
+          // ── supply and demand: the fresh 30-minute zones, from where each formed to the right edge ──
+          for (const z of data.tradeZones ?? []) {
             const [yHi, yLo] = [Y(z.high), Y(z.low)];
             if (yHi == null || yLo == null) continue;
-            const top = Math.min(yHi, yLo) - 1;
-            const h = Math.max(Math.abs(yLo - yHi), 2) + 2;
-            ctx.fillStyle = rgba(C.area, z.active ? 0.16 : 0.07);
-            ctx.fillRect(0, top, W, h);
-            line(0, W, top, C.area, z.active ? 0.7 : 0.35, 1, [8, 4]);
-            line(0, W, top + h, C.area, z.active ? 0.7 : 0.35, 1, [8, 4]);
-            tag(`AREA OF INTEREST (${z.tf}) ${fmt(z.low)}–${fmt(z.high)} · ${z.touches} touches${z.active ? " · price is here" : ""}`, 6, top - 3, C.area, "left", 2, { small: true, dim: !z.active });
+            const x0 = Math.max(z.from != null ? (X(z.from) ?? 0) : 0, 0);
+            const top = Math.min(yHi, yLo);
+            const h = Math.max(Math.abs(yLo - yHi), 2);
+            const rgb = z.tradable ? C.area : C.muted;
+            ctx.fillStyle = rgba(rgb, z.tradable ? (z.touched ? 0.3 : 0.18) : 0.07);
+            ctx.fillRect(x0, top, W - x0, h);
+            ctx.strokeStyle = rgba(rgb, z.tradable ? 0.8 : 0.35);
+            ctx.lineWidth = 1;
+            ctx.setLineDash(z.tradable ? [] : [3, 3]);
+            ctx.strokeRect(x0, top, W - x0, h);
+            ctx.setLineDash([]);
+            if (z.tradable) tag(`${z.kind === "demand" ? "DEMAND" : "SUPPLY"} 30m ${fmt(z.low)}–${fmt(z.high)} · ${z.touched ? "price is at it" : `fresh — ${z.kind === "demand" ? "buy" : "sell"} on a rejection`}`, x0 + 4, top + (z.kind === "demand" ? h + 10 : -3), rgb, "left", 2, { small: true });
           }
-          if (data.pullback) {
-            const y = Y(data.pullback.price);
-            if (y != null) {
-              line(0, W, y, C.area, 0.8, 1, [3, 3]);
-              tag(`Set and Forget: pullback ${data.pullback.side === "long" ? "low" : "high"} ${fmt(data.pullback.price)} — its stop goes beyond`, 6, y + (data.pullback.side === "long" ? 12 : -4), C.area, "left", 3, { small: true });
-            }
+          // a candle that rejected a zone: an arrow at the zone's edge
+          for (const m of data.zoneMarks ?? []) {
+            const [x, y] = [X(m.time), Y(m.price)];
+            if (x == null || y == null) continue;
+            const up = m.direction === "long";
+            const rgb = m.traded ? (up ? C.win : C.loss) : C.muted;
+            const tip = y + (up ? 6 : -6);
+            ctx.save();
+            ctx.fillStyle = rgba(rgb, m.traded ? 0.95 : 0.6);
+            ctx.beginPath();
+            ctx.moveTo(x, tip);
+            ctx.lineTo(x - 4, tip + (up ? 7 : -7));
+            ctx.lineTo(x + 4, tip + (up ? 7 : -7));
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+            if (m.traded) tag(`${m.kind} · ${up ? "buy" : "sell"}`, x + 6, tip + (up ? 12 : -6), rgb, "left", 3, { small: true });
           }
 
           // ── the entry levels: what a 15-minute close has to break ─────────

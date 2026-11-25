@@ -51,7 +51,8 @@ import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES } from "../lib/backtes
 import { followTrade, LIVE_LOCK, settleSignal, TL_LOCK } from "../lib/engine/outcomes";
 import { lastEntryOf, scanLogKey, sendBlock, strategyBlock, type EarlierSignal, type StoredSignal } from "../lib/engine/scanner";
 import { readTrendlines, shownLines, tlDailyTrend, tlSetup, TL_ADX_MAX, TL_HISTORY, TL_LOCK_AT_R, TL_LOCK_TO_R, TL_MAX_HOLD_BARS, TL_MAX_RISK_ATR, TL_MAX_SLOPE_ATR, TL_MIN_CLOSE_ATR, TL_MIN_RISK_ATR, TL_OPTIONS, TL_TARGET_R } from "../lib/analysis/trendline";
-import { buildSfSeries, sfDailyAdx, sfSetupAt, SF_DEFAULTS, SF_LIVE, SF_MAX_DAILY_ADX, SF_QUIET_HOURS_UTC } from "../lib/analysis/setforget";
+import { findZones, readZones, znDailyTrend, znSetup, ZN_ADX_MAX, ZN_HISTORY, ZN_MAX_DEPTH, ZN_MAX_HOLD_BARS, ZN_TARGET_R, ZN_WAIT_BARS } from "../lib/analysis/zones";
+import { runZnBacktest, znCandidates } from "../lib/backtest/zones";
 import { runTlBacktest, tlCandidates } from "../lib/backtest/trendline";
 import { combineStrategies, conflictBlock, contradict, type StrategyTrade } from "../lib/strategies";
 import { isLiveSignal, STRATEGY_IDS, strategyOf, TREND_STRATEGY, type Candle } from "../lib/types";
@@ -583,37 +584,79 @@ console.log("\ntrendline strategy");
   );
 }
 
-// ───────────── Set and Forget's two filters ─────────────
-console.log("\nSet and Forget");
+// ───────────── supply and demand ─────────────
+console.log("\nsupply and demand");
 {
-  const h4 = aggregate(m15, 4 * H1, M15);
-  const weekly = aggregate(m15, 7 * DAY, M15, WEEK_OPEN % (7 * DAY));
-  const series = buildSfSeries({ entry: h4, h4, daily, weekly, entrySeconds: 4 * H1 }, SF_LIVE);
-  let plain = 0, live = 0, ok = true;
-  for (let i = 2; i < series.n; i++) {
-    const a = sfSetupAt(series, i, "XAU_USD", SF_DEFAULTS);
-    const b = sfSetupAt(series, i, "XAU_USD", SF_LIVE);
-    if (a) plain++;
-    if (!b) continue;
-    live++;
-    const hour = new Date((h4[i].time + 4 * H1) * 1000).getUTCHours();
-    if (!a || !(sfDailyAdx(series, i) < SF_MAX_DAILY_ADX) || (hour >= SF_QUIET_HOURS_UTC[0] && hour < SF_QUIET_HOURS_UTC[1])) ok = false;
+  const stream = readZones(m15, 0);
+  const ev = stream.events;
+  // the 30-minute candles the zones are built from
+  const m30: Candle[] = [];
+  for (const c of m15) {
+    const t = Math.floor(c.time / 1800) * 1800;
+    const last = m30[m30.length - 1];
+    if (last && last.time === t) { last.high = Math.max(last.high, c.high); last.low = Math.min(last.low, c.low); last.close = c.close; }
+    else m30.push({ ...c, time: t });
   }
-  check(`Set and Forget takes no trade with the daily ADX at ${SF_MAX_DAILY_ADX} or more, or on a candle closing ${SF_QUIET_HOURS_UTC[0]}:00–${SF_QUIET_HOURS_UTC[1]}:00 UTC, and adds none of its own`, ok && live <= plain, `${live} of ${plain} setups kept`);
+  const all = findZones(m30);
+  check("a zone is a base the price left in one strong candle: demand under a rally, supply over a drop, the near edge inside the far one", all.length > 20 && all.every((z) => (z.kind === "demand" ? z.proximal > z.distal : z.proximal < z.distal) && z.base >= 1 && z.base <= 3 && z.expires > z.known), `${all.length} zones`);
+  check(
+    "a rejection is a 15-minute candle that trades into a zone known before it opened and closes back out of it, with the zone",
+    ev.length > 20 &&
+      ev.every((e) => {
+        const c = m15[e.index];
+        const z = e.zone;
+        const up = z.kind === "demand";
+        return z.known <= c.time && z.expires > e.time && (up ? c.low <= z.proximal && c.close >= z.proximal && c.close > c.open && e.direction === "long" : c.high >= z.proximal && c.close <= z.proximal && c.close < c.open && e.direction === "short") && e.bars >= 0 && e.bars <= ZN_WAIT_BARS && (up ? e.stop < z.distal : e.stop > z.distal);
+      }),
+    `${ev.length} rejections`
+  );
+  check("a zone gives one entry: no zone is rejected twice", new Set(ev.map((e) => `${e.zone.kind}:${e.zone.known}:${e.zone.proximal}`)).size === ev.length);
+  check(
+    "no zone is traded after a candle has closed beyond its far edge",
+    ev.every((e) => {
+      for (let q = e.index - 1; q >= 0 && m15[q].time >= e.zone.known; q--) if (e.zone.kind === "demand" ? m15[q].close < e.zone.distal : m15[q].close > e.zone.distal) return false;
+      return true;
+    })
+  );
+  const plans = ev.map((e) => ({ e, trend: znDailyTrend(daily, e.time) })).map((x) => ({ ...x, calm: znSetup(x.e, x.trend, 20).setup, hot: znSetup(x.e, x.trend, ZN_ADX_MAX).setup, against: znSetup(x.e, x.e.direction === "long" ? -1 : 1, 20).setup, flat: znSetup(x.e, 0, 20).setup }));
+  const made = plans.flatMap((x) => (x.calm ? [{ e: x.e, t: x.calm }] : []));
+  check("supply and demand trades only with the daily trend — demand bought in an uptrend, supply sold in a downtrend", made.length > 5 && plans.every((x) => x.against == null && x.flat == null && (x.calm == null || (x.calm.direction === "long" ? 1 : -1) === x.trend)), `${made.length} trades`);
+  check(`no zone trade when the candle went ${ZN_MAX_DEPTH * 100}% or more into the zone, or with the 1-hour ADX at ${ZN_ADX_MAX} or more`, made.every(({ e }) => e.depth < ZN_MAX_DEPTH) && plans.every((x) => x.hot == null) && plans.some((x) => x.trend !== 0 && x.e.depth >= ZN_MAX_DEPTH && x.calm == null));
+  check(`its stop is beyond the far edge of the zone and its target ${ZN_TARGET_R} times as far`, made.every(({ e, t }) => { const dir = t.direction === "long" ? 1 : -1; return t.stopLoss === e.stop && dir * (t.entry - t.stopLoss) > 0 && near(dir * (t.takeProfit - t.entry), ZN_TARGET_R * t.risk, 1e-6); }));
+  // what a scan sees — the last ZN_HISTORY candles — is what the replay saw at that candle
+  let same = 0;
+  let sampled = 0;
+  const at = new Map<number, string>();
+  for (const e of ev) at.set(e.index, (at.get(e.index) ?? "") + e.key + "|");
+  for (let i = ZN_HISTORY + 50; i < m15.length; i += 23) {
+    for (const j of [i, ...(at.has(i + 1) ? [] : [])]) {
+      const live = readZones(m15.slice(j + 1 - ZN_HISTORY, j + 1)).events.map((e) => e.key + "|").join("");
+      sampled++;
+      if (live === (at.get(j) ?? "")) same++;
+    }
+  }
+  for (const i of [...at.keys()].filter((k) => k > ZN_HISTORY).slice(-40)) {
+    sampled++;
+    if (readZones(m15.slice(i + 1 - ZN_HISTORY, i + 1)).events.map((e) => e.key + "|").join("") === at.get(i)) same++;
+  }
+  check("a scan reading the last candles finds the same rejections as the replay of the whole history", sampled > 100 && same === sampled, `${same} of ${sampled}`);
+  const signals = znCandidates({ pair: "XAU_USD", m15, h1, daily });
+  const taken = runZnBacktest({ pair: "XAU_USD", m15, h1, daily });
+  check("the zone backtest holds one trade at a time, and a trade ends at its stop, its target or the five-day limit", taken.length > 0 && taken.length <= signals.length && taken.every((t, k) => (k === 0 || t.entryTime >= taken[k - 1].exitTime) && t.rAchieved <= ZN_TARGET_R && t.bars <= ZN_MAX_HOLD_BARS && (t.outcome !== "stop" || t.rAchieved <= -1)), `${taken.length} of ${signals.length} signals`);
 }
 
 // ───────────── the three strategies together ─────────────
 console.log("\nthree strategies");
 {
-  check("each strategy's signals are told apart, and a removed system's row is none of them", strategyOf({ strategy: "trend", variant: "trend:1" }) === "trend" && strategyOf({ strategy: "setforget", variant: "sf:XAU_USD:1" }) === "setforget" && strategyOf({ strategy: "trendline", variant: "tl:break:down:1:2" }) === "trendline" && strategyOf({ strategy: "trendline", variant: "tl3" }) === null && strategyOf({ strategy: "trend", variant: "sf:1" }) === null && strategyOf({ strategy: "fibonacci", variant: "tl:1" }) === null);
+  check("each strategy's signals are told apart, and a removed system's row is none of them", strategyOf({ strategy: "trend", variant: "trend:1" }) === "trend" && strategyOf({ strategy: "zones", variant: "sd:demand:1:2" }) === "zones" && strategyOf({ strategy: "trendline", variant: "tl:break:down:1:2" }) === "trendline" && strategyOf({ strategy: "trendline", variant: "tl3" }) === null && strategyOf({ strategy: "trend", variant: "sd:1" }) === null && strategyOf({ strategy: "zones", variant: "ob3" }) === null && strategyOf({ strategy: "fibonacci", variant: "tl:1" }) === null);
   const schema = readFileSync(new URL("../supabase/schema.sql", import.meta.url), "utf8");
   const allowed = (/strategy text not null check \(strategy in \(([^)]*)\)\)/.exec(schema)?.[1] ?? "").split(",").map((x) => x.trim().replace(/'/g, ""));
   check("the database accepts the name of each strategy", STRATEGY_IDS.every((id) => allowed.includes(id)), allowed.join(","));
 
   const open = (strategy: string, variant: string, direction: "long" | "short", isOpen = true): StoredSignal => ({ strategy, variant, direction, status: "active", outcome: isOpen ? null : "loss", entry: 100, stop_loss: direction === "long" ? 90 : 110 });
   const tl = (direction: "long" | "short", key = "tl:bounce:up:1:2") => ({ key, direction, time: 2000, entry: 100 });
-  check("a strategy sends its signal while another strategy holds a trade the same way", strategyBlock([open("trend", "trend:1", "long")], "trendline", tl("long")) == null && strategyBlock([open("setforget", "sf:XAU_USD:1", "short")], "trend", { key: "trend:900", direction: "short", time: 1800, entry: 100 }) == null);
-  check("no signal against another strategy's open trade", !!strategyBlock([open("trend", "trend:1", "short")], "trendline", tl("long"))?.includes("contradicting") && !!strategyBlock([open("setforget", "sf:XAU_USD:1", "long")], "trend", { key: "trend:900", direction: "short", time: 1800, entry: 100 })?.includes("contradicting"));
+  check("a strategy sends its signal while another strategy holds a trade the same way", strategyBlock([open("trend", "trend:1", "long")], "trendline", tl("long")) == null && strategyBlock([open("zones", "sd:supply:1:2", "short")], "trend", { key: "trend:900", direction: "short", time: 1800, entry: 100 }) == null);
+  check("no signal against another strategy's open trade", !!strategyBlock([open("trend", "trend:1", "short")], "trendline", tl("long"))?.includes("contradicting") && !!strategyBlock([open("zones", "sd:demand:1:2", "long")], "trend", { key: "trend:900", direction: "short", time: 1800, entry: 100 })?.includes("contradicting"));
   check("a closed trade of another strategy, or a removed system's open row, is not in the way", strategyBlock([open("trend", "trend:1", "short", false), open("trend", "don30", "short")], "trendline", tl("long")) == null);
   check("one trade a strategy: no second trendline trade while one is open, and a setup is traded once", !!strategyBlock([open("trendline", "tl:break:down:5:6", "long")], "trendline", tl("long"))?.includes("one trade a strategy") && strategyBlock([open("trendline", "tl:bounce:up:1:2", "long", false)], "trendline", tl("long")) === "this signal has already been sent");
   check("the trend scalp keeps its own send rules next to the others", strategyBlock([open("trend", "trend:1", "long"), open("trendline", "tl:x", "long")], "trend", { key: "trend:900", direction: "long", time: 1800, entry: 100 }) === sendBlock([open("trend", "trend:1", "long")], { key: "trend:900", direction: "long", time: 1800, entry: 100 }));
@@ -625,7 +668,7 @@ console.log("\nthree strategies");
   const againstOpen = t("trendline", "short", 2700, 5400);
   const withOpen = t("trendline", "long", 3600, 7200);
   const second = t("trendline", "long", 4500, 6300);
-  const sameMoment = [t("setforget", "long", 18000, 27000), t("trend", "short", 18100, 19800)];
+  const sameMoment = [t("zones", "long", 18000, 27000), t("trend", "short", 18100, 19800)];
   const after = t("trend", "long", 9000, 9900);
   const both = combineStrategies([a, againstOpen, withOpen, second, ...sameMoment, after]);
   check("replayed together: each strategy holds one trade, none is taken against an open one, and opposite signals of one moment cancel", both.taken.length === 3 && both.taken.includes(a) && both.taken.includes(withOpen) && both.taken.includes(after) && both.blocked.includes(againstOpen) && sameMoment.every((x) => both.blocked.includes(x)) && !both.taken.includes(second));
@@ -760,7 +803,8 @@ console.log("\nsettlement of the other two strategies");
   check("a trendline trade that reaches neither level is closed at market after five trading days, its stop never moved", tlEnd?.outcome === "expired" && tlEnd.hitTime === (TL_MAX_HOLD_BARS - 1) * 900 && near(tlEnd.r, 0.1) && followTrade(buy, [{ time: 0, open: 100, high: 110, low: 99, close: 109 }], { maxHoldBars: TL_MAX_HOLD_BARS, lock: null }).stop === 90);
   const tlRun = followTrade(buy, [{ time: 0, open: 100, high: 110, low: 99, close: 109 }, { time: 900, open: 109, high: 109, low: 102, close: 103 }], { maxHoldBars: TL_MAX_HOLD_BARS, lock: TL_LOCK });
   check(`a trendline trade that has gone +${TL_LOCK_AT_R}R and comes back closes at +${TL_LOCK_TO_R}R, in profit`, tlRun.settlement?.outcome === "win" && near(tlRun.settlement.r, TL_LOCK_TO_R) && near(tlRun.stop, 100 + TL_LOCK_TO_R * 10));
-  check("a Set and Forget trade is never closed by time: only its stop or its target ends it", settleSignal(buy, quiet, Infinity) === null && settleSignal(buy, [...quiet, { time: quiet.length * 900, open: 100, high: 131, low: 99, close: 130 }], Infinity)?.outcome === "win" && settleSignal(buy, [...quiet, { time: quiet.length * 900, open: 100, high: 101, low: 89, close: 90 }], Infinity)?.outcome === "loss");
+  const znEnd = settleSignal(buy, quiet, ZN_MAX_HOLD_BARS);
+  check("a supply and demand trade that reaches neither level is closed at market after five trading days, its stop never moved", znEnd?.outcome === "expired" && znEnd.hitTime === (ZN_MAX_HOLD_BARS - 1) * 900 && settleSignal(buy, [...quiet.slice(0, 50), { time: 50 * 900, open: 100, high: 131, low: 99, close: 130 }], ZN_MAX_HOLD_BARS)?.outcome === "win");
 }
 
 // ───────────── what may be sent ─────────────

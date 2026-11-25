@@ -115,7 +115,7 @@ export async function sendStopMoved(opts: { strategy: StrategyId; pair: string; 
 }
 
 /**
- * A signal of Set and Forget or of the trendline strategy: the same layout as
+ * A signal of supply and demand or of the trendline strategy: the same layout as
  * the trend scalp's — entry, stop loss and take profit one per line — then
  * what the entry was, how the trade is managed and what the strategy did in
  * its five-year test.

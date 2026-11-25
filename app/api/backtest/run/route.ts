@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
 import { computeMetrics } from "@/lib/backtest/metrics";
 import { runThree, type ThreeTrade } from "@/lib/backtest/three";
-import { SF_HISTORY, SF_LIVE_ENTRY } from "@/lib/analysis/setforget";
 import { STRATEGIES, STRATEGY_LIST } from "@/lib/strategies";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAuthorizedMutation } from "@/lib/apiGuard";
@@ -47,16 +46,13 @@ export async function POST(req: NextRequest) {
 
   let trades: ThreeTrade[];
   try {
-    const [m15, h1, daily, h4, dailyLong, weekly] = await Promise.all([
+    const [m15, h1, daily] = await Promise.all([
       fetchM15(pair, from - WARMUP_DAYS * DAY_MS, to),
       fetchCandles({ instrument: pair, granularity: "H1", count: H1_COUNT }),
       fetchCandles({ instrument: pair, granularity: "D", count: 400 }),
-      fetchCandles({ instrument: pair, granularity: SF_LIVE_ENTRY, count: SF_HISTORY.h4 }),
-      fetchCandles({ instrument: pair, granularity: "D", count: SF_HISTORY.daily }),
-      fetchCandles({ instrument: pair, granularity: "W", count: SF_HISTORY.weekly }),
     ]);
     if (m15.length < 1000) throw new Error("not enough candles returned");
-    trades = [...runThree(pair, { m15, h1, h4, daily, dailyLong, weekly }, from / 1000).together].sort((a, b) => a.exitTime - b.exitTime);
+    trades = [...runThree(pair, { m15, h1, daily }, from / 1000).together].sort((a, b) => a.exitTime - b.exitTime);
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }

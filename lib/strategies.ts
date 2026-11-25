@@ -30,13 +30,13 @@ export const STRATEGIES: Record<StrategyId, StrategyInfo> = {
     pace: "about 1.4 trades a day",
     tested: "In the 5-year test about two in three closed in profit — half of them at the moved stop, with a small gain.",
   },
-  setforget: {
-    id: "setforget",
-    name: "Set and Forget",
-    chart: "4-hour",
-    exit: "1:2 target, the stop never moved, held until one of them is hit",
-    pace: "rare — two or three trades a year",
-    tested: "In the 5-year test it made only 13 trades on gold; 9 reached the target.",
+  zones: {
+    id: "zones",
+    name: "Supply and demand",
+    chart: "15-minute, at 30-minute zones",
+    exit: "1:3 target, the stop never moved, closed after 5 trading days",
+    pace: "about one trade a week",
+    tested: "In the 5-year test about two trades in five reached the 3R target (39%); the rest were a full loss. Expect runs of losses — 13 in a row at worst.",
   },
   trendline: {
     id: "trendline",

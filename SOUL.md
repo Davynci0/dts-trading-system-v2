@@ -6,8 +6,9 @@ the strategy, the backtest and the reports, until the owner says otherwise.
 ## What the system must be
 
 1. **Three strategies, each working on its own, one trade each** (changed by the owner on
-   25 November 2026; before that: one trade at a time). The three are the trend scalp, Set and
-   Forget, and the trendline strategy (bounce and break). A strategy sends a new signal only
+   25 November 2026; before that: one trade at a time). The three are the trend scalp, supply
+   and demand zones (which replaced Set and Forget the same day, at the owner's request), and
+   the trendline strategy (bounce and break). A strategy sends a new signal only
    when its own trade is closed — never several open trades on similar entries. **When
    strategies contradict each other, the trade is not sent**: nothing against another
    strategy's open trade, and nothing when two signals come at the same time and point
@@ -28,11 +29,11 @@ the strategy, the backtest and the reports, until the owner says otherwise.
    how traders actually apply it (search the web, read several sources) and implement that —
    do not invent a variant and call it by the method's name.
 
-Rules 2 to 7 were written for the trend scalp and it meets them. The owner asked for Set and
-Forget and the trendline strategy by name on 25 November 2026; both are run as their methods are
-taught (rule 8), which means they hold trades for longer than five hours, and the trendline
-strategy wins fewer than 60% of its trades on its own (54%) — the three together win 65%. Report
-each strategy's results next to the others', never blended in a way that hides this.
+Rules 2 to 7 were written for the trend scalp and it meets them. The owner asked for the
+trendline strategy and for supply and demand zones by name on 25 November 2026; both are run as
+their methods are taught (rule 8), which means they hold trades for longer than five hours and win
+fewer than 60% of them on their own (54% and 39%) — the three together win 61%. Report each
+strategy's results next to the others', never blended in a way that hides this.
 
 ## How results are tested and reported
 

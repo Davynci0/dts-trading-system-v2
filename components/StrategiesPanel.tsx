@@ -21,17 +21,14 @@ export interface TrendlineSummary {
   readAt: number;
 }
 
-/** Set and Forget on the last closed 4-hour candle. */
-export interface SetForgetSummary {
-  weekly: 1 | -1 | 0;
-  daily: 1 | -1 | 0;
-  h4: 1 | -1 | 0;
-  side: "long" | "short" | null;
-  waiting: string;
-  checks: { label: string; met: boolean }[];
-  zones: { low: number; high: number; touches: number; tf: "weekly" | "daily"; active: boolean }[];
-  pullback: number | null;
-  setup: { direction: "long" | "short"; entry: number; stopLoss: number; takeProfit: number } | null;
+/** Supply and demand: the fresh 30-minute zones and what the last 15-minute candle did at them. */
+export interface ZonesSummary {
+  dailyTrend: 1 | -1 | 0;
+  adx: number | null;
+  adxMax: number;
+  zones: { kind: "demand" | "supply"; low: number; high: number; proximal: number; known: number; touched: boolean; tradable: boolean }[];
+  marks: { time: number; price: number; kind: "demand" | "supply"; direction: "long" | "short"; traded: boolean }[];
+  event: { kind: "demand" | "supply"; direction: "long" | "short"; low: number; high: number; time: number; setup: { entry: number; stopLoss: number; takeProfit: number } | null; reason: string | null } | null;
   readAt: number;
 }
 
@@ -47,14 +44,16 @@ export default function StrategiesPanel({
   signals,
   trendStatus,
   trendline,
-  setforget,
+  zones,
+  price,
   digits = 2,
 }: {
   signals: Signal[];
   /** the trend scalp's status in a line */
   trendStatus: string | null;
   trendline: TrendlineSummary | null;
-  setforget: SetForgetSummary | null;
+  zones: ZonesSummary | null;
+  price: number | null;
   digits?: number;
 }) {
   const px = (n: number | null | undefined) => (n == null || !Number.isFinite(n) ? "—" : n.toFixed(digits));
@@ -64,21 +63,44 @@ export default function StrategiesPanel({
 
   const status: Record<StrategyId, React.ReactNode> = {
     trend: <p className="text-neutral-400">{trendStatus ?? "Reading the 15-minute chart…"}</p>,
-    setforget: setforget ? (
-      <>
-        <p className="font-mono text-[11px] text-neutral-400">
-          Weekly <span className={tone(setforget.weekly)}>{arrow(setforget.weekly)}</span> · Daily <span className={tone(setforget.daily)}>{arrow(setforget.daily)}</span> · 4-hour{" "}
-          <span className={tone(setforget.h4)}>{arrow(setforget.h4)}</span>
-        </p>
-        <p className="text-neutral-400">{setforget.waiting}</p>
-        {setforget.zones.length > 0 && (
-          <p className="font-mono text-[10px] text-neutral-500">
-            Areas of interest: {setforget.zones.map((z) => `${px(z.low)}–${px(z.high)} (${z.touches}, ${z.tf})`).join(" · ")}
-          </p>
-        )}
-      </>
+    zones: zones ? (
+      (() => {
+        const side = zones.dailyTrend === 1 ? "demand" : zones.dailyTrend === -1 ? "supply" : null;
+        const mine = zones.zones.filter((z) => z.tradable);
+        // the nearest zone on the trend's side: under price for demand, over it for supply
+        const nearest = [...mine].sort((a, b) => Math.abs((price ?? 0) - a.proximal) - Math.abs((price ?? 0) - b.proximal));
+        return (
+          <>
+            <p className="text-neutral-400">
+              Daily trend <span className={tone(zones.dailyTrend)}>{arrow(zones.dailyTrend)}</span> —{" "}
+              {side ? `only ${side === "demand" ? "buys at fresh demand zones" : "sells at fresh supply zones"}` : "no side"}.
+              {zones.adx != null && zones.adx >= zones.adxMax ? ` No trade now: the 1-hour ADX is ${zones.adx.toFixed(0)} (limit ${zones.adxMax}).` : ""}
+            </p>
+            {zones.event ? (
+              <p className="text-neutral-300">
+                Last 15-minute candle ({at(zones.event.time)}): rejected the {zones.event.kind} zone {px(zones.event.low)}–{px(zones.event.high)} —{" "}
+                {zones.event.setup ? `${zones.event.direction === "long" ? "buy" : "sell"} signal` : `no trade: ${zones.event.reason}`}
+              </p>
+            ) : (
+              <p className="text-neutral-500">{mine.length > 0 ? `Waiting for price to come back to a fresh ${side} zone and be rejected.` : `No fresh ${side ?? ""} zone right now — waiting for one to form.`}</p>
+            )}
+            <ul className="font-mono text-[10px] text-neutral-500">
+              {nearest.slice(0, 4).map((z, k) => (
+                <li key={k} className="flex justify-between">
+                  <span>
+                    {z.kind} zone{z.touched ? " · price is at it" : " · fresh"}
+                  </span>
+                  <span>
+                    {px(z.low)}–{px(z.high)}
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </>
+        );
+      })()
     ) : (
-      <p className="text-neutral-500">Reading the weekly, daily and 4-hour charts…</p>
+      <p className="text-neutral-500">Reading the 30-minute zones…</p>
     ),
     trendline: trendline ? (
       <>

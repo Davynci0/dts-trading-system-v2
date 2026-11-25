@@ -5,11 +5,11 @@ Signal-only gold (XAU/USD) trading system with **three strategies, each working 
 | Strategy | Chart | A trade ends at | How often | Alone, 5 years |
 | --- | --- | --- | --- | --- |
 | **Trend scalp** — the market-structure scalp described under [The rules](#the-rules) | 15-minute | 1:3 target, profit lock at +0.4R, five-hour limit | about 1.4 a day | 785 trades, 69% won, +160.4R |
-| **[Set and Forget](#set-and-forget)** — Alex G's swing method | 4-hour | 1:2 target or the stop, never moved | two or three a year | 13 trades, 69% won, +13.3R |
+| **[Supply and demand](#supply-and-demand)** — rejections of fresh zones, with the daily trend | 15-minute, at 30-minute zones | 1:3 target or the stop, never moved; five-day limit | about one a week | 220 trades, 39% won, +105.4R |
 | **[Trendline](#the-trendline-strategy)** — bounces off trendlines and retests of broken ones, with the daily trend | 1-hour | 1:3 target, profit lock at +1R, five-day limit | about one a week | 230 trades, 54% won, +73.0R |
 
-Together: **1,026 trades in five years, 65% won, +247.5R, worst drawdown 12.9R** — every year
-profitable, every year 62% or more won ([backtest](#backtesting)).
+Together: **1,234 trades in five years, 61% won, +338.5R, worst drawdown 16.4R** — every year
+profitable ([backtest](#backtesting)).
 
 Each strategy holds **one trade of its own**, so up to three can be open at once — but **never in
 opposite directions**: a signal against another strategy's open trade is not sent, and signals
@@ -232,25 +232,36 @@ make money on gold. Looking again at the losing trades of two weeks in November,
 Both improve the first two years as well as the last three. The zones' first return is read only
 from closed 1-hour candles, so the backtest knows no more than the scanner does.
 
-## Set and Forget
+## Supply and demand
 
-Alex G's swing method (fxalexg, Swing Trading Lab), as he teaches it — `lib/analysis/setforget.ts`:
+The method as it is taught: a zone is the small base price left in a hurry, and the first time
+price comes back to it the orders left there are expected to turn it again. `lib/analysis/zones.ts`:
 
-1. The **weekly, daily and 4-hour** structure agree on a direction (a timeframe only turns when a
-   candle body closes beyond its last structure point).
-2. Price pulls back into an **area of interest**: a weekly or daily level it has turned at three
-   times or more in the last three years.
-3. On the **4-hour chart** the structure shifts back with the trend and an **engulfing candle**
-   confirms it — that close is the entry.
-4. The stop goes beyond the high or low the pullback made; the target is 1:2. **Nothing is moved**
-   and there is no time limit: the trade ends at its stop or at its target, which can take weeks.
-5. No trade with the **daily ADX at 30 or more**, or on an entry candle that **closes between
-   00:00 and 07:00 UTC** ([why](#what-the-losing-trades-had-in-common)).
+- **Zone (30-minute chart):** a base of one to three small-bodied candles, left by a candle whose
+  body is at least 60% of its range and 1.2 ATR long. A rally out of the base makes a **demand**
+  zone, a drop a **supply** zone. The *proximal* line is the edge of the base nearest to price, the
+  *distal* line its far wick. A zone is fresh until price has come back to it; it is gone once a
+  candle closes beyond the distal line, and after ten days.
+- **Entry (15-minute chart), with the daily trend only** — demand is bought in an uptrend, supply
+  sold in a downtrend: a candle trades into a fresh zone and **closes back out of it**, rising from
+  demand or falling from supply. That close is the entry.
+- The rejection has to come **within two candles** of price first reaching the zone, the candle
+  may not have gone **more than half-way into the zone**, and the **1-hour ADX has to be under 40**
+  ([why](#what-the-losing-trades-had-in-common)).
+- **Stop** just beyond the distal line. **Target 1:3.** Nothing is moved; closed at market after
+  five trading days.
 
-On gold the method only holds up with the 4-hour chart as the entry chart. Five years: **13
-trades, 9 winners (69%), +13.3R**, never two losses in a row. It is rare by nature on a single
-market — he trades it across many pairs — and thirteen trades prove nothing on their own; it is
-run because the owner asked for it.
+What was tested and thrown out: zones of the 1-hour and 4-hour charts (about break-even with the
+same entry); entering the moment price touches the zone, as a resting limit order would (−5R to
+−79R); trading zones against the daily trend (**−60R**); a profit lock (it cut the profit by a
+third to a half and did not lower the drawdown of the three strategies together).
+
+Five years of gold: **220 trades, 39% won, +105.4R** (+94.7R with the costs doubled; last three
+years 128 trades, +63.7R), every year in profit (+19, +23, +18, +14, +31R). It wins two trades in
+five and loses the rest in full, so its own worst drawdown was **15.4R** and it had **13 losses in
+a row** once. Every neighbouring setting tested (within 1 to 4 candles, depth limit 40% to 75%, ADX
+limit 35 to 45) was profitable too. The zones on the trend's side and every rejection are drawn on
+the chart.
 
 ## The trendline strategy
 
@@ -292,15 +303,21 @@ losers was only acted on when it lost in **both halves** of the five years and h
 | Trendline | A bounce candle that **closed less than 0.25 ATR off the line** — no rejection (27 trades, 5 won) | Not traded. |
 | Trendline | **Breaks entered on the break candle** made nothing in 42 trades | The entry is the retest of the broken line. |
 | Trendline | **59 of 198 losers had been +1R or more in profit first** | The stop moves to +0.25R at +1R. |
-| Set and Forget | The **daily ADX at 30 or more** — on the 4-hour, 2-hour and 1-hour entry charts together, 1 of 11 such trades won | Not traded. |
-| Set and Forget | An entry candle that **closed 00:00–07:00 UTC**, the Asian session (3 of 20 won) | Not traded. |
+| Supply and demand | A rejection that came **three or more candles after price reached the zone** (83 trades, −11.5R) — the zone was being worn down | Not traded. |
+| Supply and demand | A candle that went **more than half-way into the zone** (107 trades, −13.6R) | Not traded. |
+| Supply and demand | The **1-hour ADX at 40 or more** (49 trades, −7.0R) | Not traded. |
 
 | | Before | After |
 | --- | --- | --- |
 | Trend scalp | 870 trades, 68% won, +155.9R, drawdown 9.5R | 785 trades, 69% won, +160.4R, drawdown 9.9R |
-| Set and Forget | 18 trades, 56% won, +11.2R | 13 trades, 69% won, +13.3R |
+| Supply and demand | 402 trades, 31% won, +66.0R, drawdown 22.7R | 220 trades, 39% won, +105.4R, drawdown 15.4R |
 | Trendline | 289 trades, 31% won, +59.4R, drawdown 18.0R, 13 losses in a row | 230 trades, 54% won, +73.0R, drawdown 8.9R, 8 in a row |
-| **Together** | 1,174 trades, 59% won, +226.5R, drawdown 16.6R, 13 in a row | **1,026 trades, 65% won, +247.5R, drawdown 12.9R, 8 in a row** |
+| **Together** | — | **1,234 trades, 61% won, +338.5R, drawdown 16.4R, 13 in a row** |
+
+Set and Forget (Alex G's swing method) ran in the supply and demand strategy's place until 25
+November 2026 and was removed at the owner's request: with it the three made 1,026 trades, 65% won,
++247.5R, drawdown 12.9R — fewer trades and less profit, but a higher win rate and a smaller
+drawdown than now.
 
 Two cautions. These changes were chosen by looking at the same five years they are measured on,
 so the "after" column is the best case, not a forecast — the test that counts is live trading.
@@ -317,10 +334,11 @@ them there is one rule: **no contradicting trades** —
 - signals found on the same scan that point in opposite directions are all dropped.
 
 All three trade with the larger trend, so this is rare: in the five-year replay it stopped 2
-signals. Replayed together (the [backtest](#backtesting)): **1,026 trades, 65% won, +247.5R**,
-worst drawdown 12.9R, longest losing run 8, against 785 trades, 69%, +160.4R and 9.9R for the
-trend scalp alone. Three trades open at once risk three times the stake of one; two were open
-together about 1% of the time, three almost never.
+signals. Replayed together (the [backtest](#backtesting)): **1,234 trades, 61% won, +338.5R**,
+worst drawdown 16.4R, longest losing run 13, against 785 trades, 69%, +160.4R and 9.9R for the
+trend scalp alone. The two added strategies more than double the profit, and they are why the
+win rate is lower and the drawdown deeper. Three trades open at once risk three times the stake
+of one; two were open together about 2% of the time, three almost never.
 
 ## Scanning
 
@@ -346,8 +364,9 @@ together about 1% of the time, three almost never.
   last entry a signal on the same side within 1R of that entry's price is not sent. Nothing is
   sent against another strategy's open trade, and opposite signals of the same scan cancel each
   other (the scan says why).
-- The trendline strategy is read when a 1-hour candle has just closed, Set and Forget when a
-  4-hour candle has; a scan 15 minutes late still finds them, entered at the price then.
+- The trendline strategy is read when a 1-hour candle has just closed; supply and demand reads
+  every 15-minute candle, and the one before it. A scan 15 minutes late still finds their
+  signals, entered at the price then.
 - Trades left open by a removed strategy are still followed to their stop, target or time
   limit; they do not block new signals.
 - `vercel.json` keeps one daily cron as a fallback (Vercel's Hobby plan allows one run per
@@ -375,15 +394,16 @@ XAU/USD, to 2026-11-24, in R (1R = the risk of one trade). The three strategies 
 
 | | Trades | A day | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **5 years** | **1,026** | **0.79** | **65%** | **+247.5R** | **+209.1R** | **12.9R** | **8** |
-| **Last 3 years** | 843 | 1.08 | 66% | +203.8R | +175.6R | 12.9R | 8 |
+| **5 years** | **1,234** | **0.95** | **61%** | **+338.5R** | **+290.1R** | **16.4R** | **13** |
+| **Last 3 years** | 968 | 1.25 | 62% | +261.6R | +228.3R | 16.4R | 13 |
 | of which Trend scalp (5 years) | 784 | 0.61 | 69% | +160.2R | | 9.9R | 5 |
-| of which Set and Forget | 13 | 0.01 | 69% | +13.3R | | 1.1R | 1 |
-| of which Trendline | 229 | 0.18 | 54% | +74.0R | | 8.9R | 8 |
+| of which Supply and demand | 220 | 0.17 | 39% | +105.3R | | 15.4R | 13 |
+| of which Trendline | 230 | 0.18 | 54% | +73.0R | | 8.9R | 8 |
 
-By year, oldest first: +24.1R (63% won), +19.5R (66%), +26.9R (62%), +61.5R (65%), +115.4R (67%).
-The last twelve months: 427 trades, 1.65 a trading day, worst drawdown 8.0R. The worst day in
-five years was −3.4R.
+By year, oldest first: +38.7R (55% won), +38.3R (56%), +44.8R (56%), +75.9R (61%), +140.9R (65%).
+The last twelve months: 460 trades, 1.78 a trading day, worst drawdown 9.1R. The worst day in
+five years was −3.4R. **The win rate was under 60% in the first three years**, and the 16.4R
+drawdown (2024–25) is larger than a $3,500 loss limit allows at $250 a trade.
 
 The trend scalp on its own, which the rest of this section is about:
 
@@ -441,7 +461,7 @@ npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, 
 
 ## Routes
 
-- **On the chart:** the 15-minute market structure the entries are read from — each swing labelled HH, HL, LH or LL, and each close beyond a swing drawn as BOS (the structure continues) or CHoCH (it turns) — yesterday's high and low, and a shaded band over the hours in which no new trade is taken. Each is a layer that can be switched off. The chart can also show the **1-hour** candles (with the 1-hour structure the trend is read from) and the **4-hour** candles (where Set and Forget takes its entries); the read of the strategies and their signals are the same whichever is shown. The 1-hour trendlines the trendline strategy trades are drawn on all three.
+- **On the chart:** the 15-minute market structure the entries are read from — each swing labelled HH, HL, LH or LL, and each close beyond a swing drawn as BOS (the structure continues) or CHoCH (it turns) — yesterday's high and low, and a shaded band over the hours in which no new trade is taken. Each is a layer that can be switched off. The chart can also show the **1-hour** candles (with the 1-hour structure the trend is read from) and the **4-hour** candles (context only); the read of the strategies and their signals are the same whichever is shown. The 1-hour trendlines and the 30-minute supply and demand zones the strategies trade are drawn on all three.
 - `/` — dashboard: the 15-minute chart with the levels an entry has to close beyond, the level a stop would go beyond, the open trades, each labelled with its strategy (with its stop once the profit lock has moved it) and past results; the panels show each condition of the trend scalp and what is missing, and for all three strategies what each holds and what it is waiting for. `/?asOf=2026-10-27T16:30Z` shows the chart as it stood at that moment
 - `/backtests` — stored backtest runs of the live rules and the quick run
 - `/login` — Supabase auth

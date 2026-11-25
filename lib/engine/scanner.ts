@@ -6,6 +6,7 @@ import { EXECUTION_BAR_SECONDS, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/
 import {
   buildTrendSeries,
   trendStateAt,
+  wilderAdx,
   TREND_DAYS,
   TREND_LOCK_AT_R,
   TREND_LOCK_TO_R,
@@ -24,7 +25,7 @@ import {
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
 import { sendStrategySignal, sendTrendSignal } from "@/lib/telegram";
 import { readTrendlines, tlDailyTrend, tlSetup, TL_HISTORY, TL_LOCK_AT_R, TL_LOCK_TO_R, TL_MAX_HOLD_BARS, TL_MIN_RISK_ATR, TL_OPTIONS, TL_SECONDS, TL_TARGET_R, TL_TIMEFRAME } from "@/lib/analysis/trendline";
-import { buildSfSeries, sfSetupAt, SF_ENTRY_SECONDS, SF_HISTORY, SF_LIVE, SF_LIVE_ENTRY } from "@/lib/analysis/setforget";
+import { readZones, znDailyTrend, znSetup, ZN_HISTORY, ZN_MAX_HOLD_BARS, ZN_TARGET_R } from "@/lib/analysis/zones";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export interface ScanEvent {
@@ -197,7 +198,7 @@ export function strategyBlock(rows: StoredSignal[], strategy: StrategyId, trade:
   return conflictBlock(open, { strategy, direction: trade.direction });
 }
 
-/** The strategies that send signals: all three, unless ENABLED_STRATEGIES names fewer (e.g. "trend,setforget"). A strategy left out sends nothing new; its open trade is still followed to its end. */
+/** The strategies that send signals: all three, unless ENABLED_STRATEGIES names fewer (e.g. "trend,zones"). A strategy left out sends nothing new; its open trade is still followed to its end. */
 export const ENABLED_STRATEGIES: StrategyId[] = (() => {
   const named = (process.env.ENABLED_STRATEGIES ?? "").split(",").map((x) => x.trim().toLowerCase());
   const chosen = STRATEGY_IDS.filter((id) => named.includes(id));
@@ -224,7 +225,8 @@ interface Candidate {
  *  - the trend scalp the last closed 15-minute candle (and the one before it,
  *    in case the scan that should have read it did not run);
  *  - the trendline strategy the 1-hour candle that has just closed;
- *  - Set and Forget the 4-hour candle that has just closed.
+ *  - supply and demand the last closed 15-minute candle against the fresh
+ *    zones of the 30-minute chart (and the candle before it, likewise).
  * A candle that completes an entry is stored and sent to Telegram — unless the
  * strategy's own send rules forbid it, it contradicts another strategy, or the
  * candle closed too long ago. Every scan leaves a row in market_state, written
@@ -471,50 +473,57 @@ export async function runScan(opts: {
       push("error", (e as Error).message.slice(0, 160), "trendline");
     }
 
-    // ── Set and Forget: the 4-hour candle that has just closed ──
+    // ── supply and demand: a 15-minute candle that rejected a fresh 30-minute zone ──
     try {
-      const seconds = SF_ENTRY_SECONDS[SF_LIVE_ENTRY];
-      const lastDay = data.daily[data.daily.length - 1];
-      // 4-hour candles open on the same clock as the daily candle, so its close can be told without asking for it
-      if (ENABLED_STRATEGIES.includes("setforget") && lastDay && priceNow != null && sinceClose(lastDay.time, seconds) <= MAX_ENTRY_AGE_MIN * 60) {
-        const [h4, daily, weekly] = (
-          await Promise.all([
-            fetchCandles({ instrument: pair, granularity: SF_LIVE_ENTRY, count: SF_HISTORY.h4, to }),
-            fetchCandles({ instrument: pair, granularity: "D", count: SF_HISTORY.daily, to }),
-            fetchCandles({ instrument: pair, granularity: "W", count: SF_HISTORY.weekly, to }),
-          ])
-        ).map((c, k) => closedBy(c, [seconds, 86_400, 604_800][k]));
-        const series = buildSfSeries({ entry: h4, h4, daily, weekly, entrySeconds: seconds }, SF_LIVE);
-        const i = series.n - 1;
-        const closed = i >= 0 ? h4[i].time + seconds : 0;
-        const setup = i >= 2 && (now / 1000 - closed) / 60 <= MAX_ENTRY_AGE_MIN ? sfSetupAt(series, i, pair, SF_LIVE, priceNow) : null;
-        if (setup) {
-          const up = setup.direction === "long";
-          const why = `the weekly, daily and 4-hour trend is ${up ? "up" : "down"}; price pulled back into a ${setup.zone.tf} area of interest (${px(setup.zone.low)}–${px(setup.zone.high)}, ${setup.zone.touches} touches), the 4-hour chart shifted structure back ${up ? "up" : "down"} and an engulfing candle confirmed it`;
-          const stopWhy = `beyond the ${up ? "low" : "high"} the pullback made (${px(setup.pullback)})`;
-          const manage = "Set and forget: the stop is never moved, not even to break-even. The trade ends at its stop or at its target — that can take days or weeks.";
+      if (ENABLED_STRATEGIES.includes("zones") && priceNow != null) {
+        // further back than the trend scalp reads: a zone lives ten days, and what price did to it since has to be known
+        const m15 = closedBy(await fetchCandles({ instrument: pair, granularity: EXECUTION_TIMEFRAME, count: ZN_HISTORY, to }), EXECUTION_BAR_SECONDS);
+        const n = m15.length;
+        const adx = wilderAdx(data.h1);
+        // the 1-hour ADX of the last 1-hour candle closed by `time`
+        const adxAt = (time: number) => {
+          for (let k = data.h1.length - 1; k >= 0; k--) if (data.h1[k].time + 3600 <= time) return adx[k];
+          return NaN;
+        };
+        // the newest candle, and the one before it in case its scan did not run
+        const found = n > 2 ? readZones(m15, n - 2).events.filter((ev) => (now / 1000 - ev.time) / 60 <= MAX_ENTRY_AGE_MIN) : [];
+        for (const ev of found) {
+          const late = ev.index < n - 1;
+          const up = ev.direction === "long";
+          const zoneName = `${ev.zone.kind} zone ${px(Math.min(ev.zone.proximal, ev.zone.distal))}–${px(Math.max(ev.zone.proximal, ev.zone.distal))}`;
+          // found late: the stop must not have been reached since
+          if (late && (up ? m15[n - 1].low <= ev.stop : m15[n - 1].high >= ev.stop)) continue;
+          const { setup, reason } = znSetup(ev, znDailyTrend(data.daily, ev.time), adxAt(ev.time), priceNow, pair);
+          if (!setup) {
+            if (!late) push("watching", `rejection of the ${zoneName}: no trade — ${reason}`, "zones");
+            continue;
+          }
+          const why = `price came back to a fresh 30-minute ${zoneName}, traded into it and a 15-minute candle closed back ${up ? "above" : "below"} it — the zone was rejected, with the daily trend`;
+          const stopWhy = `just beyond the far edge of the zone (${px(ev.zone.distal)})`;
+          const days = (ZN_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS) / 86_400;
+          const manage = `Set and leave: the stop is not moved. Close at market if neither level is hit within ${days} trading days.`;
           candidates.push({
-            strategy: "setforget",
-            signal: { key: setup.key, direction: setup.direction, time: closed, entry: setup.entry },
+            strategy: "zones",
+            signal: { key: setup.key, direction: setup.direction, time: setup.time, entry: setup.entry },
             late: false,
             row: {
               entry: setup.entry,
               stop_loss: setup.stopLoss,
               take_profit: setup.takeProfit,
-              r_multiple: setup.targetR,
+              r_multiple: ZN_TARGET_R,
               sl_basis: stopWhy,
-              tp_basis: `${setup.targetR} × the risk; the stop is never moved; held until the stop or the target is hit`,
+              tp_basis: `${ZN_TARGET_R} × the risk; the stop is not moved; closed at market after ${days} trading days if neither is hit`,
               confidence: 5,
-              confirmations: { "Weekly, daily and 4-hour agree": true, "Pullback into an area of interest": true, "Shift of structure on the 4-hour chart": true, "Engulfing candle": true, "Stop and target within the limits": true },
+              confirmations: { "Fresh zone, first return": true, "Rejected within two candles": true, "No deeper than half the zone": true, "With the daily trend": true, "1-hour ADX under 40": true },
             },
-            describe: `${up ? "buy" : "sell"} at ${px(setup.entry)}, stop ${px(setup.stopLoss)}, target ${px(setup.takeProfit)} (${setup.targetR}R) — Set and Forget`,
+            describe: `${late ? "recovered late: " : ""}${up ? "buy" : "sell"} at ${px(setup.entry)}, stop ${px(setup.stopLoss)}, target ${px(setup.takeProfit)} (${ZN_TARGET_R}R) — ${ev.zone.kind} zone`,
             announce: () =>
-              sendStrategySignal({ strategy: "setforget", headline: "4-hour shift of structure at an area of interest", pair, direction: setup.direction, entry: setup.entry, stopLoss: setup.stopLoss, takeProfit: setup.takeProfit, targetR: setup.targetR, why, stopWhy, manage, accountBalance, riskPct: RISK_PCT }),
+              sendStrategySignal({ strategy: "zones", headline: `rejection of a 30-minute ${ev.zone.kind} zone`, pair, direction: setup.direction, entry: setup.entry, stopLoss: setup.stopLoss, takeProfit: setup.takeProfit, targetR: ZN_TARGET_R, why, stopWhy, manage, accountBalance, riskPct: RISK_PCT }),
           });
         }
       }
     } catch (e) {
-      push("error", (e as Error).message.slice(0, 160), "setforget");
+      push("error", (e as Error).message.slice(0, 160), "zones");
     }
 
     // ── what may be sent: each strategy's own rules, then the rules between them ──

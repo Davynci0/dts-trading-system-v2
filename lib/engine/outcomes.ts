@@ -4,6 +4,7 @@ import { TREND_LOCK_AT_R, TREND_LOCK_TO_R, TREND_MAX_HOLD_BARS } from "@/lib/ana
 import { sendStopMoved } from "@/lib/telegram";
 import { strategyOf } from "@/lib/types";
 import { TL_LOCK_AT_R, TL_LOCK_TO_R, TL_MAX_HOLD_BARS } from "@/lib/analysis/trendline";
+import { ZN_MAX_HOLD_BARS } from "@/lib/analysis/zones";
 
 export interface SettleInput {
   direction: "long" | "short";
@@ -217,9 +218,9 @@ export async function scoreOpenSignals(
             await sendStopMoved({ strategy: id, pair: r.pair, direction: r.direction, entry: r.entry, stop: followed.stop, takeProfit: r.take_profit, lockedR: lock.to }).catch(() => undefined);
           }
         }
-      } else if (strategyOf(r) === "setforget") {
-        // set and forget: the stop or the target, however long it takes
-        res = settleSignal({ ...r, firedAt }, candles, Infinity);
+      } else if (strategyOf(r) === "zones") {
+        // the stop is not moved; closed at market after five trading days
+        res = settleSignal({ ...r, firedAt }, candles, ZN_MAX_HOLD_BARS);
       } else {
         res = settleSignal({ ...r, firedAt }, candles, LEGACY_MAX_HOLD_BARS);
       }

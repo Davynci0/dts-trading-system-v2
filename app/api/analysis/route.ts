@@ -4,24 +4,9 @@ import { buildTrendSeries, structureMarks, trendStateAt, TREND_QUIET_HOURS_UTC, 
 import { fetchScanCandles } from "@/lib/engine/scanner";
 import { fetchCandles } from "@/lib/oanda";
 import { chartLines, readTrendlines, shownLines, tlDailyTrend, tlSetup, TL_HISTORY, TL_OPTIONS, TL_SECONDS, TL_TIMEFRAME } from "@/lib/analysis/trendline";
-import { buildSfSeries, sfStateAt, SF_ENTRY_SECONDS, SF_HISTORY, SF_LIVE, SF_LIVE_ENTRY } from "@/lib/analysis/setforget";
+import { readZones, znDailyTrend, znSetup, ZN_ADX_MAX, ZN_HISTORY } from "@/lib/analysis/zones";
+import { wilderAdx } from "@/lib/analysis/trend";
 import type { Candle } from "@/lib/types";
-
-/** What Set and Forget reads changes with a 4-hour candle, so its candles are asked for once in five minutes, not on every refresh of the chart. */
-const SF_TTL_MS = 5 * 60 * 1000;
-const sfCache = new Map<string, { at: number; data: { h4: Candle[]; daily: Candle[]; weekly: Candle[] } }>();
-async function fetchSfCandles(instrument: string, to?: string) {
-  const hit = to ? undefined : sfCache.get(instrument);
-  if (hit && Date.now() - hit.at < SF_TTL_MS) return hit.data;
-  const [h4, daily, weekly] = await Promise.all([
-    fetchCandles({ instrument, granularity: SF_LIVE_ENTRY, count: SF_HISTORY.h4, to }),
-    fetchCandles({ instrument, granularity: "D", count: SF_HISTORY.daily, to }),
-    fetchCandles({ instrument, granularity: "W", count: SF_HISTORY.weekly, to }),
-  ]);
-  const data = { h4, daily, weekly };
-  if (!to) sfCache.set(instrument, { at: Date.now(), data });
-  return data;
-}
 
 export const maxDuration = 60;
 
@@ -57,14 +42,16 @@ export async function GET(req: NextRequest) {
 
   try {
     // the read always uses the scanner's own window, however few candles the chart asked for
-    const [data, tlH1, sf] = await Promise.all([
+    const [data, tlH1, znM15, h4] = await Promise.all([
       fetchScanCandles(instrument, to, Math.max(count, SCAN_HISTORY.m15)),
       // the trendline strategy reads the 1-hour chart, further back than the trend scalp does
       fetchCandles({ instrument, granularity: TL_TIMEFRAME, count: TL_HISTORY, to }).catch(() => [] as Candle[]),
-      // Set and Forget reads the 4-hour, daily and weekly charts
-      fetchSfCandles(instrument, to).catch(() => null),
+      // supply and demand reads ten days of 15-minute candles and builds its 30-minute zones from them
+      fetchCandles({ instrument, granularity: EXECUTION_TIMEFRAME, count: ZN_HISTORY, to }).catch(() => [] as Candle[]),
+      // the 4-hour chart is only shown, never read
+      view === "H4" ? fetchCandles({ instrument, granularity: "H4", count: 500, to }).catch(() => [] as Candle[]) : Promise.resolve([] as Candle[]),
     ]);
-    const shown = view === "H1" ? data.h1 : view === "H4" ? (sf?.h4 ?? []) : data.m15;
+    const shown = view === "H1" ? data.h1 : view === "H4" ? h4 : data.m15;
     const candles = shown.slice(-count);
     // the trendline strategy: the lines it trades, and what the last closed 1-hour candle did
     let trendline = null;
@@ -101,24 +88,31 @@ export async function GET(req: NextRequest) {
         readAt,
       };
     }
-    // Set and Forget: where it stands on the last closed 4-hour candle
-    let setforget = null;
-    if (sf && sf.h4.length > 100 && sf.daily.length > 100 && sf.weekly.length > 20) {
-      const seconds = SF_ENTRY_SECONDS[SF_LIVE_ENTRY];
-      const series = buildSfSeries({ entry: sf.h4, h4: sf.h4, daily: sf.daily, weekly: sf.weekly, entrySeconds: seconds }, SF_LIVE);
-      const st = sfStateAt(series, series.n - 1, instrument, SF_LIVE, "4-hour");
-      setforget = {
-        weekly: st.weekly,
-        daily: st.daily,
-        h4: st.entryDir,
-        side: st.side,
-        waiting: st.waiting,
-        checks: st.checks,
-        zones: st.zones.map((z) => ({ low: z.low, high: z.high, touches: z.touches, tf: z.tf, active: st.zone != null && z.low === st.zone.low && z.high === st.zone.high })),
-        /** the high (sell) or low (buy) the pullback has made so far: the stop would go beyond it */
-        pullback: st.side && st.zone ? st.pullback : null,
-        setup: st.setup ? { direction: st.setup.direction, entry: st.setup.entry, stopLoss: st.setup.stopLoss, takeProfit: st.setup.takeProfit } : null,
-        readAt: sf.h4[sf.h4.length - 1].time + seconds,
+    // supply and demand: the fresh 30-minute zones, and what the 15-minute candles did at them
+    let zones = null;
+    if (znM15.length > 300 && candles.length > 0) {
+      const n = znM15.length;
+      const read = readZones(znM15, 0);
+      const adx = wilderAdx(data.h1);
+      const adxAt = (time: number) => {
+        for (let k = data.h1.length - 1; k >= 0; k--) if (data.h1[k].time + 3600 <= time) return adx[k];
+        return NaN;
+      };
+      const readAt = znM15[n - 1].time + 900;
+      const dailyTrend = znDailyTrend(data.daily, readAt);
+      const plans = read.events.map((e) => ({ e, ...znSetup(e, znDailyTrend(data.daily, e.time), adxAt(e.time), e.close, instrument) }));
+      const last = plans.filter((x) => x.e.index === n - 1);
+      const now = last.find((x) => x.setup) ?? last[0] ?? null;
+      zones = {
+        dailyTrend,
+        adx: adxAt(readAt),
+        adxMax: ZN_ADX_MAX,
+        /** the fresh zones: the ones on the trend's side can give a trade */
+        zones: read.zones.map((z) => ({ kind: z.kind, low: Math.min(z.proximal, z.distal), high: Math.max(z.proximal, z.distal), proximal: z.proximal, known: z.known, touched: z.touched, tradable: (z.kind === "demand" ? 1 : -1) === dailyTrend })),
+        /** every rejection inside the chart, and whether it was a trade */
+        marks: plans.filter((x) => znM15[x.e.index].time >= candles[0].time).map((x) => ({ time: znM15[x.e.index].time, price: x.e.zone.proximal, kind: x.e.zone.kind, direction: x.e.direction, traded: x.setup != null })),
+        event: now ? { kind: now.e.zone.kind, direction: now.e.direction, low: Math.min(now.e.zone.proximal, now.e.zone.distal), high: Math.max(now.e.zone.proximal, now.e.zone.distal), time: now.e.time, setup: now.setup ? { entry: now.setup.entry, stopLoss: now.setup.stopLoss, takeProfit: now.setup.takeProfit } : null, reason: now.reason } : null,
+        readAt,
       };
     }
 
@@ -176,7 +170,7 @@ export async function GET(req: NextRequest) {
     const days = data.daily.filter((d) => ![5, 6].includes(new Date(d.time * 1000).getUTCDay()));
     const yesterday = days[days.length - 1];
     const context = { prevDayHigh: yesterday?.high ?? null, prevDayLow: yesterday?.low ?? null, quietHoursUtc: [...TREND_QUIET_HOURS_UTC] };
-    return NextResponse.json({ candles, view, trend, trendline, setforget, structure, context, build: process.env.APP_BUILD ?? null, asOf: to ?? null });
+    return NextResponse.json({ candles, view, trend, trendline, zones, structure, context, build: process.env.APP_BUILD ?? null, asOf: to ?? null });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }

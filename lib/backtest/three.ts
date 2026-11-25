@@ -1,7 +1,6 @@
 import { runTrendBacktest } from "@/lib/backtest/trend";
-import { sfCandidates } from "@/lib/backtest/setforget";
+import { znCandidates } from "@/lib/backtest/zones";
 import { tlCandidates } from "@/lib/backtest/trendline";
-import { SF_ENTRY_SECONDS, SF_LIVE, SF_LIVE_ENTRY } from "@/lib/analysis/setforget";
 import { combineStrategies, type StrategyTrade } from "@/lib/strategies";
 import { STRATEGY_IDS, type Candle, type StrategyId } from "@/lib/types";
 
@@ -11,15 +10,11 @@ import { STRATEGY_IDS, type Candle, type StrategyId } from "@/lib/types";
  * one trade a strategy, and no trade against another strategy's open trade.
  */
 export interface ThreeData {
-  /** 15-minute candles: the trend scalp's entries, and every fill and exit */
+  /** 15-minute candles: the entries of the trend scalp and of supply and demand, and every fill and exit */
   m15: Candle[];
   h1: Candle[];
-  h4: Candle[];
   /** the daily candles behind the 50-day average */
   daily: Candle[];
-  /** three more years of daily and weekly candles, for Set and Forget's areas of interest */
-  dailyLong: Candle[];
-  weekly: Candle[];
 }
 
 export interface ThreeTrade extends StrategyTrade {
@@ -49,14 +44,14 @@ export function runThree(pair: string, d: ThreeData, from = 0, costMultiplier = 
     outcome: t.outcome,
     entryType: t.trigger,
   }));
-  const sf: ThreeTrade[] = sfCandidates(pair, { m15: d.m15, entry: d.h4, h4: d.h4, daily: d.dailyLong, weekly: d.weekly }, SF_ENTRY_SECONDS[SF_LIVE_ENTRY], SF_LIVE, from, costMultiplier).map((t) => ({
-    strategy: "setforget",
+  const zn: ThreeTrade[] = znCandidates({ pair, m15: d.m15, h1: d.h1, daily: d.daily, from, costMultiplier }).map((t) => ({
+    strategy: "zones",
     direction: t.direction,
     entryTime: t.entryTime,
     exitTime: t.exitTime,
     rAchieved: t.rAchieved,
     outcome: t.outcome,
-    entryType: `${t.zoneTf} area`,
+    entryType: t.kind,
   }));
   const tl: ThreeTrade[] = tlCandidates({ pair, m15: d.m15, h1: d.h1, daily: d.daily, from, costMultiplier }).map((t) => ({
     strategy: "trendline",
@@ -70,8 +65,8 @@ export function runThree(pair: string, d: ThreeData, from = 0, costMultiplier = 
   const closed = (g: ThreeTrade[]) => g.filter((t) => t.outcome !== "open");
   const alone = Object.fromEntries(STRATEGY_IDS.map((id) => [id, [] as ThreeTrade[]])) as Record<StrategyId, ThreeTrade[]>;
   alone.trend = closed(trend);
-  alone.setforget = closed(combineStrategies(sf).taken);
+  alone.zones = closed(combineStrategies(zn).taken);
   alone.trendline = closed(combineStrategies(tl).taken);
-  const both = combineStrategies([...trend, ...sf, ...tl]);
+  const both = combineStrategies([...trend, ...zn, ...tl]);
   return { alone, together: closed(both.taken), blocked: both.blocked };
 }
