@@ -326,7 +326,7 @@ export function znSetup(ev: ZoneEvent, ctx: ZnContext, entry: number = ev.close,
   if (ev.depth >= ZN_MAX_DEPTH) return { setup: null, reason: `the candle went ${(ev.depth * 100).toFixed(0)}% into the zone — more than half-way, the zone is being filled through` };
   if (ctx.adx >= ZN_ADX_MAX) return { setup: null, reason: `the 1-hour ADX is ${ctx.adx.toFixed(0)} — the move is exhausted (limit ${ZN_ADX_MAX})` };
   if (ctx.h1Side !== dir) return { setup: null, reason: `the 1-hour chart does not agree: its ${ZN_EMA_FAST}-EMA and price are not both ${dir === 1 ? "above" : "below"} its ${ZN_EMA_SLOW}-EMA` };
-  if (ctx.yesterday !== -dir) return { setup: null, reason: `yesterday's candle did not go against the trade — a ${ev.zone.kind} zone is traded after a ${dir === 1 ? "down" : "up"} day` };
+  if (ctx.yesterday !== -dir) return { setup: null, reason: `yesterday's candle did not go against the trade — a ${ev.zone.kind} zone is traded after ${dir === 1 ? "a down" : "an up"} day` };
   const distance = (Math.abs(entry - ctx.dailyAverage) / entry) * 100;
   if (!(distance >= ZN_MIN_DISTANCE_PCT)) return { setup: null, reason: `price is only ${distance.toFixed(1)}% from the 50-day average — the trend is not clear (at least ${ZN_MIN_DISTANCE_PCT}%)` };
   const risk = dir * (entry - ev.stop);

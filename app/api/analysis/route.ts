@@ -105,7 +105,7 @@ export async function GET(req: NextRequest) {
       const blocks = [
         ...(ctx.adx >= ZN_ADX_MAX ? [`the 1-hour ADX is ${ctx.adx.toFixed(0)} (limit ${ZN_ADX_MAX})`] : []),
         ...(dailyTrend !== 0 && ctx.h1Side !== dailyTrend ? ["the 1-hour averages do not agree with the daily trend"] : []),
-        ...(dailyTrend !== 0 && ctx.yesterday !== -dailyTrend ? [`yesterday was not a ${dailyTrend === 1 ? "down" : "up"} day`] : []),
+        ...(dailyTrend !== 0 && ctx.yesterday !== -dailyTrend ? [`yesterday was not ${dailyTrend === 1 ? "a down" : "an up"} day`] : []),
         ...(dailyTrend !== 0 && !(distance >= ZN_MIN_DISTANCE_PCT) ? [`price is only ${distance.toFixed(1)}% from the 50-day average`] : []),
       ];
       const plans = read.events.map((e) => ({ e, ...znSetup(e, context(e.time), e.close, instrument) }));

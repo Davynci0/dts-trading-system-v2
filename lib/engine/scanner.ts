@@ -494,7 +494,7 @@ export async function runScan(opts: {
             if (!late) push("watching", `rejection of the ${zoneName}: no trade — ${reason}`, "zones");
             continue;
           }
-          const why = `price came back to a fresh 30-minute ${zoneName} after a ${up ? "down" : "up"} day, traded into it and a 15-minute candle closed back ${up ? "above" : "below"} it — the zone was rejected, with the daily and the 1-hour trend`;
+          const why = `price came back to a fresh 30-minute ${zoneName} after ${up ? "a down" : "an up"} day, traded into it and a 15-minute candle closed back ${up ? "above" : "below"} it — the zone was rejected, with the daily and the 1-hour trend`;
           const stopWhy = `just beyond the far edge of the zone (${px(ev.zone.distal)})`;
           const days = (ZN_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS) / 86_400;
           const manage = `Set and leave: the stop is not moved. Close at market if neither level is hit within ${days} trading days.`;
