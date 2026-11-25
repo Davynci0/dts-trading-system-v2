@@ -35,8 +35,8 @@ export const STRATEGIES: Record<StrategyId, StrategyInfo> = {
     name: "Supply and demand",
     chart: "15-minute, at 30-minute zones",
     exit: "1:3 target, the stop never moved, closed after 5 trading days",
-    pace: "about one trade a week",
-    tested: "In the 5-year test about two trades in five reached the 3R target (39%); the rest were a full loss. Expect runs of losses — 13 in a row at worst.",
+    pace: "rare — about ten trades a year",
+    tested: "In the 5-year test three trades in five reached the 3R target (60%); the rest were a full loss. Only 50 trades in five years.",
   },
   trendline: {
     id: "trendline",

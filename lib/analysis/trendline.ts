@@ -328,6 +328,9 @@ export function readTrendlines(c: Candle[], o: TrendlineOptions, from: number = 
  *    retest is the entry, as she teaches it;
  *  - 59 of 198 losers had been 1R or more in profit first: once price has
  *    gone 1R the trade's way, the stop is moved to +0.25R.
+ *  - its longest losing run (8, early 2024) came while the daily close kept
+ *    crossing its 50-day average, buys and sells alternating: with more than
+ *    one change of side in the last ten days there is no trend to trade with.
  *
  * The stop is never closer than half an ATR; a setup whose stop would be
  * more than three ATRs away is left alone. The target is three times the
@@ -358,6 +361,9 @@ export const TL_MAX_SLOPE_ATR = 0.1;
 export const TL_ADX_MAX = 40;
 /** a bounce candle has to close at least this far off the line, in ATR */
 export const TL_MIN_CLOSE_ATR = 0.25;
+/** no trade when the daily trend has changed sides more than this many times in the last `TL_FLIP_DAYS` days */
+export const TL_MAX_FLIPS = 1;
+export const TL_FLIP_DAYS = 10;
 /** the profit lock, in R: once price has gone `AT` the trade's way, the stop is moved to `TO` in profit */
 export const TL_LOCK_AT_R = 1;
 export const TL_LOCK_TO_R = 0.25;
@@ -384,6 +390,21 @@ export function tlDailyTrend(daily: Candle[], time: number): 1 | -1 | 0 {
   return close > avg ? 1 : close < avg ? -1 : 0;
 }
 
+/** How many times the daily close changed sides of its 50-day average in the last `TL_FLIP_DAYS` closed days before `time`. */
+export function tlTrendFlips(daily: Candle[], time: number): number {
+  const days = daily.filter((d) => !isWeekend(d) && d.time + 86_400 <= time);
+  const n = days.length;
+  if (n < TL_TREND_DAYS + TL_FLIP_DAYS) return 0;
+  const side = (i: number) => {
+    let sum = 0;
+    for (let k = i - TL_TREND_DAYS + 1; k <= i; k++) sum += days[k].close;
+    return Math.sign(days[i].close - sum / TL_TREND_DAYS);
+  };
+  let flips = 0;
+  for (let i = n - TL_FLIP_DAYS; i < n; i++) if (side(i) !== side(i - 1)) flips++;
+  return flips;
+}
+
 export interface TlSetup {
   type: "bounce" | "retest";
   direction: SignalDirection;
@@ -408,12 +429,14 @@ export interface TlSetup {
  * The trade a trendline setup gives, or why it gives none. `candle` is the
  * 1-hour candle that made the setup, `dailyTrend` the daily trend when it
  * closed, `entry` the price the trade is entered at (its close, or the next
- * open in the backtest).
+ * open in the backtest), `flips` how often the daily trend changed sides in
+ * the last ten days (tlTrendFlips).
  */
-export function tlSetup(ev: TrendlineEvent, candle: Candle, dailyTrend: number, entry: number = ev.close, pair = "XAU_USD"): { setup: TlSetup | null; reason: string | null } {
+export function tlSetup(ev: TrendlineEvent, candle: Candle, dailyTrend: number, entry: number = ev.close, pair = "XAU_USD", flips = 0): { setup: TlSetup | null; reason: string | null } {
   const dir = ev.direction === "long" ? 1 : -1;
   if (ev.type === "break") return { setup: null, reason: "a break is not entered: the entry is the retest of the broken line, within a day" };
   if (dailyTrend !== dir) return { setup: null, reason: `a ${ev.direction === "long" ? "buy" : "sell"} against the daily trend` };
+  if (flips > TL_MAX_FLIPS) return { setup: null, reason: `the daily trend has changed sides ${flips} times in the last ${TL_FLIP_DAYS} days — there is no trend to trade with` };
   if (!Number.isFinite(ev.atr) || !(ev.atr > 0) || ev.stop == null) return { setup: null, reason: "not enough candles" };
   const value = ev.line.a.price + ev.line.slope * (ev.index - ev.line.a.index);
   const steep = Math.abs(ev.line.slope) / ev.atr;

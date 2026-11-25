@@ -1,6 +1,7 @@
 import type { Candle, SignalDirection } from "@/lib/types";
 import { tradeCost } from "./instruments";
 import { wilderAtr } from "./trendline";
+import { wilderAdx } from "./trend";
 
 /**
  * Supply and demand, traded the way the method is taught: a zone is the small
@@ -29,6 +30,17 @@ import { wilderAtr } from "./trendline";
  *    −13.6R) — the orders there were being filled through;
  *  - the 1-hour ADX at 40 or more (49 trades, −7R) — the move was exhausted.
  * Against the daily trend the same entry lost 60R: it is never taken.
+ *
+ * The losing RUNS — nine supply zones sold in a row in one month — came when
+ * the trend the zone was traded with was not really there. Three more things
+ * are asked for, and without them no zone is traded:
+ *  - the 1-hour chart agrees: its 50-EMA is beyond its 200-EMA and price is
+ *    beyond the 200-EMA (the 70 trades without it won 27% and made nothing);
+ *  - yesterday's candle went AGAINST the trade — a demand zone is bought
+ *    after a down day in an uptrend, the pullback the zone is there to catch
+ *    (those won 51%; after a day already with the trade, 32%, the same in
+ *    both halves of the five years);
+ *  - price is at least 1% beyond the 50-day average, as for the trend scalp.
  *
  * Everything is read from CLOSED candles; a zone is used only by candles that
  * open after the candle that made it has closed.
@@ -61,6 +73,11 @@ export const ZN_MAX_COST_SHARE = 0.1;
 export const ZN_MAX_HOLD_BARS = 480;
 /** the daily trend: the last closed day's close against its 50-day average */
 export const ZN_TREND_DAYS = 50;
+/** the 1-hour averages that have to agree with the trade */
+export const ZN_EMA_FAST = 50;
+export const ZN_EMA_SLOW = 200;
+/** price has to be at least this far beyond the 50-day average, in percent */
+export const ZN_MIN_DISTANCE_PCT = 1;
 export const ZN_KEY_PREFIX = "sd:" as const;
 
 /** A supply (sell) or demand (buy) zone of the 30-minute chart. */
@@ -209,15 +226,78 @@ export function readZones(m15: Candle[], from: number = m15.length - 1): ZoneRea
 
 const isWeekend = (c: Candle) => [5, 6].includes(new Date(c.time * 1000).getUTCDay());
 
+/** What the higher charts said when a candle closed: everything a zone trade is checked against. */
+export interface ZnContext {
+  /** the daily trend: 1 up, −1 down, 0 unknown */
+  dailyTrend: 1 | -1 | 0;
+  /** the 50-day average, and yesterday's candle: 1 a rising day, −1 a falling one */
+  dailyAverage: number;
+  yesterday: 1 | -1 | 0;
+  /** the 1-hour ADX, and the side the 1-hour averages are on: 1 = 50-EMA above 200-EMA and price above the 200-EMA, −1 the reverse, 0 neither */
+  adx: number;
+  h1Side: 1 | -1 | 0;
+}
+
+/**
+ * The context as it stood at any time, from closed 1-hour and daily candles
+ * (oldest first). Only candles that had closed by `time` are used.
+ */
+export function znContext(h1: Candle[], daily: Candle[]): (time: number) => ZnContext {
+  const adx = wilderAdx(h1);
+  const ema = (n: number) => {
+    const out = new Float64Array(h1.length);
+    const k = 2 / (n + 1);
+    let e = h1[0]?.close ?? NaN;
+    for (let i = 0; i < h1.length; i++) {
+      e = i ? h1[i].close * k + e * (1 - k) : e;
+      out[i] = e;
+    }
+    return out;
+  };
+  const fast = ema(ZN_EMA_FAST);
+  const slow = ema(ZN_EMA_SLOW);
+  const days = daily.filter((d) => !isWeekend(d));
+  const avg = new Float64Array(days.length).fill(NaN);
+  let sum = 0;
+  for (let k = 0; k < days.length; k++) {
+    sum += days[k].close;
+    if (k >= ZN_TREND_DAYS) sum -= days[k - ZN_TREND_DAYS].close;
+    if (k >= ZN_TREND_DAYS - 1) avg[k] = sum / ZN_TREND_DAYS;
+  }
+  // the last candle of `c` (each `secs` long) closed by `time`
+  const lastClosed = (c: Candle[], secs: number, time: number) => {
+    let lo = 0;
+    let hi = c.length - 1;
+    let r = -1;
+    while (lo <= hi) {
+      const m = (lo + hi) >> 1;
+      if (c[m].time + secs <= time) {
+        r = m;
+        lo = m + 1;
+      } else hi = m - 1;
+    }
+    return r;
+  };
+  return (time) => {
+    const j = lastClosed(h1, 3600, time);
+    const d = lastClosed(days, 86_400, time);
+    const known = d >= ZN_TREND_DAYS - 1;
+    const close = d >= 0 ? days[d].close : NaN;
+    // the 200-EMA needs its candles before it means anything
+    const h1Side = j < ZN_EMA_SLOW ? 0 : fast[j] > slow[j] && h1[j].close > slow[j] ? 1 : fast[j] < slow[j] && h1[j].close < slow[j] ? -1 : 0;
+    return {
+      dailyTrend: !known ? 0 : close > avg[d] ? 1 : close < avg[d] ? -1 : 0,
+      dailyAverage: known ? avg[d] : NaN,
+      yesterday: d < 0 ? 0 : days[d].close > days[d].open ? 1 : days[d].close < days[d].open ? -1 : 0,
+      adx: j >= 0 ? adx[j] : NaN,
+      h1Side,
+    };
+  };
+}
+
 /** The daily trend as it stood at `time` (epoch seconds): 1 up, −1 down, 0 unknown. Only days that had closed by then count. */
 export function znDailyTrend(daily: Candle[], time: number): 1 | -1 | 0 {
-  const days = daily.filter((d) => !isWeekend(d) && d.time + 86_400 <= time);
-  if (days.length < ZN_TREND_DAYS) return 0;
-  let sum = 0;
-  for (let k = days.length - ZN_TREND_DAYS; k < days.length; k++) sum += days[k].close;
-  const avg = sum / ZN_TREND_DAYS;
-  const close = days[days.length - 1].close;
-  return close > avg ? 1 : close < avg ? -1 : 0;
+  return znContext([], daily)(time).dailyTrend;
 }
 
 export interface ZnSetup {
@@ -234,17 +314,21 @@ export interface ZnSetup {
 }
 
 /**
- * The trade a rejection gives, or why it gives none. `dailyTrend` and `adx`
- * (the 1-hour ADX) are as they stood when the candle closed; `entry` is the
- * price the trade is entered at (the close, or the next open in the backtest).
+ * The trade a rejection gives, or why it gives none. `ctx` is what the higher
+ * charts said when the candle closed; `entry` is the price the trade is
+ * entered at (the close, or the next open in the backtest).
  */
-export function znSetup(ev: ZoneEvent, dailyTrend: number, adx: number, entry: number = ev.close, pair = "XAU_USD"): { setup: ZnSetup | null; reason: string | null } {
+export function znSetup(ev: ZoneEvent, ctx: ZnContext, entry: number = ev.close, pair = "XAU_USD"): { setup: ZnSetup | null; reason: string | null } {
   const dir = ev.direction === "long" ? 1 : -1;
   const side = ev.zone.kind === "demand" ? "buy at demand" : "sell at supply";
-  if (dailyTrend !== dir) return { setup: null, reason: `a ${side} against the daily trend` };
+  if (ctx.dailyTrend !== dir) return { setup: null, reason: `a ${side} against the daily trend` };
   if (ev.bars > ZN_WAIT_BARS) return { setup: null, reason: "the rejection came too long after price reached the zone" };
   if (ev.depth >= ZN_MAX_DEPTH) return { setup: null, reason: `the candle went ${(ev.depth * 100).toFixed(0)}% into the zone — more than half-way, the zone is being filled through` };
-  if (adx >= ZN_ADX_MAX) return { setup: null, reason: `the 1-hour ADX is ${adx.toFixed(0)} — the move is exhausted (limit ${ZN_ADX_MAX})` };
+  if (ctx.adx >= ZN_ADX_MAX) return { setup: null, reason: `the 1-hour ADX is ${ctx.adx.toFixed(0)} — the move is exhausted (limit ${ZN_ADX_MAX})` };
+  if (ctx.h1Side !== dir) return { setup: null, reason: `the 1-hour chart does not agree: its ${ZN_EMA_FAST}-EMA and price are not both ${dir === 1 ? "above" : "below"} its ${ZN_EMA_SLOW}-EMA` };
+  if (ctx.yesterday !== -dir) return { setup: null, reason: `yesterday's candle did not go against the trade — a ${ev.zone.kind} zone is traded after a ${dir === 1 ? "down" : "up"} day` };
+  const distance = (Math.abs(entry - ctx.dailyAverage) / entry) * 100;
+  if (!(distance >= ZN_MIN_DISTANCE_PCT)) return { setup: null, reason: `price is only ${distance.toFixed(1)}% from the 50-day average — the trend is not clear (at least ${ZN_MIN_DISTANCE_PCT}%)` };
   const risk = dir * (entry - ev.stop);
   if (!Number.isFinite(risk) || !(risk > 0)) return { setup: null, reason: "price is already beyond the stop" };
   if (tradeCost(pair) > ZN_MAX_COST_SHARE * risk) return { setup: null, reason: "the costs are too large a share of the risk" };

@@ -1,5 +1,4 @@
-import { readZones, znDailyTrend, znSetup, ZN_MAX_HOLD_BARS } from "@/lib/analysis/zones";
-import { wilderAdx } from "@/lib/analysis/trend";
+import { readZones, znContext, znSetup, ZN_MAX_HOLD_BARS } from "@/lib/analysis/zones";
 import { tradeCost } from "@/lib/analysis/instruments";
 import type { Candle } from "@/lib/types";
 
@@ -40,15 +39,12 @@ export function znCandidates(opts: {
 }): ZnTrade[] {
   const { pair, m15, h1, daily, from = 0, costMultiplier = 1 } = opts;
   const cost = tradeCost(pair) * Math.max(0, costMultiplier);
-  const adx = wilderAdx(h1);
+  const context = znContext(h1, daily);
   const out: ZnTrade[] = [];
-  let j = -1;
   for (const ev of readZones(m15, 0).events) {
     const e = ev.index + 1;
     if (ev.time < from || e >= m15.length) continue;
-    // the 1-hour ADX of the last 1-hour candle closed by then
-    while (j + 1 < h1.length && h1[j + 1].time + 3600 <= ev.time) j++;
-    const { setup } = znSetup(ev, znDailyTrend(daily, ev.time), j >= 0 ? adx[j] : NaN, m15[e].open, pair);
+    const { setup } = znSetup(ev, context(ev.time), m15[e].open, pair);
     if (!setup || setup.zone.base < (opts.variant?.minBase ?? 1)) continue;
     const dir = setup.direction === "long" ? 1 : -1;
     let exitPrice = NaN;

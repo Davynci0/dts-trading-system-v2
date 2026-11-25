@@ -50,8 +50,8 @@ import { tradeCost } from "../lib/analysis/instruments";
 import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES } from "../lib/backtest/trend";
 import { followTrade, LIVE_LOCK, settleSignal, TL_LOCK } from "../lib/engine/outcomes";
 import { lastEntryOf, scanLogKey, sendBlock, strategyBlock, type EarlierSignal, type StoredSignal } from "../lib/engine/scanner";
-import { readTrendlines, shownLines, tlDailyTrend, tlSetup, TL_ADX_MAX, TL_HISTORY, TL_LOCK_AT_R, TL_LOCK_TO_R, TL_MAX_HOLD_BARS, TL_MAX_RISK_ATR, TL_MAX_SLOPE_ATR, TL_MIN_CLOSE_ATR, TL_MIN_RISK_ATR, TL_OPTIONS, TL_TARGET_R } from "../lib/analysis/trendline";
-import { findZones, readZones, znDailyTrend, znSetup, ZN_ADX_MAX, ZN_HISTORY, ZN_MAX_DEPTH, ZN_MAX_HOLD_BARS, ZN_TARGET_R, ZN_WAIT_BARS } from "../lib/analysis/zones";
+import { readTrendlines, shownLines, tlDailyTrend, tlSetup, TL_ADX_MAX, TL_HISTORY, TL_FLIP_DAYS, TL_LOCK_AT_R, TL_LOCK_TO_R, TL_MAX_FLIPS, TL_MAX_HOLD_BARS, tlTrendFlips, TL_MAX_RISK_ATR, TL_MAX_SLOPE_ATR, TL_MIN_CLOSE_ATR, TL_MIN_RISK_ATR, TL_OPTIONS, TL_TARGET_R } from "../lib/analysis/trendline";
+import { findZones, readZones, znContext, znDailyTrend, znSetup, ZN_ADX_MAX, ZN_HISTORY, ZN_MAX_DEPTH, ZN_MAX_HOLD_BARS, ZN_MIN_DISTANCE_PCT, ZN_TARGET_R, ZN_WAIT_BARS, type ZnContext, type ZoneEvent } from "../lib/analysis/zones";
 import { runZnBacktest, znCandidates } from "../lib/backtest/zones";
 import { runTlBacktest, tlCandidates } from "../lib/backtest/trendline";
 import { combineStrategies, conflictBlock, contradict, type StrategyTrade } from "../lib/strategies";
@@ -566,6 +566,25 @@ console.log("\ntrendline strategy");
       plans.some((x) => x.e.type !== "break" && !x.withTrend && (Math.abs(x.e.line.slope) / x.e.atr > TL_MAX_SLOPE_ATR || x.e.adx >= TL_ADX_MAX))
   );
   check(`its profit lock moves the stop to +${TL_LOCK_TO_R}R once price has gone +${TL_LOCK_AT_R}R`, made.every((t) => { const dir = t.direction === "long" ? 1 : -1; return near(dir * (t.lockTrigger - t.entry), TL_LOCK_AT_R * t.risk, 1e-6) && near(dir * (t.lockStop - t.entry), TL_LOCK_TO_R * t.risk, 1e-6); }));
+  const anyBounce = stream.events.find((e) => e.type !== "break" && tlSetup(e, h1[e.index], e.direction === "long" ? 1 : -1).setup);
+  // from where there are enough closed days for the 50-day average on each of the ten days
+  const enough = (t: number) => daily.filter((d) => ![5, 6].includes(new Date(d.time * 1000).getUTCDay()) && d.time + DAY <= t).length >= 50 + TL_FLIP_DAYS + 1;
+  const sampleTimes = stream.events.filter((_, k) => k % 5 === 0).map((e) => e.time).filter(enough);
+  const sideAt = (t: number) => tlDailyTrend(daily, t);
+  const countFlips = (t: number) => {
+    const closes = daily.filter((d) => ![5, 6].includes(new Date(d.time * 1000).getUTCDay()) && d.time + DAY <= t).map((d) => d.time + DAY);
+    let n = 0;
+    for (let k = closes.length - TL_FLIP_DAYS; k < closes.length; k++) if (k >= 1 && sideAt(closes[k]) !== sideAt(closes[k - 1])) n++;
+    return n;
+  };
+  check(
+    `no trendline trade when the daily trend has changed sides more than ${TL_MAX_FLIPS === 1 ? "once" : `${TL_MAX_FLIPS} times`} in the last ${TL_FLIP_DAYS} days`,
+    !!anyBounce &&
+      tlSetup(anyBounce, h1[anyBounce.index], anyBounce.direction === "long" ? 1 : -1, anyBounce.close, "XAU_USD", TL_MAX_FLIPS + 1).setup == null &&
+      tlSetup(anyBounce, h1[anyBounce.index], anyBounce.direction === "long" ? 1 : -1, anyBounce.close, "XAU_USD", TL_MAX_FLIPS).setup != null &&
+      sampleTimes.every((t) => tlTrendFlips(daily, t) === countFlips(t)) &&
+      sampleTimes.some((t) => tlTrendFlips(daily, t) > 0)
+  );
   const signals = tlCandidates({ pair: "XAU_USD", m15, h1, daily });
   const taken = runTlBacktest({ pair: "XAU_USD", m15, h1, daily });
   check("the trendline backtest holds one trade at a time", taken.length > 0 && taken.every((t, k) => k === 0 || t.entryTime >= taken[k - 1].exitTime) && taken.length <= signals.length, `${taken.length} of ${signals.length} signals`);
@@ -618,11 +637,39 @@ console.log("\nsupply and demand");
       return true;
     })
   );
-  const plans = ev.map((e) => ({ e, trend: znDailyTrend(daily, e.time) })).map((x) => ({ ...x, calm: znSetup(x.e, x.trend, 20).setup, hot: znSetup(x.e, x.trend, ZN_ADX_MAX).setup, against: znSetup(x.e, x.e.direction === "long" ? -1 : 1, 20).setup, flat: znSetup(x.e, 0, 20).setup }));
+  // everything in a zone trade's favour, for a rejection `e` traded on side `trend`: then one thing at a time is taken away
+  const good = (e: ZoneEvent, trend: number): ZnContext => ({ dailyTrend: trend as 1 | -1 | 0, dailyAverage: e.close * (1 - trend * 0.05), yesterday: -trend as 1 | -1 | 0, adx: 20, h1Side: trend as 1 | -1 | 0 });
+  const dirOf = (e: ZoneEvent) => (e.direction === "long" ? 1 : -1);
+  const plans = ev.map((e) => ({ e, d: dirOf(e) })).map((x) => ({
+    ...x,
+    calm: znSetup(x.e, good(x.e, x.d)).setup,
+    hot: znSetup(x.e, { ...good(x.e, x.d), adx: ZN_ADX_MAX }).setup,
+    against: znSetup(x.e, good(x.e, -x.d)).setup,
+    flat: znSetup(x.e, good(x.e, 0)).setup,
+    h1Against: znSetup(x.e, { ...good(x.e, x.d), h1Side: 0 }).setup,
+    withDay: znSetup(x.e, { ...good(x.e, x.d), yesterday: x.d as 1 | -1 }).setup,
+    dojiDay: znSetup(x.e, { ...good(x.e, x.d), yesterday: 0 }).setup,
+    near: znSetup(x.e, { ...good(x.e, x.d), dailyAverage: x.e.close * (1 - x.d * (ZN_MIN_DISTANCE_PCT / 100) * 0.9) }).setup,
+  }));
   const made = plans.flatMap((x) => (x.calm ? [{ e: x.e, t: x.calm }] : []));
-  check("supply and demand trades only with the daily trend — demand bought in an uptrend, supply sold in a downtrend", made.length > 5 && plans.every((x) => x.against == null && x.flat == null && (x.calm == null || (x.calm.direction === "long" ? 1 : -1) === x.trend)), `${made.length} trades`);
-  check(`no zone trade when the candle went ${ZN_MAX_DEPTH * 100}% or more into the zone, or with the 1-hour ADX at ${ZN_ADX_MAX} or more`, made.every(({ e }) => e.depth < ZN_MAX_DEPTH) && plans.every((x) => x.hot == null) && plans.some((x) => x.trend !== 0 && x.e.depth >= ZN_MAX_DEPTH && x.calm == null));
+  check("supply and demand trades only with the daily trend — demand bought in an uptrend, supply sold in a downtrend", made.length > 5 && plans.every((x) => x.against == null && x.flat == null), `${made.length} trades`);
+  check(`no zone trade when the candle went ${ZN_MAX_DEPTH * 100}% or more into the zone, or with the 1-hour ADX at ${ZN_ADX_MAX} or more`, made.every(({ e }) => e.depth < ZN_MAX_DEPTH) && plans.every((x) => x.hot == null) && plans.some((x) => x.e.depth >= ZN_MAX_DEPTH && x.calm == null));
+  check("no zone trade unless the 1-hour averages agree, yesterday's candle went against the trade, and price is 1% or more beyond the 50-day average", plans.every((x) => x.h1Against == null && x.withDay == null && x.dojiDay == null && x.near == null));
   check(`its stop is beyond the far edge of the zone and its target ${ZN_TARGET_R} times as far`, made.every(({ e, t }) => { const dir = t.direction === "long" ? 1 : -1; return t.stopLoss === e.stop && dir * (t.entry - t.stopLoss) > 0 && near(dir * (t.takeProfit - t.entry), ZN_TARGET_R * t.risk, 1e-6); }));
+  // the context is read from closed candles only: cutting off everything after a moment changes nothing before it
+  const context = znContext(h1, daily);
+  let causal = true;
+  let sides = 0;
+  for (let j = 300; j < h1.length; j += 37) {
+    const t = h1[j].time + H1 + 900;
+    const full = context(t);
+    const cut = znContext(h1.filter((c) => c.time + H1 <= t), daily.filter((c) => c.time + DAY <= t))(t);
+    if (full.h1Side !== 0) sides++;
+    const days = daily.filter((c) => ![5, 6].includes(new Date(c.time * 1000).getUTCDay()) && c.time + DAY <= t);
+    const y = days[days.length - 1];
+    if (JSON.stringify(full) !== JSON.stringify(cut) || full.dailyTrend !== znDailyTrend(daily, t) || (y && full.yesterday !== Math.sign(y.close - y.open))) causal = false;
+  }
+  check("the 1-hour and daily readings a zone trade is checked against use closed candles only", causal && sides > 0);
   // what a scan sees — the last ZN_HISTORY candles — is what the replay saw at that candle
   let same = 0;
   let sampled = 0;

@@ -5,11 +5,11 @@ Signal-only gold (XAU/USD) trading system with **three strategies, each working 
 | Strategy | Chart | A trade ends at | How often | Alone, 5 years |
 | --- | --- | --- | --- | --- |
 | **Trend scalp** — the market-structure scalp described under [The rules](#the-rules) | 15-minute | 1:3 target, profit lock at +0.4R, five-hour limit | about 1.4 a day | 785 trades, 69% won, +160.4R |
-| **[Supply and demand](#supply-and-demand)** — rejections of fresh zones, with the daily trend | 15-minute, at 30-minute zones | 1:3 target or the stop, never moved; five-day limit | about one a week | 220 trades, 39% won, +105.4R |
-| **[Trendline](#the-trendline-strategy)** — bounces off trendlines and retests of broken ones, with the daily trend | 1-hour | 1:3 target, profit lock at +1R, five-day limit | about one a week | 230 trades, 54% won, +73.0R |
+| **[Supply and demand](#supply-and-demand)** — rejections of fresh zones, with the daily trend | 15-minute, at 30-minute zones | 1:3 target or the stop, never moved; five-day limit | about ten a year | 50 trades, 60% won, +60.3R |
+| **[Trendline](#the-trendline-strategy)** — bounces off trendlines and retests of broken ones, with the daily trend | 1-hour | 1:3 target, profit lock at +1R, five-day limit | about one a week | 211 trades, 54% won, +66.8R |
 
-Together: **1,234 trades in five years, 61% won, +338.5R, worst drawdown 16.4R** — every year
-profitable ([backtest](#backtesting)).
+Together: **1,045 trades in five years, 65% won, +287.3R, worst drawdown 11.4R, never more than
+five losses in a row** — every year profitable, every year 62% or more won ([backtest](#backtesting)).
 
 Each strategy holds **one trade of its own**, so up to three can be open at once — but **never in
 opposite directions**: a signal against another strategy's open trade is not sent, and signals
@@ -248,6 +248,10 @@ price comes back to it the orders left there are expected to turn it again. `lib
 - The rejection has to come **within two candles** of price first reaching the zone, the candle
   may not have gone **more than half-way into the zone**, and the **1-hour ADX has to be under 40**
   ([why](#what-the-losing-trades-had-in-common)).
+- **The trend has to be really there** ([why](#the-losing-runs)): the 1-hour chart agrees (its
+  50-EMA beyond its 200-EMA, and price beyond the 200-EMA), **yesterday's candle went against the
+  trade** (a demand zone is bought after a down day in an uptrend), and price is at least 1% beyond
+  the 50-day average.
 - **Stop** just beyond the distal line. **Target 1:3.** Nothing is moved; closed at market after
   five trading days.
 
@@ -256,12 +260,10 @@ same entry); entering the moment price touches the zone, as a resting limit orde
 −79R); trading zones against the daily trend (**−60R**); a profit lock (it cut the profit by a
 third to a half and did not lower the drawdown of the three strategies together).
 
-Five years of gold: **220 trades, 39% won, +105.4R** (+94.7R with the costs doubled; last three
-years 128 trades, +63.7R), every year in profit (+19, +23, +18, +14, +31R). It wins two trades in
-five and loses the rest in full, so its own worst drawdown was **15.4R** and it had **13 losses in
-a row** once. Every neighbouring setting tested (within 1 to 4 candles, depth limit 40% to 75%, ADX
-limit 35 to 45) was profitable too. The zones on the trend's side and every rejection are drawn on
-the chart.
+Five years of gold: **50 trades, 30 winners (60%), +60.3R** (+58.0R with the costs doubled; last
+three years 31 trades, +45.2R), every year in profit (+6.5, +8.6, +10.9, +12.5, +21.8R), worst
+drawdown 5.3R, five losses in a row at worst. It is rare — about ten trades a year — and fifty
+trades are thin evidence. The zones on the trend's side and every rejection are drawn on the chart.
 
 ## The trendline strategy
 
@@ -277,18 +279,18 @@ read on the **1-hour chart** and traded **with the daily trend** (the last close
   line with three touches or more — the pullback is over. The break itself is not entered; the
   entry is the candle that comes back to the broken line within a day and closes up off it — buy,
   with the stop just beyond the line. A close back through the line ends the wait.
-- Mirrored for sells. No trade on a line steeper than 0.1 ATR a candle, or with the 1-hour ADX at
-  40 or more. The stop is never closer than 0.5 ATR, and a setup whose stop would be more than
+- Mirrored for sells. No trade on a line steeper than 0.1 ATR a candle, with the 1-hour ADX at
+  40 or more, or when the daily close has changed sides of its 50-day average more than once in
+  the last ten days ([why](#the-losing-runs)). The stop is never closer than 0.5 ATR, and a setup whose stop would be more than
   3 ATR away is left alone.
 - Target 1:3. Once price has gone **+1R** the stop is moved to **+0.25R** (a Telegram message
   says when). Closed at market after five trading days.
 
-Five years of gold: **230 trades, 54% won, +73.0R** (+62.8R with the costs doubled; last three
-years 151 trades, +47.6R), worst drawdown 8.9R, 8 losses in a row at worst, every year in profit.
-Of the 230, 57 reached the target, 66 closed at the moved stop, 106 at the first stop. Every
-neighbouring setting tested (slope limit 0.08–0.15, ADX limit 35–50, close 0.15–0.5 ATR off the
-line, retest within 12–48 candles, lock at 0.9–1.1R) was profitable too, between +57R and +79R.
-The lines, their touches, and every bounce, break and retest are drawn on the chart.
+Five years of gold: **211 trades, 54% won, +66.8R** (+57.7R with the costs doubled; last three
+years 138 trades, +45.6R), worst drawdown 7.1R, 4 losses in a row at worst, every year in profit.
+Every neighbouring setting tested (slope limit 0.08–0.15, ADX limit 35–50, close 0.15–0.5 ATR off
+the line, retest within 12–48 candles, lock at 0.9–1.1R) was profitable too. The lines, their
+touches, and every bounce, break and retest are drawn on the chart.
 
 ## What the losing trades had in common
 
@@ -311,19 +313,43 @@ losers was only acted on when it lost in **both halves** of the five years and h
 | --- | --- | --- |
 | Trend scalp | 870 trades, 68% won, +155.9R, drawdown 9.5R | 785 trades, 69% won, +160.4R, drawdown 9.9R |
 | Supply and demand | 402 trades, 31% won, +66.0R, drawdown 22.7R | 220 trades, 39% won, +105.4R, drawdown 15.4R |
-| Trendline | 289 trades, 31% won, +59.4R, drawdown 18.0R, 13 losses in a row | 230 trades, 54% won, +73.0R, drawdown 8.9R, 8 in a row |
-| **Together** | — | **1,234 trades, 61% won, +338.5R, drawdown 16.4R, 13 in a row** |
-
-Set and Forget (Alex G's swing method) ran in the supply and demand strategy's place until 25
-November 2026 and was removed at the owner's request: with it the three made 1,026 trades, 65% won,
-+247.5R, drawdown 12.9R — fewer trades and less profit, but a higher win rate and a smaller
-drawdown than now.
 
 Two cautions. These changes were chosen by looking at the same five years they are measured on,
 so the "after" column is the best case, not a forecast — the test that counts is live trading.
 And one tempting finding was thrown out: trendlines "with more touches" looked far better until
 it turned out the touches had been counted after the trade; counted at the time of the trade,
 they make no difference.
+
+### The losing runs
+
+With those changes the three together still lost **13 trades in a row** once and 11 in a row
+once, and the worst drawdown was 16.4R. Every run of six losses or more was laid out trade by
+trade. The trend scalp was hardly in them (never more than five in a row on its own). The runs
+came from the other two, when the trend they trade with was not really there:
+
+| What the runs had in common | Evidence | What was changed |
+| --- | --- | --- |
+| **Supply and demand:** nine supply zones sold in a row in one month. The **1-hour averages did not agree** with the daily trend | 70 such trades won 27% and made +1R in total; the 150 others won 45% | A zone is traded only when the 1-hour 50-EMA is beyond the 200-EMA and price is beyond the 200-EMA |
+| **Supply and demand:** yesterday's candle had **already gone with the trade** — no pullback for the zone to catch | 140 such trades won 32%, in both halves; the 80 after a day against the trade won 51%, in both halves | A zone is traded only after a day against the trade |
+| **Supply and demand:** price within **1% of the 50-day average** | 44 trades, 25% won | Not traded (the trend scalp's rule) |
+| **Trendline:** eight losses in a row in early 2024, buys and sells alternating, while the **daily close kept crossing its 50-day average** | That one run; the win rate is the same with or without the rule | No trade when the daily trend has changed sides more than once in the last ten days |
+
+The same readings were checked on the trend scalp and showed nothing to cut: it wins 67–70%
+whichever way they fall.
+
+| | Before | After |
+| --- | --- | --- |
+| Supply and demand | 220 trades, 39% won, +105.4R, drawdown 15.4R, 13 losses in a row | 50 trades, 60% won, +60.3R, drawdown 5.3R, 5 in a row |
+| Trendline | 230 trades, 54% won, +73.0R, drawdown 8.9R, 8 in a row | 211 trades, 54% won, +66.8R, drawdown 7.1R, 4 in a row |
+| **Together** | 1,234 trades, 61% won, +338.5R, drawdown 16.4R, 13 in a row | **1,045 trades, 65% won, +287.3R, drawdown 11.4R, 5 in a row** |
+
+This was a trade of profit for safety, made on purpose: 51R less over five years for a run of
+losses less than half as long. Two honest limits: the longest run of a system that wins 65% of
+about a thousand trades is five to seven by chance alone, so **a run of six or seven can still
+happen**; and the trendline rule rests on a single episode.
+
+Set and Forget (Alex G's swing method) ran in the supply and demand strategy's place until 25
+November 2026 and was removed at the owner's request.
 
 ## Three strategies side by side
 
@@ -333,12 +359,11 @@ them there is one rule: **no contradicting trades** —
 - a signal that is opposite to another strategy's open trade is not sent;
 - signals found on the same scan that point in opposite directions are all dropped.
 
-All three trade with the larger trend, so this is rare: in the five-year replay it stopped 2
-signals. Replayed together (the [backtest](#backtesting)): **1,234 trades, 61% won, +338.5R**,
-worst drawdown 16.4R, longest losing run 13, against 785 trades, 69%, +160.4R and 9.9R for the
-trend scalp alone. The two added strategies more than double the profit, and they are why the
-win rate is lower and the drawdown deeper. Three trades open at once risk three times the stake
-of one; two were open together about 2% of the time, three almost never.
+All three trade with the larger trend, so this is rare: in the five-year replay it stopped 1
+signal. Replayed together (the [backtest](#backtesting)): **1,045 trades, 65% won, +287.3R**,
+worst drawdown 11.4R, longest losing run 5, against 785 trades, 69%, +160.4R and 9.9R for the
+trend scalp alone. Three trades open at once risk three times the stake of one; two were open
+together about 1% of the time, three almost never.
 
 ## Scanning
 
@@ -394,16 +419,15 @@ XAU/USD, to 2026-11-24, in R (1R = the risk of one trade). The three strategies 
 
 | | Trades | A day | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **5 years** | **1,234** | **0.95** | **61%** | **+338.5R** | **+290.1R** | **16.4R** | **13** |
-| **Last 3 years** | 968 | 1.25 | 62% | +261.6R | +228.3R | 16.4R | 13 |
+| **5 years** | **1,045** | **0.81** | **65%** | **+287.3R** | **+248.4R** | **11.4R** | **5** |
+| **Last 3 years** | 858 | 1.10 | 66% | +241.1R | +212.6R | 11.4R | 5 |
 | of which Trend scalp (5 years) | 784 | 0.61 | 69% | +160.2R | | 9.9R | 5 |
-| of which Supply and demand | 220 | 0.17 | 39% | +105.3R | | 15.4R | 13 |
-| of which Trendline | 230 | 0.18 | 54% | +73.0R | | 8.9R | 8 |
+| of which Supply and demand | 50 | 0.04 | 60% | +60.3R | | 5.3R | 5 |
+| of which Trendline | 211 | 0.16 | 54% | +66.8R | | 7.1R | 4 |
 
-By year, oldest first: +38.7R (55% won), +38.3R (56%), +44.8R (56%), +75.9R (61%), +140.9R (65%).
-The last twelve months: 460 trades, 1.78 a trading day, worst drawdown 9.1R. The worst day in
-five years was −3.4R. **The win rate was under 60% in the first three years**, and the 16.4R
-drawdown (2024–25) is larger than a $3,500 loss limit allows at $250 a trade.
+By year, oldest first: +22.0R (62% won), +24.1R (64%), +43.2R (64%), +66.7R (65%), +131.3R (67%).
+The last twelve months: 434 trades, 1.68 a trading day, worst drawdown 7.3R. The worst day in
+five years was −3.4R.
 
 The trend scalp on its own, which the rest of this section is about:
 

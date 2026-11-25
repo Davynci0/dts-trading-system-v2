@@ -7,6 +7,7 @@ import { strategyOf, type Signal, type StrategyId } from "@/lib/types";
 export interface TrendlineSummary {
   lines: { kind: "down" | "up"; touches: number; now: number; points: { time: number; price: number }[]; touchPoints: { time: number; price: number }[]; broken: "long" | "short" | null }[];
   marks: { time: number; price: number; type: "bounce" | "break" | "retest"; direction: "long" | "short"; traded: boolean }[];
+  blocks: string[];
   dailyTrend: 1 | -1 | 0;
   event: {
     type: "break" | "bounce" | "retest";
@@ -24,8 +25,7 @@ export interface TrendlineSummary {
 /** Supply and demand: the fresh 30-minute zones and what the last 15-minute candle did at them. */
 export interface ZonesSummary {
   dailyTrend: 1 | -1 | 0;
-  adx: number | null;
-  adxMax: number;
+  blocks: string[];
   zones: { kind: "demand" | "supply"; low: number; high: number; proximal: number; known: number; touched: boolean; tradable: boolean }[];
   marks: { time: number; price: number; kind: "demand" | "supply"; direction: "long" | "short"; traded: boolean }[];
   event: { kind: "demand" | "supply"; direction: "long" | "short"; low: number; high: number; time: number; setup: { entry: number; stopLoss: number; takeProfit: number } | null; reason: string | null } | null;
@@ -74,8 +74,8 @@ export default function StrategiesPanel({
             <p className="text-neutral-400">
               Daily trend <span className={tone(zones.dailyTrend)}>{arrow(zones.dailyTrend)}</span> —{" "}
               {side ? `only ${side === "demand" ? "buys at fresh demand zones" : "sells at fresh supply zones"}` : "no side"}.
-              {zones.adx != null && zones.adx >= zones.adxMax ? ` No trade now: the 1-hour ADX is ${zones.adx.toFixed(0)} (limit ${zones.adxMax}).` : ""}
             </p>
+            {zones.blocks.length > 0 && <p className="text-amber-400/90">No zone trade today: {zones.blocks.join("; ")}.</p>}
             {zones.event ? (
               <p className="text-neutral-300">
                 Last 15-minute candle ({at(zones.event.time)}): rejected the {zones.event.kind} zone {px(zones.event.low)}–{px(zones.event.high)} —{" "}
@@ -108,6 +108,7 @@ export default function StrategiesPanel({
           Daily trend <span className={tone(trendline.dailyTrend)}>{arrow(trendline.dailyTrend)}</span> —{" "}
           {trendline.dailyTrend === 0 ? "no side" : `only ${trendline.dailyTrend === 1 ? "buys: a bounce off a rising line, or the retest of a falling line broken upwards" : "sells: a bounce off a falling line, or the retest of a rising line broken downwards"}`}.
         </p>
+        {trendline.blocks.length > 0 && <p className="text-amber-400/90">No trendline trade now: {trendline.blocks.join("; ")}.</p>}
         {trendline.event ? (
           <p className="text-neutral-300">
             Last 1-hour candle ({at(trendline.event.time)}): {trendline.event.type} of a {trendline.event.touches}-touch {trendline.event.kind === "up" ? "rising" : "falling"} line —{" "}

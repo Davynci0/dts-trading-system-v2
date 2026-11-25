@@ -1,4 +1,4 @@
-import { readTrendlines, tlDailyTrend, tlSetup, TL_MAX_HOLD_BARS, TL_OPTIONS, TL_SECONDS, type TlSetup } from "@/lib/analysis/trendline";
+import { readTrendlines, tlDailyTrend, tlSetup, tlTrendFlips, TL_MAX_HOLD_BARS, TL_OPTIONS, TL_SECONDS, type TlSetup } from "@/lib/analysis/trendline";
 import { tradeCost } from "@/lib/analysis/instruments";
 import type { Candle } from "@/lib/types";
 
@@ -38,7 +38,7 @@ export function tlCandidates(opts: { pair: string; m15: Candle[]; h1: Candle[]; 
     if (ev.time < from) continue;
     while (e < m15.length && m15[e].time < ev.time) e++;
     if (e >= m15.length) break;
-    const { setup } = tlSetup(ev, h1[ev.index], tlDailyTrend(daily, ev.time), m15[e].open, pair);
+    const { setup } = tlSetup(ev, h1[ev.index], tlDailyTrend(daily, ev.time), m15[e].open, pair, tlTrendFlips(daily, ev.time));
     if (!setup) continue;
     const dir = setup.direction === "long" ? 1 : -1;
     let exitPrice = NaN;

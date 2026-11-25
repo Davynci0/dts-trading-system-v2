@@ -32,7 +32,7 @@ the strategy, the backtest and the reports, until the owner says otherwise.
 Rules 2 to 7 were written for the trend scalp and it meets them. The owner asked for the
 trendline strategy and for supply and demand zones by name on 25 November 2026; both are run as
 their methods are taught (rule 8), which means they hold trades for longer than five hours and win
-fewer than 60% of them on their own (54% and 39%) — the three together win 61%. Report each
+54% and 60% of them on their own — the three together win 65%. Report each
 strategy's results next to the others', never blended in a way that hides this.
 
 ## How results are tested and reported

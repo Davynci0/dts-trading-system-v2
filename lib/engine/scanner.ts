@@ -6,7 +6,6 @@ import { EXECUTION_BAR_SECONDS, EXECUTION_TIMEFRAME, SCAN_HISTORY } from "@/lib/
 import {
   buildTrendSeries,
   trendStateAt,
-  wilderAdx,
   TREND_DAYS,
   TREND_LOCK_AT_R,
   TREND_LOCK_TO_R,
@@ -24,8 +23,8 @@ import {
 } from "@/lib/analysis/trend";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
 import { sendStrategySignal, sendTrendSignal } from "@/lib/telegram";
-import { readTrendlines, tlDailyTrend, tlSetup, TL_HISTORY, TL_LOCK_AT_R, TL_LOCK_TO_R, TL_MAX_HOLD_BARS, TL_MIN_RISK_ATR, TL_OPTIONS, TL_SECONDS, TL_TARGET_R, TL_TIMEFRAME } from "@/lib/analysis/trendline";
-import { readZones, znDailyTrend, znSetup, ZN_HISTORY, ZN_MAX_HOLD_BARS, ZN_TARGET_R } from "@/lib/analysis/zones";
+import { readTrendlines, tlDailyTrend, tlSetup, tlTrendFlips, TL_HISTORY, TL_LOCK_AT_R, TL_LOCK_TO_R, TL_MAX_HOLD_BARS, TL_MIN_RISK_ATR, TL_OPTIONS, TL_SECONDS, TL_TARGET_R, TL_TIMEFRAME } from "@/lib/analysis/trendline";
+import { readZones, znContext, znSetup, ZN_HISTORY, ZN_MAX_HOLD_BARS, ZN_TARGET_R } from "@/lib/analysis/zones";
 import { createAdminClient } from "@/lib/supabase/admin";
 
 export interface ScanEvent {
@@ -418,7 +417,8 @@ export async function runScan(opts: {
         // only the candle that has just closed: an older one was read by its own scan
         const found = (now / 1000 - (h1[n - 1].time + TL_SECONDS)) / 60 <= MAX_ENTRY_AGE_MIN ? readTrendlines(h1, TL_OPTIONS).events.filter((ev) => ev.index === n - 1) : [];
         const trend = found.length > 0 ? tlDailyTrend(data.daily, found[0].time) : 0;
-        const plans = found.map((ev) => ({ ev, ...tlSetup(ev, h1[n - 1], trend, priceNow, pair) }));
+        const flips = found.length > 0 ? tlTrendFlips(data.daily, found[0].time) : 0;
+        const plans = found.map((ev) => ({ ev, ...tlSetup(ev, h1[n - 1], trend, priceNow, pair, flips) }));
         const lineOf = (ev: (typeof found)[number]) => `${ev.touches}-touch ${ev.line.kind === "up" ? "rising" : "falling"} trendline`;
         const taken = plans.find((x) => x.setup);
         // a candle can make more than one setup; the first that gives a trade is the trade
@@ -479,12 +479,8 @@ export async function runScan(opts: {
         // further back than the trend scalp reads: a zone lives ten days, and what price did to it since has to be known
         const m15 = closedBy(await fetchCandles({ instrument: pair, granularity: EXECUTION_TIMEFRAME, count: ZN_HISTORY, to }), EXECUTION_BAR_SECONDS);
         const n = m15.length;
-        const adx = wilderAdx(data.h1);
-        // the 1-hour ADX of the last 1-hour candle closed by `time`
-        const adxAt = (time: number) => {
-          for (let k = data.h1.length - 1; k >= 0; k--) if (data.h1[k].time + 3600 <= time) return adx[k];
-          return NaN;
-        };
+        // what the 1-hour and daily charts said when a candle closed
+        const context = znContext(data.h1, data.daily);
         // the newest candle, and the one before it in case its scan did not run
         const found = n > 2 ? readZones(m15, n - 2).events.filter((ev) => (now / 1000 - ev.time) / 60 <= MAX_ENTRY_AGE_MIN) : [];
         for (const ev of found) {
@@ -493,12 +489,12 @@ export async function runScan(opts: {
           const zoneName = `${ev.zone.kind} zone ${px(Math.min(ev.zone.proximal, ev.zone.distal))}–${px(Math.max(ev.zone.proximal, ev.zone.distal))}`;
           // found late: the stop must not have been reached since
           if (late && (up ? m15[n - 1].low <= ev.stop : m15[n - 1].high >= ev.stop)) continue;
-          const { setup, reason } = znSetup(ev, znDailyTrend(data.daily, ev.time), adxAt(ev.time), priceNow, pair);
+          const { setup, reason } = znSetup(ev, context(ev.time), priceNow, pair);
           if (!setup) {
             if (!late) push("watching", `rejection of the ${zoneName}: no trade — ${reason}`, "zones");
             continue;
           }
-          const why = `price came back to a fresh 30-minute ${zoneName}, traded into it and a 15-minute candle closed back ${up ? "above" : "below"} it — the zone was rejected, with the daily trend`;
+          const why = `price came back to a fresh 30-minute ${zoneName} after a ${up ? "down" : "up"} day, traded into it and a 15-minute candle closed back ${up ? "above" : "below"} it — the zone was rejected, with the daily and the 1-hour trend`;
           const stopWhy = `just beyond the far edge of the zone (${px(ev.zone.distal)})`;
           const days = (ZN_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS) / 86_400;
           const manage = `Set and leave: the stop is not moved. Close at market if neither level is hit within ${days} trading days.`;
@@ -513,8 +509,8 @@ export async function runScan(opts: {
               r_multiple: ZN_TARGET_R,
               sl_basis: stopWhy,
               tp_basis: `${ZN_TARGET_R} × the risk; the stop is not moved; closed at market after ${days} trading days if neither is hit`,
-              confidence: 5,
-              confirmations: { "Fresh zone, first return": true, "Rejected within two candles": true, "No deeper than half the zone": true, "With the daily trend": true, "1-hour ADX under 40": true },
+              confidence: 8,
+              confirmations: { "Fresh zone, first return": true, "Rejected within two candles": true, "No deeper than half the zone": true, "With the daily trend": true, "1-hour ADX under 40": true, "1-hour averages agree": true, "Yesterday's candle against the trade": true, "1% or more beyond the 50-day average": true },
             },
             describe: `${late ? "recovered late: " : ""}${up ? "buy" : "sell"} at ${px(setup.entry)}, stop ${px(setup.stopLoss)}, target ${px(setup.takeProfit)} (${ZN_TARGET_R}R) — ${ev.zone.kind} zone`,
             announce: () =>
