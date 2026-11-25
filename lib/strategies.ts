@@ -27,7 +27,7 @@ export const STRATEGIES: Record<StrategyId, StrategyInfo> = {
     name: "Trend scalp",
     chart: "15-minute",
     exit: "1:3 target, the stop moved into profit at +0.4R, closed after 5 hours",
-    pace: "about 1.6 trades a day",
+    pace: "about 1.4 trades a day",
     tested: "In the 5-year test about two in three closed in profit — half of them at the moved stop, with a small gain.",
   },
   setforget: {
@@ -35,16 +35,16 @@ export const STRATEGIES: Record<StrategyId, StrategyInfo> = {
     name: "Set and Forget",
     chart: "4-hour",
     exit: "1:2 target, the stop never moved, held until one of them is hit",
-    pace: "rare — about one trade every three months",
-    tested: "In the 5-year test it made only 18 trades on gold; 10 reached the target.",
+    pace: "rare — two or three trades a year",
+    tested: "In the 5-year test it made only 13 trades on gold; 9 reached the target.",
   },
   trendline: {
     id: "trendline",
     name: "Trendline",
     chart: "1-hour",
-    exit: "1:3 target, the stop never moved, closed after 5 trading days",
-    pace: "about 3 trades in two weeks",
-    tested: "In the 5-year test fewer than one trade in three reached the target (31%); the winners pay 3R. Expect runs of losses — 13 in a row in the test.",
+    exit: "1:3 target, the stop moved to +0.25R at +1R, closed after 5 trading days",
+    pace: "about one trade a week",
+    tested: "In the 5-year test just over half closed in profit (54%): about one in four reached the 3R target, as many closed at the moved stop with a small gain.",
   },
 };
 

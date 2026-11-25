@@ -69,21 +69,28 @@ export async function GET(req: NextRequest) {
     // the trendline strategy: the lines it trades, and what the last closed 1-hour candle did
     let trendline = null;
     if (tlH1.length > 200 && candles.length > 0) {
-      const read = readTrendlines(tlH1, TL_OPTIONS);
       const n = tlH1.length;
+      // the setups of the last three weeks are marked on the chart, the last candle's is the live read
+      const read = readTrendlines(tlH1, TL_OPTIONS, Math.max(0, n - 500));
       const readAt = tlH1[n - 1].time + TL_SECONDS;
       const dailyTrend = tlDailyTrend(data.daily, readAt);
-      const ev = read.events[0] ?? null;
-      const plan = ev ? tlSetup(ev, tlH1[n - 1], dailyTrend, ev.close, instrument) : null;
+      // a candle can make more than one setup: the one that gives a trade, else the first
+      const plans = read.events.filter((e) => e.index === n - 1).map((e) => ({ e, ...tlSetup(e, tlH1[n - 1], dailyTrend, e.close, instrument) }));
+      const plan = plans.find((x) => x.setup) ?? plans[0] ?? null;
+      const ev = plan?.e ?? null;
       trendline = {
         lines: chartLines(read, shownLines(read, TL_OPTIONS), TL_OPTIONS, candles[0].time, candles[candles.length - 1].time),
         dailyTrend,
+        /** every bounce, break and retest inside the chart, and whether it was a trade */
+        marks: read.events
+          .filter((e) => tlH1[e.index].time >= candles[0].time)
+          .map((e) => ({ time: tlH1[e.index].time, price: read.valueAt(e.line, e.index), type: e.type, direction: e.direction, traded: tlSetup(e, tlH1[e.index], tlDailyTrend(data.daily, e.time), e.close, instrument).setup != null })),
         event: ev
           ? {
               type: ev.type,
               direction: ev.direction,
               kind: ev.line.kind,
-              touches: ev.line.touches,
+              touches: ev.touches,
               close: ev.close,
               time: ev.time,
               /** the trade it gives, or why it gives none */
@@ -107,7 +114,9 @@ export async function GET(req: NextRequest) {
         side: st.side,
         waiting: st.waiting,
         checks: st.checks,
-        zones: st.zones.map((z) => ({ low: z.low, high: z.high, touches: z.touches, tf: z.tf })),
+        zones: st.zones.map((z) => ({ low: z.low, high: z.high, touches: z.touches, tf: z.tf, active: st.zone != null && z.low === st.zone.low && z.high === st.zone.high })),
+        /** the high (sell) or low (buy) the pullback has made so far: the stop would go beyond it */
+        pullback: st.side && st.zone ? st.pullback : null,
         setup: st.setup ? { direction: st.setup.direction, entry: st.setup.entry, stopLoss: st.setup.stopLoss, takeProfit: st.setup.takeProfit } : null,
         readAt: sf.h4[sf.h4.length - 1].time + seconds,
       };

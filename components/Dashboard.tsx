@@ -17,7 +17,8 @@ const LAYERS = [
   { id: "context", label: "Day levels and no-trade hours", color: CHART_COLORS.muted, on: true },
   { id: "zones", label: "Support and resistance", color: CHART_COLORS.zone, on: true },
   { id: "sd", label: "Supply and demand (1H)", color: CHART_COLORS.demand, on: true },
-  { id: "tori", label: "Trendlines (1H)", color: CHART_COLORS.tori, on: true },
+  { id: "tori", label: "Trendlines and their setups (1H)", color: CHART_COLORS.tori, on: true },
+  { id: "areas", label: "Areas of interest (Set and Forget)", color: CHART_COLORS.area, on: true },
   { id: "position", label: "Open trades", color: null, on: true },
   { id: "history", label: "Closed trades", color: null, on: true },
 ] as const;
@@ -157,10 +158,13 @@ export default function Dashboard() {
       history: layers.history ? history : [],
       zones: layers.zones && trend ? trend.zones : [],
       trendlines: layers.tori && trendline ? trendline.lines : [],
+      lineMarks: layers.tori && trendline ? trendline.marks : [],
+      areas: layers.areas && setforget ? setforget.zones : [],
+      pullback: layers.areas && setforget?.pullback != null && setforget.side ? { price: setforget.pullback, side: setforget.side } : null,
       sdZones: layers.sd && trend && candles.length > 0 ? trend.sdZones.map((z) => ({ ...z, from: barAt(z.known - 1).time })) : [],
       digits: DIGITS,
     };
-  }, [trend, trendline, marks, layers, pairSignals, candles, view]);
+  }, [trend, trendline, setforget, marks, layers, pairSignals, candles, view]);
 
   /** One line on what the trend allows right now. */
   const trendLine = useMemo(() => {

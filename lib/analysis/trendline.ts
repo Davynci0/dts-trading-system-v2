@@ -1,5 +1,6 @@
 import type { Candle, SignalDirection } from "@/lib/types";
 import { tradeCost } from "./instruments";
+import { wilderAdx } from "./trend";
 
 /**
  * Trendlines, read the way Tori Trades teaches them (her X threads and her
@@ -16,6 +17,10 @@ import { tradeCost } from "./instruments";
  *  - BOUNCE: a later candle comes back to a line with enough touches and
  *    history and closes away from it, in the line's direction; the stop goes
  *    just beyond the line.
+ *  - RETEST: after a break, a candle comes back to the broken line from the
+ *    other side and closes away from it, in the break's direction — the old
+ *    resistance holding as support (or the reverse). A close back through
+ *    the line ends the wait: the break has failed.
  *
  * Every candle is read with what was known when it closed: a swing counts
  * `swing` candles after it formed, never before.
@@ -39,6 +44,8 @@ export interface TrendlineOptions {
   stopBufferAtr: number;
   /** a line is dropped this many candles after its point A */
   maxAgeBars: number;
+  /** candles after a break within which the broken line can be retested */
+  retestBars: number;
   /** the start of every event key */
   keyPrefix: string;
 }
@@ -63,12 +70,16 @@ export interface Trendline {
   lastTouch: number;
   /** index of the last candle that bounced off it */
   lastBounce: number;
+  /** the candles of its touches after points A and B */
+  touchIdx: number[];
 }
 
 export interface TrendlineEvent {
-  type: "break" | "bounce";
+  type: "break" | "bounce" | "retest";
   direction: SignalDirection;
   line: Trendline;
+  /** the touches the line had when the setup was made — `line.touches` goes on counting afterwards */
+  touches: number;
   /** index of the candle that made it, its close, and when it closed (epoch seconds) */
   index: number;
   close: number;
@@ -77,8 +88,9 @@ export interface TrendlineEvent {
   stop: number | null;
   /** the safety line's price at that candle (break), the line's price (bounce) */
   safety: number | null;
-  /** the average true range at that candle */
+  /** the average true range and the ADX at that candle */
   atr: number;
+  adx: number;
   /** one alert, one trade per event */
   key: string;
 }
@@ -91,8 +103,10 @@ export interface TrendlineRead {
   /** the safety line for a buy (an up line under price) and for a sell, at the last candle */
   safetyLong: number | null;
   safetyShort: number | null;
-  /** the setups, at most one a candle, oldest first — from `from` on */
+  /** the setups, oldest first, from `from` on: at most one bounce or break a candle, and any retest of a line broken earlier */
   events: TrendlineEvent[];
+  /** lines broken in the last candles and not retested yet: their retest is an entry */
+  broken: { line: Trendline; at: number; direction: SignalDirection; touches: number }[];
   candles: Candle[];
 }
 
@@ -116,6 +130,9 @@ const value = (l: Trendline, i: number) => l.a.price + l.slope * (i - l.a.index)
 export function readTrendlines(c: Candle[], o: TrendlineOptions, from: number = c.length - 1): TrendlineRead {
   const n = c.length;
   const atr = wilderAtr(c);
+  const adx = wilderAdx(c);
+  /** broken lines waiting for their retest: the line, the candle that broke it, the side of the break and the line's touches then */
+  let broken: { line: Trendline; at: number; d: 1 | -1; touches: number }[] = [];
   const highs: LinePoint[] = [];
   const lows: LinePoint[] = [];
   const lines: Trendline[] = [];
@@ -160,6 +177,7 @@ export function readTrendlines(c: Candle[], o: TrendlineOptions, from: number = 
         if (l.kind === kind && p > l.b.index && p - l.lastTouch >= k && Math.abs(B.price - value(l, p)) <= tol) {
           l.touches++;
           l.lastTouch = p;
+          l.touchIdx.push(p);
         }
       }
       for (let j = src.length - 1, m = 0; j >= 0 && m < MAX_PAIRS; j--, m++) {
@@ -176,7 +194,7 @@ export function readTrendlines(c: Candle[], o: TrendlineOptions, from: number = 
           const v = A.price + slope * (q - A.index);
           if (kind === "down" ? c[q].close > v : c[q].close < v) ok = false;
         }
-        if (ok) lines.push({ kind, a: A, b: B, slope, touches: 2, lastTouch: B.index, lastBounce: -1 });
+        if (ok) lines.push({ kind, a: A, b: B, slope, touches: 2, lastTouch: B.index, lastBounce: -1, touchIdx: [] });
       }
       src.push(B);
     }
@@ -187,6 +205,7 @@ export function readTrendlines(c: Candle[], o: TrendlineOptions, from: number = 
     const body = Math.abs(b.close - b.open);
     const wanted = i >= from;
     let event: TrendlineEvent | null = null;
+    let bestBreak: (typeof broken)[number] | null = null;
     for (let x = lines.length - 1; x >= 0; x--) {
       const l = lines[x];
       if (i - l.a.index > o.maxAgeBars) {
@@ -196,21 +215,25 @@ export function readTrendlines(c: Candle[], o: TrendlineOptions, from: number = 
       const v = value(l, i);
       if (l.kind === "down" ? b.close > v : b.close < v) {
         lines.splice(x, 1);
-        if (!wanted || l.touches < o.breakTouches || i - l.a.index < o.minSpanBars) continue;
+        if (l.touches < o.breakTouches || i - l.a.index < o.minSpanBars) continue;
         if (!(range > 0) || body < o.bodyMin * range || (l.kind === "down" ? b.close < b.open : b.close > b.open)) continue;
-        if (event && event.type === "break" && l.touches <= event.line.touches) continue;
+        if (bestBreak && l.touches <= bestBreak.touches) continue;
         const d: 1 | -1 = l.kind === "down" ? 1 : -1;
+        bestBreak = { line: l, at: i, d, touches: l.touches };
+        if (!wanted) continue;
         const s = safety(d, i, Math.max(i - l.a.index, k * 4));
         event = {
           type: "break",
           direction: d === 1 ? "long" : "short",
           line: l,
+          touches: l.touches,
           index: i,
           close: b.close,
           time: b.time + o.seconds,
           safety: s,
           stop: s == null ? null : s - d * o.stopBufferAtr * atr[i],
           atr: atr[i],
+          adx: adx[i],
           key: `${o.keyPrefix}:break:${l.kind}:${l.a.time}:${b.time}`,
         };
       } else if (l.touches >= o.bounceTouches && i - l.a.index >= o.minSpanBars && i - l.lastTouch > k && i - l.lastBounce > k) {
@@ -224,17 +247,52 @@ export function readTrendlines(c: Candle[], o: TrendlineOptions, from: number = 
           type: "bounce",
           direction: d === 1 ? "long" : "short",
           line: l,
+          touches: l.touches,
           index: i,
           close: b.close,
           time: b.time + o.seconds,
           safety: v,
           stop: v - d * o.stopBufferAtr * atr[i],
           atr: atr[i],
+          adx: adx[i],
           key: `${o.keyPrefix}:bounce:${l.kind}:${l.a.time}:${b.time}`,
         };
       }
     }
     if (event) events.push(event);
+
+    // the lines broken on earlier candles: has this candle retested one?
+    const waiting: typeof broken = [];
+    for (const w of broken) {
+      if (i - w.at > o.retestBars) continue;
+      const v = value(w.line, i);
+      // a close back through the line: the break has failed
+      if (w.d === 1 ? b.close < v : b.close > v) continue;
+      const touched = w.d === 1 ? b.low <= v + tol : b.high >= v - tol;
+      if (!touched || (w.d === 1 ? b.close <= b.open : b.close >= b.open)) {
+        waiting.push(w);
+        continue;
+      }
+      // retested: one entry a break
+      if (wanted) {
+        events.push({
+          type: "retest",
+          direction: w.d === 1 ? "long" : "short",
+          line: w.line,
+          touches: w.touches,
+          index: i,
+          close: b.close,
+          time: b.time + o.seconds,
+          safety: v,
+          stop: v - w.d * o.stopBufferAtr * atr[i],
+          atr: atr[i],
+          adx: adx[i],
+          key: `${o.keyPrefix}:retest:${w.line.kind}:${w.line.a.time}:${b.time}`,
+        });
+      }
+    }
+    broken = waiting;
+    if (bestBreak) broken.push(bestBreak);
   }
 
   return {
@@ -243,6 +301,7 @@ export function readTrendlines(c: Candle[], o: TrendlineOptions, from: number = 
     safetyLong: n > 0 ? safety(1, n - 1, 60) : null,
     safetyShort: n > 0 ? safety(-1, n - 1, 60) : null,
     events,
+    broken: broken.map((w) => ({ line: w.line, at: w.at, direction: w.d === 1 ? ("long" as const) : ("short" as const), touches: w.touches })),
     candles: c,
   };
 }
@@ -251,15 +310,28 @@ export function readTrendlines(c: Candle[], o: TrendlineOptions, from: number = 
  *
  * Her lines, read on the 1-hour chart and traded WITH the daily trend:
  *  - BOUNCE: in an uptrend, a 1-hour candle comes back to a rising line and
- *    closes up, away from it — buy; the stop goes just beyond the line.
- *  - BREAK: in an uptrend, a full-bodied 1-hour candle closes up through a
- *    falling line with three or more touches (the pullback is over) — buy; the
- *    stop goes beyond the safety line, or beyond the break candle when no
- *    safety line can be drawn.
- * (Mirrored for sells.) The stop is never closer than half an ATR; a setup
- * whose stop would be more than three ATRs away is left alone. The target is
- * three times the risk. Nothing is moved: the trade ends at its stop, at its
- * target, or at market after five trading days.
+ *    closes up, at least a quarter of an ATR off it — buy; the stop goes just
+ *    beyond the line.
+ *  - BREAK AND RETEST: in an uptrend, a full-bodied 1-hour candle closes up
+ *    through a falling line with three or more touches (the pullback is
+ *    over). The break itself is not entered: the entry is the candle that
+ *    comes back to the broken line within a day and closes up off it — buy;
+ *    the stop goes just beyond the line.
+ * (Mirrored for sells.)
+ *
+ * What the losing trades had in common, and what was changed for it:
+ *  - lines steeper than 0.1 ATR a candle did not hold (1 trade in 9 won);
+ *  - with the 1-hour ADX at 40 or more the move was already exhausted;
+ *  - a bounce candle that closed less than 0.25 ATR off the line was no
+ *    rejection (1 in 5 won);
+ *  - breaks entered on the break candle made nothing in 42 trades — the
+ *    retest is the entry, as she teaches it;
+ *  - 59 of 198 losers had been 1R or more in profit first: once price has
+ *    gone 1R the trade's way, the stop is moved to +0.25R.
+ *
+ * The stop is never closer than half an ATR; a setup whose stop would be
+ * more than three ATRs away is left alone. The target is three times the
+ * risk; an undecided trade is closed at market after five trading days.
  */
 export const TL_TIMEFRAME = "H1" as const;
 export const TL_SECONDS = 3600;
@@ -276,8 +348,19 @@ export const TL_OPTIONS: TrendlineOptions = {
   bodyMin: 0.5,
   stopBufferAtr: 0.2,
   maxAgeBars: 1000,
+  /** a day of 1-hour candles */
+  retestBars: 24,
   keyPrefix: "tl",
 };
+/** no trade on a line steeper than this, in ATR a candle */
+export const TL_MAX_SLOPE_ATR = 0.1;
+/** no trade with the 1-hour ADX at or above this */
+export const TL_ADX_MAX = 40;
+/** a bounce candle has to close at least this far off the line, in ATR */
+export const TL_MIN_CLOSE_ATR = 0.25;
+/** the profit lock, in R: once price has gone `AT` the trade's way, the stop is moved to `TO` in profit */
+export const TL_LOCK_AT_R = 1;
+export const TL_LOCK_TO_R = 0.25;
 /** the daily trend: the last closed day's close against its 50-day average */
 export const TL_TREND_DAYS = 50;
 export const TL_MIN_RISK_ATR = 0.5;
@@ -302,14 +385,17 @@ export function tlDailyTrend(daily: Candle[], time: number): 1 | -1 | 0 {
 }
 
 export interface TlSetup {
-  type: "break" | "bounce";
+  type: "bounce" | "retest";
   direction: SignalDirection;
   entry: number;
   stopLoss: number;
   takeProfit: number;
   risk: number;
+  /** the profit lock: when price reaches `lockTrigger`, the stop is moved to `lockStop` */
+  lockTrigger: number;
+  lockStop: number;
   /** where the stop comes from */
-  stopBasis: "safety line" | "line" | "signal candle" | "minimum";
+  stopBasis: "line" | "minimum";
   /** the line: its direction, its touches and its price at the signal candle */
   line: { kind: "down" | "up"; touches: number; value: number };
   /** when the signal candle closed (epoch seconds) */
@@ -326,14 +412,17 @@ export interface TlSetup {
  */
 export function tlSetup(ev: TrendlineEvent, candle: Candle, dailyTrend: number, entry: number = ev.close, pair = "XAU_USD"): { setup: TlSetup | null; reason: string | null } {
   const dir = ev.direction === "long" ? 1 : -1;
+  if (ev.type === "break") return { setup: null, reason: "a break is not entered: the entry is the retest of the broken line, within a day" };
   if (dailyTrend !== dir) return { setup: null, reason: `a ${ev.direction === "long" ? "buy" : "sell"} against the daily trend` };
-  if (!Number.isFinite(ev.atr) || !(ev.atr > 0)) return { setup: null, reason: "not enough candles" };
-  let stop = ev.stop;
-  let basis: TlSetup["stopBasis"] = ev.type === "break" ? "safety line" : "line";
-  if (stop == null) {
-    stop = dir === 1 ? candle.low - TL_OPTIONS.stopBufferAtr * ev.atr : candle.high + TL_OPTIONS.stopBufferAtr * ev.atr;
-    basis = "signal candle";
-  }
+  if (!Number.isFinite(ev.atr) || !(ev.atr > 0) || ev.stop == null) return { setup: null, reason: "not enough candles" };
+  const value = ev.line.a.price + ev.line.slope * (ev.index - ev.line.a.index);
+  const steep = Math.abs(ev.line.slope) / ev.atr;
+  if (steep > TL_MAX_SLOPE_ATR) return { setup: null, reason: `the line is too steep to hold (${steep.toFixed(2)} ATR a candle; limit ${TL_MAX_SLOPE_ATR})` };
+  if (ev.adx >= TL_ADX_MAX) return { setup: null, reason: `the 1-hour ADX is ${ev.adx.toFixed(0)} — the move is exhausted (limit ${TL_ADX_MAX})` };
+  const off = (dir * (candle.close - value)) / ev.atr;
+  if (ev.type === "bounce" && off < TL_MIN_CLOSE_ATR) return { setup: null, reason: `the candle closed only ${off.toFixed(2)} ATR off the line — no rejection (at least ${TL_MIN_CLOSE_ATR})` };
+  let stop: number = ev.stop;
+  let basis: TlSetup["stopBasis"] = "line";
   let risk = dir * (entry - stop);
   if (risk < TL_MIN_RISK_ATR * ev.atr) {
     risk = TL_MIN_RISK_ATR * ev.atr;
@@ -342,7 +431,6 @@ export function tlSetup(ev: TrendlineEvent, candle: Candle, dailyTrend: number, 
   }
   if (risk > TL_MAX_RISK_ATR * ev.atr) return { setup: null, reason: `the stop would be ${(risk / ev.atr).toFixed(1)} ATR away (limit ${TL_MAX_RISK_ATR})` };
   if (tradeCost(pair) > TL_MAX_COST_SHARE * risk) return { setup: null, reason: "the costs are too large a share of the risk" };
-  const value = ev.line.a.price + ev.line.slope * (ev.index - ev.line.a.index);
   return {
     setup: {
       type: ev.type,
@@ -351,8 +439,10 @@ export function tlSetup(ev: TrendlineEvent, candle: Candle, dailyTrend: number, 
       stopLoss: stop,
       takeProfit: entry + dir * TL_TARGET_R * risk,
       risk,
+      lockTrigger: entry + dir * TL_LOCK_AT_R * risk,
+      lockStop: entry + dir * TL_LOCK_TO_R * risk,
       stopBasis: basis,
-      line: { kind: ev.line.kind, touches: ev.line.touches, value },
+      line: { kind: ev.line.kind, touches: ev.touches, value },
       time: ev.time,
       atr: ev.atr,
       key: ev.key,
@@ -368,6 +458,10 @@ export interface ChartLine {
   /** the price of the line now */
   now: number;
   points: { time: number; price: number }[];
+  /** where price turned on it: points A and B and every later touch, inside the chart */
+  touchPoints: { time: number; price: number }[];
+  /** broken, and waiting for its retest in this direction */
+  broken: SignalDirection | null;
 }
 
 /** The lines worth drawing: old enough to be traded, the most touches first, then the most recent — one per starting point, `perKind` of each direction. */
@@ -386,13 +480,15 @@ export function chartLines(read: TrendlineRead, lines: Trendline[], o: Trendline
   const c = read.candles;
   const n = c.length;
   if (n === 0) return [];
-  return lines.map((l) => {
+  return [...lines, ...read.broken.map((w) => w.line)].map((l) => {
+    const waiting = read.broken.find((w) => w.line === l) ?? null;
     const points: { time: number; price: number }[] = [];
     for (let i = Math.max(l.a.index, 0); i < n; i++) if (c[i].time >= fromTime) points.push({ time: c[i].time, price: read.valueAt(l, i) });
     // carried on to the last candle shown
     const extra = (endTime - c[n - 1].time) / o.seconds;
     const now = read.valueAt(l, n - 1 + Math.max(0, extra));
     if (endTime > c[n - 1].time) points.push({ time: endTime, price: now });
-    return { kind: l.kind, touches: l.touches, now, points };
+    const touchPoints = [l.a.index, l.b.index, ...l.touchIdx].filter((i) => c[i].time >= fromTime).map((i) => ({ time: c[i].time, price: read.valueAt(l, i) }));
+    return { kind: l.kind, touches: waiting ? waiting.touches : l.touches, now, points, touchPoints, broken: waiting ? waiting.direction : null };
   });
 }

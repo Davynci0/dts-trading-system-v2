@@ -5,10 +5,11 @@ import { strategyOf, type Signal, type StrategyId } from "@/lib/types";
 
 /** The trendline strategy on the 1-hour chart: the lines it trades and what the last closed 1-hour candle did. */
 export interface TrendlineSummary {
-  lines: { kind: "down" | "up"; touches: number; now: number; points: { time: number; price: number }[] }[];
+  lines: { kind: "down" | "up"; touches: number; now: number; points: { time: number; price: number }[]; touchPoints: { time: number; price: number }[]; broken: "long" | "short" | null }[];
+  marks: { time: number; price: number; type: "bounce" | "break" | "retest"; direction: "long" | "short"; traded: boolean }[];
   dailyTrend: 1 | -1 | 0;
   event: {
-    type: "break" | "bounce";
+    type: "break" | "bounce" | "retest";
     direction: "long" | "short";
     kind: "down" | "up";
     touches: number;
@@ -28,7 +29,8 @@ export interface SetForgetSummary {
   side: "long" | "short" | null;
   waiting: string;
   checks: { label: string; met: boolean }[];
-  zones: { low: number; high: number; touches: number; tf: "weekly" | "daily" }[];
+  zones: { low: number; high: number; touches: number; tf: "weekly" | "daily"; active: boolean }[];
+  pullback: number | null;
   setup: { direction: "long" | "short"; entry: number; stopLoss: number; takeProfit: number } | null;
   readAt: number;
 }
@@ -82,7 +84,7 @@ export default function StrategiesPanel({
       <>
         <p className="text-neutral-400">
           Daily trend <span className={tone(trendline.dailyTrend)}>{arrow(trendline.dailyTrend)}</span> —{" "}
-          {trendline.dailyTrend === 0 ? "no side" : `only ${trendline.dailyTrend === 1 ? "buys: a bounce off a rising line, or a break up through a falling one" : "sells: a bounce off a falling line, or a break down through a rising one"}`}.
+          {trendline.dailyTrend === 0 ? "no side" : `only ${trendline.dailyTrend === 1 ? "buys: a bounce off a rising line, or the retest of a falling line broken upwards" : "sells: a bounce off a falling line, or the retest of a rising line broken downwards"}`}.
         </p>
         {trendline.event ? (
           <p className="text-neutral-300">
@@ -96,8 +98,8 @@ export default function StrategiesPanel({
           {trendline.lines.length === 0 && <li>no trendline with a week of data yet</li>}
           {trendline.lines.map((l, k) => (
             <li key={k} className="flex justify-between">
-              <span>
-                {l.kind === "up" ? "rising" : "falling"} line · {l.touches} touches
+              <span className={l.broken ? "text-violet-300" : ""}>
+                {l.broken ? `broken ${l.broken === "long" ? "upwards" : "downwards"} — retest is a ${l.broken === "long" ? "buy" : "sell"}` : `${l.kind === "up" ? "rising" : "falling"} line · ${l.touches} touches`}
               </span>
               <span>{px(l.now)}</span>
             </li>

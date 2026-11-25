@@ -5,10 +5,11 @@ import type { Candle } from "@/lib/types";
 /**
  * The trendline strategy, replayed. A setup is read on a CLOSED 1-hour candle
  * and filled at the open of the 15-minute candle that follows it. The trade is
- * then followed on 15-minute candles: the stop first (a candle that touches
- * both counts as the stop; a gap through it fills at the candle's open), then
- * the target, then the five-day limit. Nothing is moved in between. The full
- * spread plus slippage is charged once.
+ * then followed on 15-minute candles exactly as the live system settles it:
+ * the stop first (a candle that touches both counts as the stop; a gap
+ * through it fills at the candle's open), then the target, then the profit
+ * lock, which moves the stop for the candles that follow, then the five-day
+ * limit. The full spread plus slippage is charged once.
  */
 export interface TlTrade {
   direction: "long" | "short";
@@ -23,7 +24,8 @@ export interface TlTrade {
   rAchieved: number;
   /** 15-minute candles held */
   bars: number;
-  outcome: "target" | "stop" | "time" | "open";
+  /** stop = the first stop · lock = the stop after the profit lock moved it */
+  outcome: "target" | "stop" | "lock" | "time" | "open";
 }
 
 /** Every setup from `from` on, each followed on its own — whether or not another trade was open. */
@@ -41,12 +43,13 @@ export function tlCandidates(opts: { pair: string; m15: Candle[]; h1: Candle[]; 
     const dir = setup.direction === "long" ? 1 : -1;
     let exitPrice = NaN;
     let outcome: TlTrade["outcome"] = "open";
+    let stop = setup.stopLoss;
     let k = e;
     for (; k < m15.length; k++) {
       const c = m15[k];
-      if (dir === 1 ? c.low <= setup.stopLoss : c.high >= setup.stopLoss) {
-        exitPrice = dir === 1 ? Math.min(setup.stopLoss, c.open) : Math.max(setup.stopLoss, c.open);
-        outcome = "stop";
+      if (dir === 1 ? c.low <= stop : c.high >= stop) {
+        exitPrice = dir === 1 ? Math.min(stop, c.open) : Math.max(stop, c.open);
+        outcome = stop === setup.stopLoss ? "stop" : "lock";
         break;
       }
       if (dir === 1 ? c.high >= setup.takeProfit : c.low <= setup.takeProfit) {
@@ -54,6 +57,7 @@ export function tlCandidates(opts: { pair: string; m15: Candle[]; h1: Candle[]; 
         outcome = "target";
         break;
       }
+      if (dir === 1 ? c.high >= setup.lockTrigger : c.low <= setup.lockTrigger) stop = setup.lockStop;
       if (k - e + 1 >= TL_MAX_HOLD_BARS) {
         exitPrice = c.close;
         outcome = "time";

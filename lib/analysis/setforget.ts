@@ -1,6 +1,7 @@
 import type { Candle, SignalDirection } from "@/lib/types";
 import { tradeCost } from "./instruments";
 import { readStructure, swingPoints, wilderAtr, type Structure, type SwingPoint } from "./structure";
+import { wilderAdx } from "./trend";
 
 /**
  * Set and Forget, the swing method Alex Gonzalez (fxalexg, Swing Trading Lab)
@@ -73,6 +74,10 @@ export interface SfOptions {
   targetMaxR: number;
   /** no trade when the spread and slippage are more than this share of the risk */
   maxCostShare: number;
+  /** no trade with the daily ADX at or above this (Infinity = no limit) */
+  maxDailyAdx: number;
+  /** no trade on an entry candle that closes in these hours, UTC [from, to) — or null */
+  quietHoursUtc: readonly [number, number] | null;
 }
 
 export const SF_DEFAULTS: SfOptions = {
@@ -93,6 +98,8 @@ export const SF_DEFAULTS: SfOptions = {
   targetR: 2,
   targetMaxR: 4,
   maxCostShare: 0.1,
+  maxDailyAdx: Infinity,
+  quietHoursUtc: null,
 };
 
 /** An area of interest: a band price has turned at several times. */
@@ -127,6 +134,7 @@ export interface SfSeries {
   dailyIdx: Int32Array;
   daily: Candle[];
   dailyAtr: Float64Array;
+  dailyAdx: Float64Array;
   dailySwings: SwingPoint[];
   weeklySwings: SwingPoint[];
   /** the daily structure points the targets are read from */
@@ -182,6 +190,7 @@ export function buildSfSeries(
     dailyIdx,
     daily,
     dailyAtr: wilderAtr(daily),
+    dailyAdx: wilderAdx(daily),
     dailySwings: swingPoints(daily, opts.swingZoneDaily, DAY),
     weeklySwings: swingPoints(weekly, opts.swingZoneWeekly, WEEK),
     targetSwings: swingPoints(daily, opts.swingTrend, DAY),
@@ -392,6 +401,7 @@ function plan(s: SfSeries, i: number, pair: string, opts: SfOptions, side: 1 | -
 export function sfSetupAt(s: SfSeries, i: number, pair: string, opts: SfOptions = SF_DEFAULTS, entry?: number): SfSetup | null {
   const r = read(s, i, opts, false);
   if (r.side === 0 || !r.engulfing || !r.zone) return null;
+  if (sfExhausted(s, i, opts) || sfQuiet(s, i, opts)) return null;
   const price = entry ?? s.candles[i].close;
   const p = plan(s, i, pair, opts, r.side, r.pullback, price, r.zone, r.zones);
   if ("error" in p) return null;
@@ -412,18 +422,43 @@ export function sfSetupAt(s: SfSeries, i: number, pair: string, opts: SfOptions 
   };
 }
 
+/** The daily ADX at entry candle `i`'s close, from the last closed day. */
+export function sfDailyAdx(s: SfSeries, i: number): number {
+  const d = s.dailyIdx[i];
+  return d >= 0 ? s.dailyAdx[d] : NaN;
+}
+/** True when the daily trend is too stretched for a pullback entry: the daily ADX is at or above the limit. */
+function sfExhausted(s: SfSeries, i: number, opts: SfOptions): boolean {
+  return sfDailyAdx(s, i) >= opts.maxDailyAdx;
+}
+/** True when entry candle `i` closes in the hours no trade is taken. */
+function sfQuiet(s: SfSeries, i: number, opts: SfOptions): boolean {
+  if (!opts.quietHoursUtc) return false;
+  const hour = new Date((s.candles[i].time + s.seconds) * 1000).getUTCHours();
+  return hour >= opts.quietHoursUtc[0] && hour < opts.quietHoursUtc[1];
+}
+
 /** How a signal of these rules is keyed in the database (`variant`). */
 export const SF_KEY_PREFIX = "sf:" as const;
 
 /**
- * The version that sends signals: exactly as taught (weekly, daily and 4-hour
- * agree; an area of interest; a shift of structure and an engulfing candle;
- * the stop beyond the pullback; 1:2), with the 4-hour chart as the entry
- * chart. On five years of gold the 30-minute and 1-hour entries lost money;
- * the 4-hour entry did not.
+ * The version that sends signals: as taught (weekly, daily and 4-hour agree;
+ * an area of interest; a shift of structure and an engulfing candle; the stop
+ * beyond the pullback; 1:2), with the 4-hour chart as the entry chart. On
+ * five years of gold the 30-minute and 1-hour entries lost money; the 4-hour
+ * entry did not.
+ *
+ * Two things the losing trades had in common, on the 4-hour, 2-hour and
+ * 1-hour entry charts alike (66 trades), are left out:
+ *  - the daily ADX at 30 or more — the trend was already stretched (1 of 11
+ *    such trades won);
+ *  - an entry candle that closed between 00:00 and 07:00 UTC, in the Asian
+ *    session (3 of 20 won).
  */
 export const SF_LIVE_ENTRY: SfEntryTf = "H4";
-export const SF_LIVE: SfOptions = SF_DEFAULTS;
+export const SF_MAX_DAILY_ADX = 30;
+export const SF_QUIET_HOURS_UTC = [0, 7] as const;
+export const SF_LIVE: SfOptions = { ...SF_DEFAULTS, maxDailyAdx: SF_MAX_DAILY_ADX, quietHoursUtc: SF_QUIET_HOURS_UTC };
 /** Closed candles a scan reads: three years of daily and weekly candles for the areas, and enough of each for its structure to be the real one. */
 export const SF_HISTORY = { h4: 2500, daily: 1500, weekly: 400 } as const;
 
@@ -483,16 +518,22 @@ export function sfStateAt(s: SfSeries, i: number, pair: string, opts: SfOptions 
     { label: "Price has pulled back into an area of interest (3 or more touches)", met: r.side !== 0 && atZone },
     { label: `The ${tfLabel} chart has shifted structure back with the trend`, met: r.side !== 0 && atZone && r.shifted },
     { label: "An engulfing candle confirms it", met: r.side !== 0 && atZone && r.shifted && r.engulfing },
+    ...(Number.isFinite(opts.maxDailyAdx) ? [{ label: `The daily trend is not stretched: the daily ADX has to be under ${opts.maxDailyAdx} (now ${Number.isFinite(sfDailyAdx(s, i)) ? sfDailyAdx(s, i).toFixed(0) : "—"})`, met: !sfExhausted(s, i, opts) }] : []),
+    ...(opts.quietHoursUtc ? [{ label: `Not a candle closing in the Asian session (${opts.quietHoursUtc[0]}:00–${opts.quietHoursUtc[1]}:00 UTC)`, met: !sfQuiet(s, i, opts) }] : []),
     { label: `The stop is not too close for the spread, and the target is at least 1:${opts.targetR}`, met: setup !== null },
   ];
   let waiting: string;
   if (r.side === 0) waiting = "The weekly, daily and 4-hour charts do not agree on a direction, so there is no trade to wait for.";
   else if (setup) waiting = `Entry: ${sideWord} now.`;
   else if (planned && "error" in planned) waiting = `The signal came, but ${planned.error}.`;
+  else if (planned && sfExhausted(s, i, opts)) waiting = `The signal came, but the daily trend is stretched (ADX ${sfDailyAdx(s, i).toFixed(0)}, limit ${opts.maxDailyAdx}) — no trade.`;
+  else if (planned && sfQuiet(s, i, opts)) waiting = "The signal came on a candle that closed in the Asian session — no trade.";
   else if (r.shifted && atZone) waiting = `The ${tfLabel} chart has shifted ${word(r.side)} at the area — waiting for an engulfing candle to ${sideWord}.`;
   else if (pulling && atZone) waiting = `Price is at an area of interest — waiting for the ${tfLabel} chart to shift structure ${word(r.side)}.`;
   else if (pulling) waiting = `Price is pulling back — waiting for it to reach an area of interest.`;
   else waiting = `The trend is ${word(r.side)} — waiting for a pullback into an area of interest to ${sideWord}.`;
+  // said before the signal comes, not only when it is refused
+  if (r.side !== 0 && !setup && !planned && sfExhausted(s, i, opts)) waiting += ` No trade would be taken now: the daily ADX is ${sfDailyAdx(s, i).toFixed(0)} (limit ${opts.maxDailyAdx}) — the trend is stretched.`;
   return {
     weekly,
     daily,

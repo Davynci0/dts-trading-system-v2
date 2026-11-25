@@ -30,9 +30,9 @@ the strategy, the backtest and the reports, until the owner says otherwise.
 
 Rules 2 to 7 were written for the trend scalp and it meets them. The owner asked for Set and
 Forget and the trendline strategy by name on 25 November 2026; both are run as their methods are
-taught (rule 8), which means they hold trades for longer than five hours and win fewer than 60%
-of them — the README says by how much. Report their results next to the trend scalp's, never
-blended in a way that hides this.
+taught (rule 8), which means they hold trades for longer than five hours, and the trendline
+strategy wins fewer than 60% of its trades on its own (54%) — the three together win 65%. Report
+each strategy's results next to the others', never blended in a way that hides this.
 
 ## How results are tested and reported
 

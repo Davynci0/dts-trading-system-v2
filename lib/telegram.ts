@@ -102,11 +102,11 @@ export async function sendTrendSignal(opts: {
 }
 
 /** The profit lock has been reached: the stop of the open trade is to be moved into profit. */
-export async function sendStopMoved(opts: { pair: string; direction: "long" | "short"; entry: number; stop: number; takeProfit: number; lockedR: number }): Promise<void> {
+export async function sendStopMoved(opts: { strategy: StrategyId; pair: string; direction: "long" | "short"; entry: number; stop: number; takeProfit: number; lockedR: number }): Promise<void> {
   const px = (n: number) => n.toFixed(2);
   await sendTelegramMessage(
     [
-      `🔒 *MOVE YOUR STOP: ${pairLabel(opts.pair)} ${opts.direction === "long" ? "BUY" : "SELL"}* from \`${px(opts.entry)}\``,
+      `🔒 *MOVE YOUR STOP: ${pairLabel(opts.pair)} ${opts.direction === "long" ? "BUY" : "SELL"}* from \`${px(opts.entry)}\` — ${STRATEGIES[opts.strategy].name}`,
       `*New stop loss:* \`${px(opts.stop)}\` — ${px(Math.abs(opts.stop - opts.entry))} in profit (+${opts.lockedR}R)`,
       `Take profit stays at \`${px(opts.takeProfit)}\`.`,
       `If price is already back beyond the new stop, close the trade at market.`,
@@ -134,6 +134,8 @@ export async function sendStrategySignal(opts: {
   stopWhy: string;
   /** how the trade is managed once it is open */
   manage: string;
+  /** the profit lock, for a strategy that has one: when price reaches `trigger`, the stop is moved to `stop` */
+  lock?: { trigger: number; stop: number; atR: number; toR: number };
   accountBalance: number;
   riskPct: number;
 }): Promise<void> {
@@ -147,6 +149,7 @@ export async function sendStrategySignal(opts: {
       `*Entry:* \`${px(opts.entry)}\` (at market)`,
       `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(risk)} away, ${opts.stopWhy}`,
       `*Take profit:* \`${px(opts.takeProfit)}\` — ${px(reward)} away (1:${opts.targetR})`,
+      ...(opts.lock ? [`*Profit lock:* when price reaches \`${px(opts.lock.trigger)}\` (+${opts.lock.atR}R), move the stop to \`${px(opts.lock.stop)}\` (+${opts.lock.toR}R). You will get a message when it does.`] : []),
       `Entry: ${opts.why}`,
       sizeLine(risk, opts.accountBalance, opts.riskPct),
       opts.manage,

@@ -48,9 +48,10 @@ import {
 } from "../lib/analysis/trend";
 import { tradeCost } from "../lib/analysis/instruments";
 import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES } from "../lib/backtest/trend";
-import { followTrade, LIVE_LOCK, settleSignal } from "../lib/engine/outcomes";
+import { followTrade, LIVE_LOCK, settleSignal, TL_LOCK } from "../lib/engine/outcomes";
 import { lastEntryOf, scanLogKey, sendBlock, strategyBlock, type EarlierSignal, type StoredSignal } from "../lib/engine/scanner";
-import { readTrendlines, shownLines, tlDailyTrend, tlSetup, TL_HISTORY, TL_MAX_HOLD_BARS, TL_MAX_RISK_ATR, TL_MIN_RISK_ATR, TL_OPTIONS, TL_TARGET_R } from "../lib/analysis/trendline";
+import { readTrendlines, shownLines, tlDailyTrend, tlSetup, TL_ADX_MAX, TL_HISTORY, TL_LOCK_AT_R, TL_LOCK_TO_R, TL_MAX_HOLD_BARS, TL_MAX_RISK_ATR, TL_MAX_SLOPE_ATR, TL_MIN_CLOSE_ATR, TL_MIN_RISK_ATR, TL_OPTIONS, TL_TARGET_R } from "../lib/analysis/trendline";
+import { buildSfSeries, sfDailyAdx, sfSetupAt, SF_DEFAULTS, SF_LIVE, SF_MAX_DAILY_ADX, SF_QUIET_HOURS_UTC } from "../lib/analysis/setforget";
 import { runTlBacktest, tlCandidates } from "../lib/backtest/trendline";
 import { combineStrategies, conflictBlock, contradict, type StrategyTrade } from "../lib/strategies";
 import { isLiveSignal, STRATEGY_IDS, strategyOf, TREND_STRATEGY, type Candle } from "../lib/types";
@@ -227,9 +228,10 @@ console.log("\nrules, on the generated market");
   const kinds = (t: string) => setups.filter((x) => x.s.setup!.trigger === t).length;
   check(
     "the market produces every kind of signal (the checks below are not empty)",
-    kinds("break of structure") >= 20 && kinds("breakout") >= 5 && kinds("momentum candle") >= 20 && setups.some((x) => x.s.setup!.direction === "long") && setups.some((x) => x.s.setup!.direction === "short"),
+    kinds("break of structure") >= 20 && kinds("breakout and momentum candle") >= 5 && kinds("momentum candle") >= 20 && setups.some((x) => x.s.setup!.direction === "long") && setups.some((x) => x.s.setup!.direction === "short"),
     `${setups.length} setups: structure ${kinds("break of structure")}, breakout ${kinds("breakout")}, momentum ${kinds("momentum candle")}, both ${kinds("breakout and momentum candle")}`
   );
+  check("a breakout on an ordinary candle is not an entry: every breakout traded is a momentum candle too", kinds("breakout") === 0);
   const ok = (f: (x: (typeof setups)[number], dir: number) => boolean) => setups.every((x) => f(x, x.s.setup!.direction === "long" ? 1 : -1));
   check("a signal is always with the daily trend", ok((x, d) => series.dailyTrend[x.i] === d));
   check("…and with the 1-hour structure", ok((x, d) => series.h1Trend[x.i] === d));
@@ -521,12 +523,25 @@ console.log("\ntrendline strategy");
       }),
     `${bounces.length} bounces`
   );
+  const retests = stream.events.filter((e) => e.type === "retest");
+  check(
+    "a retest is a candle that comes back to a broken line from the other side and closes away from it, in the break's direction",
+    retests.length > 0 &&
+      retests.every((e) => {
+        const c = h1[e.index];
+        const v = value(e);
+        const up = e.line.kind === "down";
+        return (up ? e.direction === "long" && c.close > c.open && c.close >= v : e.direction === "short" && c.close < c.open && c.close <= v) && e.touches >= o.breakTouches && stream.events.some((x) => x.type === "break" && x.line === e.line && x.index < e.index && e.index - x.index <= o.retestBars);
+      }),
+    `${retests.length} retests`
+  );
+  check("a line's touches are counted at the moment of the setup, never afterwards", stream.events.every((e) => e.touches <= e.line.touches) && stream.events.some((e) => e.touches < e.line.touches));
   // what a scan sees — the last TL_HISTORY candles — is what the replay saw at that candle
   let same = 0;
   let sampled = 0;
   for (let i = TL_HISTORY + 50; i < h1.length; i += 7) {
-    const live = readTrendlines(h1.slice(i + 1 - TL_HISTORY, i + 1), o).events[0]?.key ?? null;
-    const replay = stream.events.find((e) => e.index === i)?.key ?? null;
+    const live = readTrendlines(h1.slice(i + 1 - TL_HISTORY, i + 1), o).events.map((e) => e.key).join("|");
+    const replay = stream.events.filter((e) => e.index === i).map((e) => e.key).join("|");
     sampled++;
     if (live === replay) same++;
   }
@@ -542,10 +557,49 @@ console.log("\ntrendline strategy");
       return dir * (t.entry - t.stopLoss) > 0 && t.risk >= TL_MIN_RISK_ATR * t.atr - 1e-9 && t.risk <= TL_MAX_RISK_ATR * t.atr + 1e-9 && near(dir * (t.takeProfit - t.entry), TL_TARGET_R * t.risk, 1e-6);
     })
   );
+  check("a break is never entered on the break candle — the retest is the entry", breaks.every((e) => tlSetup(e, h1[e.index], e.direction === "long" ? 1 : -1).setup == null) && made.every((t) => t.type === "bounce" || t.type === "retest") && made.some((t) => t.type === "retest"));
+  const madeFrom = plans.filter((x) => x.withTrend).map((x) => ({ e: x.e, t: x.withTrend! }));
+  check(
+    `no trendline trade on a line steeper than ${TL_MAX_SLOPE_ATR} ATR a candle, with the 1-hour ADX at ${TL_ADX_MAX} or more, or on a bounce that closed less than ${TL_MIN_CLOSE_ATR} ATR off the line`,
+    madeFrom.every(({ e, t }) => Math.abs(e.line.slope) / e.atr <= TL_MAX_SLOPE_ATR && e.adx < TL_ADX_MAX && (e.type !== "bounce" || ((t.direction === "long" ? 1 : -1) * (h1[e.index].close - value(e))) / e.atr >= TL_MIN_CLOSE_ATR)) &&
+      plans.some((x) => x.e.type !== "break" && !x.withTrend && (Math.abs(x.e.line.slope) / x.e.atr > TL_MAX_SLOPE_ATR || x.e.adx >= TL_ADX_MAX))
+  );
+  check(`its profit lock moves the stop to +${TL_LOCK_TO_R}R once price has gone +${TL_LOCK_AT_R}R`, made.every((t) => { const dir = t.direction === "long" ? 1 : -1; return near(dir * (t.lockTrigger - t.entry), TL_LOCK_AT_R * t.risk, 1e-6) && near(dir * (t.lockStop - t.entry), TL_LOCK_TO_R * t.risk, 1e-6); }));
   const signals = tlCandidates({ pair: "XAU_USD", m15, h1, daily });
   const taken = runTlBacktest({ pair: "XAU_USD", m15, h1, daily });
   check("the trendline backtest holds one trade at a time", taken.length > 0 && taken.every((t, k) => k === 0 || t.entryTime >= taken[k - 1].exitTime) && taken.length <= signals.length, `${taken.length} of ${signals.length} signals`);
-  check("a trendline trade ends at its stop, its target or the five-day limit, and never makes more than its target", taken.every((t) => t.rAchieved <= TL_TARGET_R && t.bars <= TL_MAX_HOLD_BARS && (t.outcome !== "time" || t.bars === TL_MAX_HOLD_BARS)));
+  check("a trendline trade ends at its stop, its moved stop, its target or the five-day limit, and never makes more than its target", taken.every((t) => t.rAchieved <= TL_TARGET_R && t.bars <= TL_MAX_HOLD_BARS && (t.outcome !== "time" || t.bars === TL_MAX_HOLD_BARS)));
+  const locked = taken.filter((t) => t.outcome === "lock");
+  check(
+    "a trendline trade closed at its moved stop ends in profit, and one closed at its first stop loses about 1R",
+    locked.length > 0 &&
+      locked.every((t) => {
+        const lockStop = t.entry + (t.direction === "long" ? 1 : -1) * TL_LOCK_TO_R * Math.abs(t.entry - t.stopLoss);
+        // filled at the moved stop: a small gain after costs; a gap through it fills at the open, for less
+        return t.rAchieved <= TL_LOCK_TO_R && (!near(t.exitPrice, lockStop) || t.rAchieved > 0);
+      }) &&
+      taken.filter((t) => t.outcome === "stop").every((t) => t.rAchieved <= -1),
+    `${locked.length} locked`
+  );
+}
+
+// ───────────── Set and Forget's two filters ─────────────
+console.log("\nSet and Forget");
+{
+  const h4 = aggregate(m15, 4 * H1, M15);
+  const weekly = aggregate(m15, 7 * DAY, M15, WEEK_OPEN % (7 * DAY));
+  const series = buildSfSeries({ entry: h4, h4, daily, weekly, entrySeconds: 4 * H1 }, SF_LIVE);
+  let plain = 0, live = 0, ok = true;
+  for (let i = 2; i < series.n; i++) {
+    const a = sfSetupAt(series, i, "XAU_USD", SF_DEFAULTS);
+    const b = sfSetupAt(series, i, "XAU_USD", SF_LIVE);
+    if (a) plain++;
+    if (!b) continue;
+    live++;
+    const hour = new Date((h4[i].time + 4 * H1) * 1000).getUTCHours();
+    if (!a || !(sfDailyAdx(series, i) < SF_MAX_DAILY_ADX) || (hour >= SF_QUIET_HOURS_UTC[0] && hour < SF_QUIET_HOURS_UTC[1])) ok = false;
+  }
+  check(`Set and Forget takes no trade with the daily ADX at ${SF_MAX_DAILY_ADX} or more, or on a candle closing ${SF_QUIET_HOURS_UTC[0]}:00–${SF_QUIET_HOURS_UTC[1]}:00 UTC, and adds none of its own`, ok && live <= plain, `${live} of ${plain} setups kept`);
 }
 
 // ───────────── the three strategies together ─────────────
@@ -704,6 +758,8 @@ console.log("\nsettlement of the other two strategies");
   const quiet = Array.from({ length: TL_MAX_HOLD_BARS + 50 }, (_, k) => flat(k));
   const tlEnd = settleSignal(buy, quiet, TL_MAX_HOLD_BARS);
   check("a trendline trade that reaches neither level is closed at market after five trading days, its stop never moved", tlEnd?.outcome === "expired" && tlEnd.hitTime === (TL_MAX_HOLD_BARS - 1) * 900 && near(tlEnd.r, 0.1) && followTrade(buy, [{ time: 0, open: 100, high: 110, low: 99, close: 109 }], { maxHoldBars: TL_MAX_HOLD_BARS, lock: null }).stop === 90);
+  const tlRun = followTrade(buy, [{ time: 0, open: 100, high: 110, low: 99, close: 109 }, { time: 900, open: 109, high: 109, low: 102, close: 103 }], { maxHoldBars: TL_MAX_HOLD_BARS, lock: TL_LOCK });
+  check(`a trendline trade that has gone +${TL_LOCK_AT_R}R and comes back closes at +${TL_LOCK_TO_R}R, in profit`, tlRun.settlement?.outcome === "win" && near(tlRun.settlement.r, TL_LOCK_TO_R) && near(tlRun.stop, 100 + TL_LOCK_TO_R * 10));
   check("a Set and Forget trade is never closed by time: only its stop or its target ends it", settleSignal(buy, quiet, Infinity) === null && settleSignal(buy, [...quiet, { time: quiet.length * 900, open: 100, high: 131, low: 99, close: 130 }], Infinity)?.outcome === "win" && settleSignal(buy, [...quiet, { time: quiet.length * 900, open: 100, high: 101, low: 89, close: 90 }], Infinity)?.outcome === "loss");
 }
 

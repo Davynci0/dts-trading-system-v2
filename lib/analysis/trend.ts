@@ -16,10 +16,14 @@ import { tradeCost } from "./instruments";
  *      break of structure   in a downtrend price comes back up, makes a lower
  *                           high, and then closes below the last swing low —
  *                           the pullback is over and the trend continues
- *      breakout             the first close beyond the high/low of the
- *                           previous 12, 24, 48 or 96 candles (3 to 24 hours)
  *      momentum candle      a candle at least 1.2 ATR long that closes in the
  *                           outer quarter of its range
+ *      breakout             a momentum candle that is also the first close
+ *                           beyond the high/low of the previous 12, 24, 48 or
+ *                           96 candles (3 to 24 hours). A breakout on an
+ *                           ordinary candle is NOT an entry: those 120 trades
+ *                           lost money in both halves of the five-year test,
+ *                           while breakouts on a momentum candle won 79%
  *  - THE STOP IS SET BY THE PRICE ACTION, not by a fixed distance: just beyond
  *    the high of the last two candles for a sell — the small pullback the
  *    trade is leaving behind — and the low of the last two for a buy. It is
@@ -369,7 +373,7 @@ function wilderAtr(candles: Candle[]): Float64Array {
 }
 
 /** Wilder's ADX, 14 periods. */
-function wilderAdx(candles: Candle[]): Float64Array {
+export function wilderAdx(candles: Candle[]): Float64Array {
   const n = candles.length;
   const out = new Float64Array(n).fill(NaN);
   const P = PERIOD;
@@ -670,11 +674,10 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
         : null
       : breakoutBars != null && momentum
         ? "breakout and momentum candle"
-        : breakoutBars != null
-          ? "breakout"
-          : momentum
-            ? "momentum candle"
-            : null;
+        : momentum
+          ? "momentum candle"
+          : // a close beyond a channel on an ordinary candle is too weak a breakout to trade
+            null;
 
   // the levels the next candle has to close beyond: the swing a break of structure needs, and each channel with this candle counted in
   const levels: TrendState["levels"] = [];
@@ -784,7 +787,7 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
       met: sdAhead == null,
     },
     {
-      label: `Entry: a 15-minute close ${dir === 1 ? "above" : "below"} the last swing ${dir === 1 ? "high" : "low"} or the ${dir === 1 ? "high" : "low"} of the last ${TREND_BREAKOUT_BARS.map(hours).join(", ")} hours, or a ${dir === 1 ? "rising" : "falling"} candle of ${TREND_MOMENTUM_ATR} ATR or more`,
+      label: `Entry: a 15-minute close ${dir === 1 ? "above" : "below"} the last swing ${dir === 1 ? "high" : "low"}, or a ${dir === 1 ? "rising" : "falling"} candle of ${TREND_MOMENTUM_ATR} ATR or more (a close beyond the ${dir === 1 ? "high" : "low"} of the last ${TREND_BREAKOUT_BARS.map(hours).join(", ")} hours only counts on such a candle)`,
       met: trigger != null && plan != null,
     },
   ];

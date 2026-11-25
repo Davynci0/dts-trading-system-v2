@@ -23,7 +23,7 @@ import {
 } from "@/lib/analysis/trend";
 import { scoreOpenSignals } from "@/lib/engine/outcomes";
 import { sendStrategySignal, sendTrendSignal } from "@/lib/telegram";
-import { readTrendlines, tlDailyTrend, tlSetup, TL_HISTORY, TL_MAX_HOLD_BARS, TL_MIN_RISK_ATR, TL_OPTIONS, TL_SECONDS, TL_TARGET_R, TL_TIMEFRAME } from "@/lib/analysis/trendline";
+import { readTrendlines, tlDailyTrend, tlSetup, TL_HISTORY, TL_LOCK_AT_R, TL_LOCK_TO_R, TL_MAX_HOLD_BARS, TL_MIN_RISK_ATR, TL_OPTIONS, TL_SECONDS, TL_TARGET_R, TL_TIMEFRAME } from "@/lib/analysis/trendline";
 import { buildSfSeries, sfSetupAt, SF_ENTRY_SECONDS, SF_HISTORY, SF_LIVE, SF_LIVE_ENTRY } from "@/lib/analysis/setforget";
 import { createAdminClient } from "@/lib/supabase/admin";
 
@@ -413,47 +413,58 @@ export async function runScan(opts: {
       if (ENABLED_STRATEGIES.includes("trendline") && lastH1 && priceNow != null && sinceClose(lastH1.time, TL_SECONDS) <= MAX_ENTRY_AGE_MIN * 60) {
         const h1 = closedBy(await fetchCandles({ instrument: pair, granularity: TL_TIMEFRAME, count: TL_HISTORY, to }), TL_SECONDS);
         const n = h1.length;
-        const ev = readTrendlines(h1, TL_OPTIONS).events[0];
         // only the candle that has just closed: an older one was read by its own scan
-        if (ev && ev.index === n - 1 && (now / 1000 - ev.time) / 60 <= MAX_ENTRY_AGE_MIN) {
-          const { setup, reason } = tlSetup(ev, h1[n - 1], tlDailyTrend(data.daily, ev.time), priceNow, pair);
-          const lineName = `${ev.line.touches}-touch ${ev.line.kind === "up" ? "rising" : "falling"} trendline`;
-          if (!setup) push("watching", `${ev.type} of a ${lineName}: no trade — ${reason}`, "trendline");
-          else {
-            const up = setup.direction === "long";
-            const why =
-              setup.type === "bounce"
-                ? `a 1-hour candle came back to a ${lineName} (at ${px(setup.line.value)}) and closed ${up ? "up" : "down"}, away from it — with the daily trend`
-                : `a full-bodied 1-hour candle closed ${up ? "above" : "below"} a ${lineName} (at ${px(setup.line.value)}) — the pullback against the daily trend is over`;
-            const stopWhy =
-              setup.stopBasis === "safety line"
-                ? `beyond the safety line (the ${up ? "rising" : "falling"} trendline on the other side)`
-                : setup.stopBasis === "line"
-                  ? "just beyond the trendline"
-                  : setup.stopBasis === "signal candle"
-                    ? `beyond the ${up ? "low" : "high"} of the signal candle — no safety line can be drawn`
-                    : `${TL_MIN_RISK_ATR} ATR away — the line is closer than that`;
-            const days = (TL_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS) / 86_400;
-            const manage = `Set and leave: the stop is not moved. Close at market if neither level is hit within ${days} trading days.`;
-            candidates.push({
-              strategy: "trendline",
-              signal: { key: setup.key, direction: setup.direction, time: setup.time, entry: setup.entry },
-              late: false,
-              row: {
+        const found = (now / 1000 - (h1[n - 1].time + TL_SECONDS)) / 60 <= MAX_ENTRY_AGE_MIN ? readTrendlines(h1, TL_OPTIONS).events.filter((ev) => ev.index === n - 1) : [];
+        const trend = found.length > 0 ? tlDailyTrend(data.daily, found[0].time) : 0;
+        const plans = found.map((ev) => ({ ev, ...tlSetup(ev, h1[n - 1], trend, priceNow, pair) }));
+        const lineOf = (ev: (typeof found)[number]) => `${ev.touches}-touch ${ev.line.kind === "up" ? "rising" : "falling"} trendline`;
+        const taken = plans.find((x) => x.setup);
+        // a candle can make more than one setup; the first that gives a trade is the trade
+        for (const x of plans) if (x !== taken && !(taken && x.ev.type === "break")) push("watching", `${x.ev.type} of a ${lineOf(x.ev)}: no trade — ${x.setup ? "another setup of this candle is traded" : x.reason}`, "trendline");
+        if (taken?.setup) {
+          const setup = taken.setup;
+          const lineName = lineOf(taken.ev);
+          const up = setup.direction === "long";
+          const why =
+            setup.type === "bounce"
+              ? `a 1-hour candle came back to a ${lineName} (at ${px(setup.line.value)}) and closed ${up ? "up" : "down"}, away from it — with the daily trend`
+              : `price broke ${up ? "above" : "below"} a ${lineName}, came back to it (at ${px(setup.line.value)}) and closed ${up ? "up" : "down"} off it — the broken line held, with the daily trend`;
+          const stopWhy = setup.stopBasis === "line" ? "just beyond the trendline" : `${TL_MIN_RISK_ATR} ATR away — the line is closer than that`;
+          const days = (TL_MAX_HOLD_BARS * EXECUTION_BAR_SECONDS) / 86_400;
+          const manage = `Close at market if neither level is hit within ${days} trading days.`;
+          candidates.push({
+            strategy: "trendline",
+            signal: { key: setup.key, direction: setup.direction, time: setup.time, entry: setup.entry },
+            late: false,
+            row: {
+              entry: setup.entry,
+              stop_loss: setup.stopLoss,
+              take_profit: setup.takeProfit,
+              r_multiple: TL_TARGET_R,
+              sl_basis: stopWhy,
+              tp_basis: `${TL_TARGET_R} × the risk; the stop moves to +${TL_LOCK_TO_R}R once price reaches +${TL_LOCK_AT_R}R (${px(setup.lockTrigger)}); closed at market after ${days} trading days if neither is hit`,
+              confidence: 5,
+              confirmations: { [`Trendline ${setup.type}`]: true, "With the daily trend": true, "Line not too steep": true, "1-hour ADX under 40": true, "Stop within the limits": true },
+            },
+            describe: `${up ? "buy" : "sell"} at ${px(setup.entry)}, stop ${px(setup.stopLoss)}, target ${px(setup.takeProfit)} (${TL_TARGET_R}R) — trendline ${setup.type}`,
+            announce: () =>
+              sendStrategySignal({
+                strategy: "trendline",
+                headline: setup.type === "bounce" ? "1-hour trendline bounce" : "1-hour break and retest",
+                pair,
+                direction: setup.direction,
                 entry: setup.entry,
-                stop_loss: setup.stopLoss,
-                take_profit: setup.takeProfit,
-                r_multiple: TL_TARGET_R,
-                sl_basis: stopWhy,
-                tp_basis: `${TL_TARGET_R} × the risk; the stop is not moved; closed at market after ${days} trading days if neither is hit`,
-                confidence: 3,
-                confirmations: { [`Trendline ${setup.type}`]: true, "With the daily trend": true, "Stop within the limits": true },
-              },
-              describe: `${up ? "buy" : "sell"} at ${px(setup.entry)}, stop ${px(setup.stopLoss)}, target ${px(setup.takeProfit)} (${TL_TARGET_R}R) — trendline ${setup.type}`,
-              announce: () =>
-                sendStrategySignal({ strategy: "trendline", headline: `1-hour trendline ${setup.type}`, pair, direction: setup.direction, entry: setup.entry, stopLoss: setup.stopLoss, takeProfit: setup.takeProfit, targetR: TL_TARGET_R, why, stopWhy, manage, accountBalance, riskPct: RISK_PCT }),
-            });
-          }
+                stopLoss: setup.stopLoss,
+                takeProfit: setup.takeProfit,
+                targetR: TL_TARGET_R,
+                why,
+                stopWhy,
+                manage,
+                lock: { trigger: setup.lockTrigger, stop: setup.lockStop, atR: TL_LOCK_AT_R, toR: TL_LOCK_TO_R },
+                accountBalance,
+                riskPct: RISK_PCT,
+              }),
+          });
         }
       }
     } catch (e) {
