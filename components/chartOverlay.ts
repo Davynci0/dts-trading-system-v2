@@ -161,7 +161,8 @@ class OverlayPaneView implements IPrimitivePaneView {
             const half = q.bars > 1 ? (xb - xa) / (q.bars - 1) / 2 : 3;
             ctx.fillStyle = rgba(C.muted, 0.09);
             ctx.fillRect(xa - half, 0, xb - xa + 2 * half, mediaSize.height);
-            if (xb - xa > 60) tag(q.label, xa - half + 4, 12, C.muted, "left", 8, { small: true, dim: true });
+            // only where the band starts inside the view — a label pushed in from off-screen would pile up at the edge
+            if (xb - xa > 60 && xa - half >= 0 && xa < W) tag(q.label, xa - half + 4, 12, C.muted, "left", 8, { small: true, dim: true });
           }
 
           // ── yesterday's high and low ─────────────────────────────────────
