@@ -25,6 +25,8 @@ export interface OverlayData {
     pullbackOnly?: boolean;
     /** the high (sell) / low (buy) of the last two candles: a new trade's stop goes just beyond it */
     stopSwing?: number | null;
+    /** the candle an entry is read on, as the tag names it (default "15-min") */
+    candleName?: string;
   } | null;
   /** support/resistance zones: bands where several 1-hour swing highs/lows sit */
   zones?: { low: number; high: number; touches: number }[];
@@ -298,7 +300,7 @@ class OverlayPaneView implements IPrimitivePaneView {
               const y = Y(price);
               if (y != null) {
                 line(0, W, y, C.trend, 0.7, 1, [8, 4]);
-                tag(`${side(t.direction)} if a 15-min candle closes ${up ? "above" : "below"} ${fmt(price)}`, 8, y + (up ? -3 : 13), C.trend, "left", 3, { small: true });
+                tag(`${side(t.direction)} if a ${t.candleName ?? "15-min"} candle closes ${up ? "above" : "below"} ${fmt(price)}`, 8, y + (up ? -3 : 13), C.trend, "left", 3, { small: true });
               }
             }
             // the pullback entry: the broken swing price has to come back to, and close back beyond

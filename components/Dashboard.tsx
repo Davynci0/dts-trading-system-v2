@@ -5,6 +5,7 @@ import Chart from "@/components/Chart";
 import SignalFeed from "@/components/SignalFeed";
 import TrendTracker, { type TrendSummary } from "@/components/TrendTracker";
 import AskAIButton from "@/components/AskAIButton";
+import MarketSwitch from "@/components/MarketSwitch";
 import { strategyOf, PAIRS, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
 import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
 
@@ -332,7 +333,7 @@ export default function Dashboard() {
       <div className="flex min-w-0 flex-1 flex-col gap-3">
         {/* toolbar */}
         <div className="flex flex-wrap items-center gap-2">
-          <span className="rounded border border-neutral-700 bg-neutral-900 px-2.5 py-1.5 text-sm font-medium text-neutral-100">{pair.replace("_", "/")}</span>
+          <MarketSwitch active="gold" />
           <div className="flex overflow-hidden rounded border border-neutral-700" role="group" aria-label="Chart timeframe">
             {VIEWS.map((v) => (
               <button

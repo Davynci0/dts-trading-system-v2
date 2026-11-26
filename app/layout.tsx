@@ -32,7 +32,8 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
             DTS <span className="font-normal text-neutral-500">· gold signals</span>
           </span>
           <nav className="flex gap-4 text-sm text-neutral-400">
-            <Link href="/" className="hover:text-neutral-100">Dashboard</Link>
+            <Link href="/" className="hover:text-neutral-100">Gold</Link>
+            <Link href="/btc" className="hover:text-neutral-100">Bitcoin</Link>
             <Link href="/backtests" className="hover:text-neutral-100">Backtests</Link>
             <Link href="/login" className="hover:text-neutral-100">Login</Link>
           </nav>

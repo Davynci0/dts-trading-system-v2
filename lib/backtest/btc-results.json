@@ -1,0 +1,170 @@
+{
+  "pair": "BTC_USD",
+  "end": "2026-11-24",
+  "years": 5,
+  "recentYears": 3,
+  "cost": 45,
+  "all": {
+    "trades": 215,
+    "won": 147,
+    "winRate": 0.6837209302325581,
+    "totalR": 22.792661727325935,
+    "avgR": 0.10601238012709738,
+    "maxDrawdownR": 9.9680697064075,
+    "longestLosingRun": 5,
+    "runsOf3": 5,
+    "runsOf4": 1
+  },
+  "allCostsDoubled": {
+    "trades": 215,
+    "won": 147,
+    "winRate": 0.6837209302325581,
+    "totalR": 16.96626725183353,
+    "avgR": 0.0789128709387606,
+    "maxDrawdownR": 11.335155324173623,
+    "longestLosingRun": 5,
+    "runsOf3": 5,
+    "runsOf4": 1
+  },
+  "recent": {
+    "trades": 164,
+    "won": 118,
+    "winRate": 0.7195121951219512,
+    "totalR": 29.20613841785572,
+    "avgR": 0.1780862098649739,
+    "maxDrawdownR": 7.388055152668619,
+    "longestLosingRun": 5,
+    "runsOf3": 4,
+    "runsOf4": 1
+  },
+  "recentCostsDoubled": {
+    "trades": 164,
+    "won": 118,
+    "winRate": 0.7195121951219512,
+    "totalR": 25.312520483619767,
+    "avgR": 0.1543446370952425,
+    "maxDrawdownR": 7.922863807141862,
+    "longestLosingRun": 5,
+    "runsOf3": 4,
+    "runsOf4": 1
+  },
+  "lastYear": {
+    "trades": 54,
+    "won": 39,
+    "winRate": 0.7222222222222222,
+    "totalR": 8.69482551569547,
+    "avgR": 0.16101528732769388,
+    "maxDrawdownR": 7.134197713691004,
+    "longestLosingRun": 3,
+    "runsOf3": 1,
+    "runsOf4": 0
+  },
+  "byYear": [
+    {
+      "from": "2021-11",
+      "stats": {
+        "trades": 39,
+        "won": 23,
+        "winRate": 0.5897435897435898,
+        "totalR": -4.395108688932327,
+        "avgR": -0.11269509458800837,
+        "maxDrawdownR": 6.956691695522958,
+        "longestLosingRun": 3,
+        "runsOf3": 1,
+        "runsOf4": 0
+      }
+    },
+    {
+      "from": "2022-11",
+      "stats": {
+        "trades": 12,
+        "won": 6,
+        "winRate": 0.5,
+        "totalR": -2.0183680015974486,
+        "avgR": -0.16819733346645405,
+        "maxDrawdownR": 3.3295208300909787,
+        "longestLosingRun": 2,
+        "runsOf3": 0,
+        "runsOf4": 0
+      }
+    },
+    {
+      "from": "2023-11",
+      "stats": {
+        "trades": 54,
+        "won": 37,
+        "winRate": 0.6851851851851852,
+        "totalR": 13.814081258893676,
+        "avgR": 0.25581631960914214,
+        "maxDrawdownR": 3.9708127558468718,
+        "longestLosingRun": 5,
+        "runsOf3": 1,
+        "runsOf4": 1
+      }
+    },
+    {
+      "from": "2024-11",
+      "stats": {
+        "trades": 56,
+        "won": 42,
+        "winRate": 0.75,
+        "totalR": 6.69723164326657,
+        "avgR": 0.11959342220118875,
+        "maxDrawdownR": 3.0595229217277167,
+        "longestLosingRun": 3,
+        "runsOf3": 1,
+        "runsOf4": 0
+      }
+    },
+    {
+      "from": "2025-11",
+      "stats": {
+        "trades": 54,
+        "won": 39,
+        "winRate": 0.7222222222222222,
+        "totalR": 8.69482551569547,
+        "avgR": 0.16101528732769388,
+        "maxDrawdownR": 7.134197713691004,
+        "longestLosingRun": 3,
+        "runsOf3": 1,
+        "runsOf4": 0
+      }
+    }
+  ],
+  "buys": {
+    "trades": 110,
+    "won": 83,
+    "winRate": 0.7545454545454545,
+    "totalR": 18.732850818158212,
+    "avgR": 0.1702986438014383,
+    "maxDrawdownR": 5.114267437379221,
+    "longestLosingRun": 3,
+    "runsOf3": 2,
+    "runsOf4": 0
+  },
+  "sells": {
+    "trades": 105,
+    "won": 64,
+    "winRate": 0.6095238095238096,
+    "totalR": 4.059810909167726,
+    "avgR": 0.038664865801597385,
+    "maxDrawdownR": 9.646991357904096,
+    "longestLosingRun": 5,
+    "runsOf3": 3,
+    "runsOf4": 2
+  },
+  "exits": {
+    "stop": 59,
+    "lock": 117,
+    "target": 18,
+    "time": 21
+  },
+  "averageWin": 0.5975581662646846,
+  "averageLoss": -0.9565939516703346,
+  "medianHours": 10.5,
+  "stop": {
+    "low": 938.462044981512,
+    "high": 4154.522358662172,
+    "median": 2041.4535817762662
+  }
+}
