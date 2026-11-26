@@ -536,6 +536,35 @@ forex pairs fell to 24% to 57% on the years after.
   11.3R) — and is behind on the last month (+2.1R against +4.8R, 7 trades) and week. Shown
   both, the owner chose to replace the page's rules with it (26 November 2026).
 
+**A second, wider round on the eight forex pairs** (asked for by the owner, 26 November 2026):
+eight more strategy types that belong to currencies — reversals after the Tokyo, Frankfurt and
+London fixes and the New York 10:00 cut, a fade of the Asian move at the London open, a fade of a
+day that has travelled its average range, a fade of a price stretched from its average, last
+week's high and low (break and sweep), round numbers — the daily chart added to the other three,
+each pair's best two and three strategies traded together, and everything run twice: at the
+standard cost and at a raw-spread cost about half of it.
+
+| Pair | Best on TRAIN → on TEST | Best survivor, picked with hindsight (TEST) |
+| --- | --- | --- |
+| EUR/USD | 1-hour RSI(14): +19.4R → −3.4R | daily NR7 breakout: +7.8R, 72 trades |
+| GBP/USD | daily MACD cross: +25.6R → +1.6R | daily NR7 breakout with the trend: +11.8R, 53 trades |
+| USD/JPY | 15-minute New York breakout: +42.9R → −12.3R | none |
+| AUD/USD | daily inside-bar breakout: +34.7R → −5.1R | none |
+| USD/CAD | 15-minute DI cross: +20.6R → +0.1R | daily EMA 9/21 cross: +4.7R, 32 trades |
+| USD/CHF | 1-hour round-number bounce: +28.9R → −1.2R | 4-hour EMA 20/50 cross: +9.6R, 70 trades |
+| NZD/USD | daily change of character: +28.2R → −8.4R | none |
+| GBP/JPY | 4-hour change of character: +42.8R → −0.4R | daily Parabolic SAR: +13.0R, 82 trades |
+
+Of 48 tuned systems at the standard cost 33 failed on TEST, 10 were near zero and 5 held; at the
+lower cost 32, 12 and 4. Taking each pair's best strategy on TRAIN — the only choice that could
+have been made at the time — the eight together lost 29R on TEST (10R at the lower cost), and
+each pair's best three together lost 41R. The survivors in the right-hand column were picked
+knowing how they ended, add up to about +47R in five years from some 310 trades, and are slow
+(daily and 4-hour charts, trades held for days). One result depends entirely on the cost: a
+15-minute break of last week's high or low on EUR/USD made +33.5R on TEST at a 0.8-pip cost and
+−1.5R at 1.5 pips, and lost on the 1-hour and 4-hour charts and on the other pairs. **No forex
+system was added.**
+
 ### Where the entry, the stop and the target go
 
 The owner asked whether each system enters, stops and takes profit in the right place — a stop
