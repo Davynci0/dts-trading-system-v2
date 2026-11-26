@@ -21,6 +21,8 @@ export interface OverlayData {
     pullback?: { level: number; touched: boolean } | null;
     /** false while the trend readings do not agree */
     ready: boolean;
+    /** true in the hours when only the pullback entry is traded and nothing else stands in the way */
+    pullbackOnly?: boolean;
     /** the high (sell) / low (buy) of the last two candles: a new trade's stop goes just beyond it */
     stopSwing?: number | null;
   } | null;
@@ -96,8 +98,8 @@ interface PaneSource {
  * Draws the entry levels, the level a stop would sit beyond, the open trade
  * and the closed trades on the candle pane. The visual rules:
  *
- *  - a LEVEL is a line with a tag; the entry levels are muted while the trend
- *    is not confirmed, and levels that share a price are drawn once;
+ *  - a LEVEL is a line with a tag; entry levels are drawn only while a trade
+ *    is possible, and of those only the nearest one price has not passed;
  *  - an open trade is its entry, stop and target lines over a soft
  *    profit/loss shading;
  *  - labels never overprint each other: one that finds no room is dropped.
@@ -288,32 +290,28 @@ class OverlayPaneView implements IPrimitivePaneView {
           if (data.trend) {
             const t = data.trend;
             const up = t.direction === "long";
-            // the last swing and the channels often share a high/low: one line, the names listed together
-            const byPrice = new Map<number, { names: string[]; armed: boolean }>();
-            for (const l of t.levels) {
-              const g = byPrice.get(l.price) ?? { names: [], armed: false };
-              g.names.push(l.label);
-              g.armed = g.armed || l.armed;
-              byPrice.set(l.price, g);
-            }
-            for (const [price, g] of byPrice) {
+            // nothing is drawn while no trade is possible: a level that cannot be traded is only noise.
+            // Of the levels a close has to break, only the nearest one that price has not passed yet is drawn.
+            const armed = t.ready ? t.levels.filter((l) => l.armed).map((l) => l.price) : [];
+            if (armed.length > 0) {
+              const price = up ? Math.min(...armed) : Math.max(...armed);
               const y = Y(price);
-              if (y == null) continue;
-              const live = t.ready && g.armed;
-              line(0, W, y, C.trend, live ? 0.7 : 0.3, 1, [8, 4]);
-              tag(`${side(t.direction)} on a 15-min close ${up ? "above" : "below"} ${fmt(price)} (${g.names.join(", ")})${t.ready ? (g.armed ? "" : " · already beyond") : " · trend not confirmed"}`, 8, y + (up ? -3 : 13), C.trend, "left", 3, { small: true, dim: !live });
+              if (y != null) {
+                line(0, W, y, C.trend, 0.7, 1, [8, 4]);
+                tag(`${side(t.direction)} if a 15-min candle closes ${up ? "above" : "below"} ${fmt(price)}`, 8, y + (up ? -3 : 13), C.trend, "left", 3, { small: true });
+              }
             }
             // the pullback entry: the broken swing price has to come back to, and close back beyond
-            const yP = t.pullback ? Y(t.pullback.level) : null;
+            const yP = t.pullback && (t.ready || t.pullbackOnly) ? Y(t.pullback.level) : null;
             if (t.pullback && yP != null) {
               line(0, W, yP, C.trend, 0.7, 1.5, [3, 3]);
-              tag(`pullback level ${fmt(t.pullback.level)} · ${t.pullback.touched ? `price is back at it — ${side(t.direction)} on a close back ${up ? "above" : "below"}` : `${side(t.direction)} when price comes back here and closes back ${up ? "above" : "below"}`}`, 8, yP + (up ? 13 : -3), C.trend, "left", 3, { small: true });
+              tag(`${side(t.direction)} the pullback to ${fmt(t.pullback.level)} · ${t.pullback.touched ? `price is back — waiting for a close ${up ? "above" : "below"} it` : "waiting for price to come back"}`, 8, yP + (up ? 13 : -3), C.trend, "left", 3, { small: true });
             }
             // the last two candles' extreme on the other side: where a new trade's stop would go
-            const yS = t.stopSwing != null ? Y(t.stopSwing) : null;
+            const yS = t.stopSwing != null && t.ready ? Y(t.stopSwing) : null;
             if (yS != null && !data.positions?.length) {
-              line(0, W, yS, C.loss, t.ready ? 0.45 : 0.25, 1, [2, 4]);
-              tag(`${up ? "low" : "high"} of the last two candles ${fmt(t.stopSwing!)} · a new trade's stop goes beyond it`, 8, yS + (up ? 13 : -3), C.loss, "left", 6, { small: true, dim: true });
+              line(0, W, yS, C.loss, 0.45, 1, [2, 4]);
+              tag(`a new trade's stop goes ${up ? "below" : "above"} ${fmt(t.stopSwing!)}`, 8, yS + (up ? 13 : -3), C.loss, "left", 6, { small: true, dim: true });
             }
           }
 

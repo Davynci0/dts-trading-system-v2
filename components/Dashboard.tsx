@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Chart from "@/components/Chart";
 import SignalFeed from "@/components/SignalFeed";
 import TrendTracker, { type TrendSummary } from "@/components/TrendTracker";
@@ -8,18 +8,60 @@ import AskAIButton from "@/components/AskAIButton";
 import { strategyOf, PAIRS, type Candle, type Pair, type Signal, type Timeframe } from "@/lib/types";
 import { CHART_COLORS, type OverlayData } from "@/components/chartOverlay";
 
-/** What the chart can show on top of the candles. */
+/**
+ * What the chart can show on top of the candles. Only what a trade needs is on
+ * to begin with — the next entry, the open trade and the closed ones; the rest
+ * is one click away, and the choice is remembered in this browser.
+ */
 const LAYERS = [
-  { id: "trend", label: "Entry levels", color: CHART_COLORS.trend, on: true },
-  { id: "structure", label: "Market structure", color: CHART_COLORS.ink, on: true },
-  { id: "context", label: "Day levels and no-trade hours", color: CHART_COLORS.muted, on: true },
-  { id: "emas", label: "Moving averages (20, 50, 200)", color: CHART_COLORS.ema50, on: true },
-  { id: "zones", label: "Support and resistance", color: CHART_COLORS.zone, on: true },
-  { id: "sd", label: "Supply and demand (1H)", color: CHART_COLORS.demand, on: true },
-  { id: "position", label: "Open trades", color: null, on: true },
-  { id: "history", label: "Closed trades", color: null, on: true },
+  { id: "trend", label: "Next entry", title: "The level the next trade is entered at, and where its stop would go", color: CHART_COLORS.trend, on: true },
+  { id: "position", label: "Open trade", title: "The open trade: entry, stop and target", color: null, on: true },
+  { id: "history", label: "Closed trades", title: "The trades that have closed, with their results", color: null, on: true },
+  { id: "structure", label: "Structure", title: "Market structure: swing highs and lows, breaks of structure", color: CHART_COLORS.ink, on: false },
+  { id: "zones", label: "Support/resistance", title: "Support and resistance zones", color: CHART_COLORS.zone, on: false },
+  { id: "sd", label: "Supply/demand", title: "Fresh 1-hour supply and demand zones", color: CHART_COLORS.demand, on: false },
+  { id: "emas", label: "Averages", title: "Moving averages (20, 50, 200)", color: CHART_COLORS.ema50, on: false },
+  { id: "context", label: "Day levels", title: "Yesterday's high and low, and the no-trade hours", color: CHART_COLORS.muted, on: false },
 ] as const;
 type LayerId = (typeof LAYERS)[number]["id"];
+const LAYER_DEFAULTS = Object.fromEntries(LAYERS.map((l) => [l.id, l.on])) as Record<LayerId, boolean>;
+
+/** The chosen layers, kept in this browser. Without storage the defaults are used and a choice lasts until the page is reloaded. */
+const LAYERS_KEY = "dts.chartLayers.v1";
+const layerListeners = new Set<() => void>();
+let layersFallback = "";
+function readLayers(): string {
+  try {
+    return localStorage.getItem(LAYERS_KEY) ?? layersFallback;
+  } catch {
+    return layersFallback;
+  }
+}
+function writeLayers(next: Record<LayerId, boolean>) {
+  layersFallback = JSON.stringify(next);
+  try {
+    localStorage.setItem(LAYERS_KEY, layersFallback);
+  } catch {
+    // storage unavailable: the choice lasts for this page only
+  }
+  layerListeners.forEach((f) => f());
+}
+function subscribeLayers(onChange: () => void) {
+  layerListeners.add(onChange);
+  return () => {
+    layerListeners.delete(onChange);
+  };
+}
+function parseLayers(raw: string): Record<LayerId, boolean> {
+  const out = { ...LAYER_DEFAULTS };
+  try {
+    const saved = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+    for (const l of LAYERS) if (typeof saved[l.id] === "boolean") out[l.id] = saved[l.id] as boolean;
+  } catch {
+    // an unreadable choice: the defaults
+  }
+  return out;
+}
 
 /** The charts on offer: the 15-minute chart the entries are read on, and the two above it for context. */
 const VIEWS = [
@@ -52,7 +94,8 @@ export default function Dashboard() {
   const [telegramStatus, setTelegramStatus] = useState<string | null>(null);
   const [scanStatus, setScanStatus] = useState<string | null>(null);
   const [pairSignals, setPairSignals] = useState<Signal[]>([]);
-  const [layers, setLayers] = useState<Record<LayerId, boolean>>(() => Object.fromEntries(LAYERS.map((l) => [l.id, l.on])) as Record<LayerId, boolean>);
+  const layersRaw = useSyncExternalStore(subscribeLayers, readLayers, () => "");
+  const layers = useMemo(() => parseLayers(layersRaw), [layersRaw]);
   /** set when the chart shows a past moment (?asOf=…) instead of the live market */
   const [asOf, setAsOf] = useState<string | null>(null);
   const analysisSigRef = useRef<string>("");
@@ -148,6 +191,7 @@ export default function Dashboard() {
               levels: trend.levels,
               pullback: trend.pullback && !trend.pullback.entry ? { level: trend.pullback.level, touched: trend.pullback.touched } : null,
               ready: !trend.blocked,
+              pullbackOnly: !!trend.blocked?.includes("only a pullback"),
               // the level a new trade's stop would go beyond
               stopSwing: trend.stopLevel,
             }
@@ -160,15 +204,13 @@ export default function Dashboard() {
     };
   }, [trend, marks, emas, layers, pairSignals, candles, view]);
 
-  /** One line on what the trend allows right now. */
+  /** In plain words: which side is traded and why. What it is waiting for right now is the panel's first line. */
   const trendLine = useMemo(() => {
     if (!trend) return null;
-    const arrow = (t: number) => (t === 1 ? "▲ up" : t === -1 ? "▼ down" : "unclear");
     const daily = trend.dailyTrend;
-    const tone = daily === 1 ? "text-emerald-400" : daily === -1 ? "text-rose-400" : "text-amber-400";
-    const allows = daily === 0 ? "no trades until the daily trend is known" : `${daily === 1 ? "buys" : "sells"} only`;
-    const shape = (t: number) => (t === 1 ? "bullish" : t === -1 ? "bearish" : "not known");
-    return { text: `Daily trend ${arrow(daily)} · 1-hour structure ${shape(trend.h1Trend)} · 15-minute structure ${shape(trend.structure)} — ${allows}`, tone };
+    if (daily === 0) return { side: "No trades", tone: "text-amber-400", why: "the daily trend is not clear" };
+    const sell = daily === -1;
+    return { side: sell ? "Sells only" : "Buys only", tone: sell ? "text-rose-400" : "text-emerald-400", why: `gold is ${sell ? "falling" : "rising"} on the daily chart, and trades are only taken with it` };
   }, [trend]);
 
   async function scanNow() {
@@ -309,8 +351,9 @@ export default function Dashboard() {
             {LAYERS.map((l) => (
               <button
                 key={l.id}
-                onClick={() => setLayers((prev) => ({ ...prev, [l.id]: !prev[l.id] }))}
+                onClick={() => writeLayers({ ...layers, [l.id]: !layers[l.id] })}
                 aria-pressed={layers[l.id]}
+                title={l.title}
                 className={`flex items-center gap-1.5 px-2 py-1.5 text-xs ${layers[l.id] ? "bg-neutral-800 text-neutral-100" : "bg-neutral-900 text-neutral-600"}`}
               >
                 {l.color && <span className="inline-block h-2 w-2 rounded-sm" style={{ backgroundColor: `rgb(${l.color})`, opacity: layers[l.id] ? 1 : 0.3 }} />}
@@ -340,7 +383,12 @@ export default function Dashboard() {
 
         {(trendLine || updatedAt != null) && (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-y border-neutral-800 py-2 text-[11px] text-neutral-500">
-            {trendLine && <span className={trendLine.tone}>{trendLine.text}</span>}
+            {trendLine && (
+              <span className="text-xs">
+                <span className={`font-semibold ${trendLine.tone}`}>{trendLine.side}</span>
+                <span className="text-neutral-400"> — {trendLine.why}.</span>
+              </span>
+            )}
             {viewInfo.note && <span className="text-sky-300/80">{viewInfo.note}</span>}
             {updatedAt != null && candles.length > 0 && (
               <span title="Times are in your local time zone">

@@ -945,7 +945,7 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
   const checks = [
     { label: `Daily trend ${word(daily)} (close vs ${TREND_DAYS}-day average)`, met: daily !== 0 },
     {
-      label: `1-hour structure ${shape(hourly)}${daily !== 0 && hourly !== 0 && hourly !== daily ? " — against the daily trend" : ""}`,
+      label: `1-hour chart ${hourly === 1 ? "rising" : hourly === -1 ? "falling" : "not known"} (${shape(hourly)} structure)${daily !== 0 && hourly !== 0 && hourly !== daily ? ` — it has to turn ${word(daily)}, with the daily trend` : ""}`,
       met: agreed,
     },
     { label: `Trend not exhausted: 1-hour ADX ${Number.isFinite(adx) ? adx.toFixed(0) : "?"} (must be under ${TREND_ADX_MAX})`, met: fresh },
@@ -988,7 +988,7 @@ export function trendStateAt(s: TrendSeries, i: number, pair = "XAU_USD", entry?
   if (i < TREND_MIN_CANDLES || !(atr > 0)) blocked = "not enough 15-minute history yet";
   else if (daily === 0) blocked = "the daily trend is not known yet";
   else if (hourly === 0) blocked = "not enough 1-hour history yet";
-  else if (hourly !== daily) blocked = `the 1-hour structure is ${shape(hourly)}, against the daily trend (${word(daily)})`;
+  else if (hourly !== daily) blocked = `the 1-hour chart is ${hourly === 1 ? "rising" : hourly === -1 ? "falling" : "unclear"} while the daily trend is ${word(daily)} — waiting for the 1-hour chart to turn ${word(daily)}`;
   else if (!Number.isFinite(adx)) blocked = "not enough 1-hour history yet";
   else if (!fresh) blocked = `the trend is exhausted — 1-hour ADX ${adx.toFixed(0)}, no new trade at ${TREND_ADX_MAX} or more`;
   else if (!clear) blocked = `no real daily trend — price is ${Math.max(distancePct, 0).toFixed(1)}% ${dir === 1 ? "above" : "below"} the ${TREND_DAYS}-day average, it needs ${TREND_MIN_DISTANCE_PCT}%`;
