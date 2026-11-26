@@ -1,6 +1,6 @@
 import type { Candle } from "@/lib/types";
 import { tradeCost } from "@/lib/analysis/instruments";
-import { buildTrendSeries, dayStopBlock, reentryBlock, trendStateAt, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MIN_CANDLES, type LastEntry, type LastResult, type TrendTrigger } from "@/lib/analysis/trend";
+import { buildTrendSeries, reentryBlock, trendStateAt, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MIN_CANDLES, type LastEntry, type TrendTrigger } from "@/lib/analysis/trend";
 
 /**
  * Backtest of the system (lib/analysis/trend.ts) with the scanner's own
@@ -9,8 +9,7 @@ import { buildTrendSeries, dayStopBlock, reentryBlock, trendStateAt, TREND_MAX_H
  * followed candle by candle exactly as the live system settles it: the stop is
  * tested first, then the take-profit, then the profit lock moves the stop for
  * the candles that follow, then the time limit. One trade at a time
- * (TREND_MAX_OPEN), no duplicate entry of the last one (reentryBlock), and no
- * new trade in the trading day of a full loss (dayStopBlock).
+ * (TREND_MAX_OPEN) and no duplicate entry of the last one (reentryBlock).
  */
 export interface TrendTrade {
   direction: "long" | "short";
@@ -47,8 +46,6 @@ export function runTrendBacktest(opts: {
   /** only trades entered at or after this time are kept (epoch seconds) */
   from?: number;
   costMultiplier?: number;
-  /** false leaves the day-stop rule out (to measure what it does) */
-  dayStop?: boolean;
 }): TrendTrade[] {
   const { pair, m15, from = 0, costMultiplier = 1 } = opts;
   const s = buildTrendSeries(opts);
@@ -60,15 +57,11 @@ export function runTrendBacktest(opts: {
   let busyUntil = 0;
   /** the last trade entered, for the re-entry rule */
   let last: LastEntry | null = null;
-  /** how the last trade ended, for the day stop */
-  let lastResult: LastResult | null = null;
-  const dayStop = opts.dayStop ?? true;
 
   for (let i = TREND_MIN_CANDLES; i < s.n - 1; i++) {
     if (m15[i + 1].time < from || i < busyUntil) continue;
     // cheap gate before the full read
     if (s.dailyTrend[i] === 0 || s.dailyTrend[i] !== s.h1Trend[i]) continue;
-    if (dayStop && dayStopBlock(lastResult, m15[i + 1].time)) continue;
     const setup = trendStateAt(s, i, pair, m15[i + 1].open).setup;
     if (!setup) continue;
     const dir = setup.direction === "long" ? 1 : -1;
@@ -124,7 +117,6 @@ export function runTrendBacktest(opts: {
     });
     open.push({ exitIndex: outcome === "open" ? Infinity : k, dir });
     last = { direction: setup.direction, time: m15[e].time, entry: setup.entry, risk: setup.risk };
-    lastResult = { exitTime: m15[k].time + 900, r: (dir * (exitPrice - setup.entry)) / setup.risk };
     if (open.length >= TREND_MAX_OPEN) busyUntil = Math.min(...open.map((t) => t.exitIndex));
   }
   return trades;

@@ -4,10 +4,10 @@ Signal-only gold (XAU/USD) trading system: a **market-structure scalp on the 15-
 ("the trend scalp"). One trade at a time, a **1:3** target with a **profit lock**, every trade
 closed within **five hours**, with **support and resistance zones** deciding where not to enter
 and where the stop goes, **supply and demand zones** it will not trade into, and no duplicate
-entries, **five of six trend confirmations** before any trade, and **no more trades for the day
-after a full loss**. About **seven trades in ten close in profit**, at about **0.8 trades a
-trading day**: 441 trades in five years, 71% won, +116.7R, worst drawdown 6.7R, never more than
-three losses in a row, and three in a row five times ([backtest](#backtesting)).
+entries, and **five of six trend confirmations** before any trade. About **seven trades in ten
+close in profit**, at about **one trade a trading day**: 505 trades in five years, 72% won,
++144.5R, worst drawdown 5.7R, three or more losses in a row eight times and four in a row three
+times ([backtest](#backtesting)).
 
 The scanner reads the chart every 15 minutes; when a candle completes an entry, the trade —
 entry, stop loss and take profit — is sent to Telegram. The user reviews each signal and
@@ -88,7 +88,6 @@ Conditions 3 to 6 and 9 come from the losing trades, 8 from the support and resi
 | Profit lock | once price has gone 0.4R the trade's way, the stop is moved to 0.2R in profit. It applies from the next 15-minute candle; a second Telegram message says when to move it |
 | Time limit | closed at market at the close of the 20th candle — five hours |
 | Positions | **one trade at a time**; no new signal until it has closed |
-| Day stop | after a full loss (a trade that lost 0.9R or more), no new trade until the trading day ends at 17:00 New York |
 | No duplicates | within 60 minutes of the last trade's entry, no new trade on the same side within 1R of that entry's price |
 | Size | 0.5% of the account per trade (`RISK_PCT`, `ACCOUNT_BALANCE`, default $500) |
 
@@ -302,34 +301,31 @@ Fixed retracement entries (38%, 50%, 62% of the leg) had been tried before and w
 [Where the rules come from](#where-the-rules-come-from)); what works is the pullback **to the
 level that was broken**, entered only once a candle has closed back beyond it.
 
-**The pullback entry brings losing runs with it, so it came with a second rule.** Added on its
-own it made +144.5R from 505 trades — but with eight runs of three or more losses, three of them
-four long, and four days at −2R or worse. Runs of losses come in clusters on bad days, so: after a
-full loss, no new trade until the trading day ends. That rule alone had been tested before and
-cost too much (−23R); with the pullback entry beside it the two together come out ahead:
+**The pullback entry brings more trades, more profit and more losing runs.** A second rule was
+tried with it for one day (25 November 2026): after a full loss, no new trade until the trading
+day ends at 17:00 New York. It removed every run of four losses in the five years, but it gave up
+a fifth of the profit, and in its first week it kept the system out of a trade that reached its
+target. On 26 November 2026 the owner chose to trade without it.
 
-| | Before | With the pullback entry and the day stop |
-| --- | --- | --- |
-| Trades | 435 (0.8 a day) | 441 (0.8 a day) |
-| Won | 71% | 71% |
-| Total | +114.2R | +116.7R |
-| Costs doubled | +99.3R | +100.9R |
-| Worst drawdown | 7.0R | 6.7R |
-| Longest losing run | 4 | 3 |
-| Three or more losses in a row | 6 times | 5 times |
-| Four or more in a row | 3 times | never |
-| Days at −2R or worse | 3 | 1 |
-| The last 30 days | 24 trades, +4.5R | 27 trades, +7.0R |
-| The last twelve months | 207 trades, +50.1R | 212 trades, +45.8R |
+| | Before the pullback entry | With the pullback entry (live) | With the day stop as well (tried, removed) |
+| --- | --- | --- | --- |
+| Trades | 435 (0.8 a day) | 505 (1.0 a day) | 441 (0.8 a day) |
+| Won | 71% | 72% | 71% |
+| Total | +114.2R | +144.5R | +116.7R |
+| Costs doubled | +99.3R | +126.8R | +100.9R |
+| Worst drawdown | 7.0R | 5.7R | 6.7R |
+| Longest losing run | 4 | 4 | 3 |
+| Three or more losses in a row | 6 times | 8 times | 5 times |
+| Four or more in a row | 3 times | 3 times | never |
+| Days at −2R or worse | 3 | 4 (the worst −3.1R) | 1 |
+| The last 30 days | 24 trades, +4.5R | 32 trades, +4.1R | 27 trades, +7.0R |
+| The last twelve months | 207 trades, +50.1R | 257 trades, +65.0R | 212 trades, +45.8R |
 
-The 73 pullback entries won 75% and made +34.6R; 41 of them came in the London morning and the US
-data hour, where the other entries are not traded, and made +19.9R. The first and second half of
-the trades made +65.2R (73% won) and +51.5R (69%). Small changes to the pullback's settings —
-the touch distance, the four hours, the day's boundary, the size of loss that stops the day — all
-gave 100R to 126R with no more than one run of four losses. What it costs: the day stop gives up
-about 28R and 64 trades that the pullback entry would otherwise add, and the last twelve months
-made 4R less than before. Three losses in a row still happen, about once a year. Like every rule
-here these were chosen on the same five years they are measured on.
+The 81 pullback entries won 75% and made +37.0R; 46 of them came in the London morning and the US
+data hour, where the other entries are not traded, and made +23.1R. The first and second half of
+the trades made +76.6R (73% won) and +67.9R (71%). What it costs: two more runs of three or more
+losses than before, and a run of four losses in the last 30 days of the test. Like every rule
+here the pullback entry was chosen on the same five years it is measured on.
 
 Read first: [a 3.7-year backtest of the London breakout on gold](https://www.mql5.com/en/blogs/post/777540),
 [how gold moves through the three sessions](https://www.mql5.com/en/blogs/post/772224), and
@@ -402,54 +398,57 @@ XAU/USD, to 2026-11-24, in R (1R = the risk of one trade):
 
 | | Trades | A week | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **5 years** | **441** | **1.7** | **71%** | **+116.7R** | **+100.9R** | **6.7R** | **3** |
-| **Last 3 years** | 384 | 2.5 | 70% | +108.0R | +95.0R | 6.7R | 3 |
+| **5 years** | **505** | **1.9** | **72%** | **+144.5R** | **+126.8R** | **5.7R** | **4** |
+| **Last 3 years** | 445 | 2.8 | 71% | +135.5R | +120.8R | 5.7R | 4 |
 
 | Year from | Trades | A week | Win rate | Total |
 | --- | --- | --- | --- | --- |
-| Nov 2021 | 33 | 0.6 | 79% | +9.8R |
-| Nov 2022 | 24 | 0.5 | 71% | −1.1R |
-| Nov 2023 | 52 | 1.0 | 73% | +20.5R |
-| Nov 2024 | 120 | 2.3 | 73% | +41.7R |
-| Nov 2025 | 212 | 4.1 | 68% | +45.8R |
+| Nov 2021 | 35 | 0.7 | 77% | +9.9R |
+| Nov 2022 | 25 | 0.5 | 72% | −0.9R |
+| Nov 2023 | 55 | 1.1 | 73% | +21.0R |
+| Nov 2024 | 133 | 2.6 | 73% | +49.5R |
+| Nov 2025 | 257 | 4.9 | 70% | +65.0R |
 
-- **How trades end:** 88 at the first stop (a full loss), 261 at the moved stop (a small gain,
-  or a little less after a gap), 42 at the 1:3 target, 50 at the five-hour limit.
-- **What a win and a loss are worth:** the average win is 0.70R, the average loss 0.80R.
+- **How trades end:** 96 at the first stop (a full loss), 301 at the moved stop (a small gain,
+  or a little less after a gap), 50 at the 1:3 target, 58 at the five-hour limit.
+- **What a win and a loss are worth:** the average win is 0.71R, the average loss 0.79R.
 - **How long they last:** half are over within an hour. None is held longer than five.
-- **By entry:** momentum candles +46.0R (175 trades, 69% won), pullbacks +34.6R (73, 75%),
-  breakouts on a momentum candle +20.9R (63, 81%), breaks of structure +15.2R (130, 66%). Buys
-  +72.4R (71%), sells +44.3R (71%).
-- **The last twelve months:** 212 trades — 0.8 a trading day; 68% closed in profit. The last six
-  months 117 trades, +27.6R; the last month 27 trades, +7.0R.
+- **By entry:** momentum candles +57.5R (202 trades, 71% won), pullbacks +37.0R (81, 75%),
+  breakouts on a momentum candle +27.4R (72, 82%), breaks of structure +22.6R (150, 66%). Buys
+  +100.5R (73%), sells +44.1R (70%).
+- **The last twelve months:** 257 trades — 1.0 a trading day; 70% closed in profit. The last six
+  months 136 trades, +34.6R; the last month 32 trades, +4.1R.
+- **Losing runs and bad days:** three or more losses in a row eight times, three of them four
+  long — one of those in the last month of the test. Four days lost 2R or more; the worst lost
+  3.1R.
 
 **Read this before trusting it.**
 
 - **A high win rate is not a high profit.** Most wins are the moved stop at +0.2R; the losses
-  are mostly a full 1R. It averages 0.26R a trade — 0.23R with costs doubled — and the same
-  entries without the lock make about twice as much. Three losses in a row have happened five
-  times in the five years.
+  are mostly a full 1R. It averages 0.29R a trade — 0.25R with costs doubled — and the same
+  entries without the lock make about twice as much. Three or more losses in a row have happened
+  eight times in the five years, and four in a row three times.
 - **The lock needs you to act.** The backtest moves the stop from the 15-minute candle after
   price reaches +0.4R. Live, that is a second Telegram message; if the stop is moved late, or
   not at all, the result is not the one in the table.
 - **It trades often only while gold is this active.** The cost limit keeps it out when
-  15-minute candles are small: about one trade in two weeks in the first two years, four a week
+  15-minute candles are small: about one trade in two weeks in the first two years, five a week
   in the last. If gold goes quiet, it will too.
-- **Most of the evidence is two years old or less.** 332 of the 441 trades, and three-quarters of
+- **Most of the evidence is two years old or less.** 390 of the 505 trades, and four-fifths of
   the profit, are from the last two years. The filters and the lock were chosen by looking
   at these same five years, so expect less than the table.
 - **Check the spread you actually pay.** Everything above assumes $0.35 an ounce a trade. At
-  twice that the five-year result falls from +117R to +101R.
+  twice that the five-year result falls from +145R to +127R.
 - **Size.** In the last twelve months the stop was $6 to $74 an ounce, $14 in the middle. The
   usual minimum trade (0.01 lot = 1 oz) then risks about 3% of a $500 account per trade — six
-  times the 0.5% the system assumes. At 0.5% a trade, $500 became $890 over the five years with
-  a worst drop of 3%; at 1% it became $1,561 with a worst drop of 7%. The Telegram message
+  times the 0.5% the system assumes. At 0.5% a trade, $500 became $1,021 over the five years with
+  a worst drop of 3%; at 1% it became $2,052 with a worst drop of 6%. The Telegram message
   gives the size for both.
 
 ## Verification
 
 ```bash
-npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, filters, support/resistance, supply/demand, oversized candles, entries (the pullback among them), stop, profit lock, backtest, day stop, settlement, send rules, duplicates
+npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, filters, support/resistance, supply/demand, oversized candles, entries (the pullback among them), stop, profit lock, backtest, settlement, send rules, duplicates
 ```
 
 ## Routes

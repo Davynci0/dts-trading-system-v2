@@ -63,9 +63,6 @@ import { tradeCost } from "./instruments";
  *    last trade's risk) away from that entry. Re-entering the same move at
  *    the same price straight after a trade closed made nothing over five
  *    years.
- *  - NO MORE TRADES AFTER A FULL LOSS: when a trade has lost 0.9R or more, no
- *    new trade is taken until the trading day ends (17:00 New York). It is
- *    what keeps one bad day from becoming three or four losses in a row.
  *  - FOUR CONDITIONS THAT COME FROM THE LOSING TRADES — each lost in both
  *    halves of the test: an exhausted trend (1-hour ADX 40 or more), the
  *    London morning and the US data hour (07:00–14:00 UTC; the pullback entry
@@ -131,10 +128,6 @@ export const TREND_REENTRY_R = 1;
 export const TREND_PULLBACK_BARS = 16;
 /** …to within this many ATR of it, and a candle then closes back beyond the level in the trend's direction. */
 export const TREND_PULLBACK_TOUCH_ATR = 0.25;
-/** After a trade that lost this much of its risk or more (a full loss), no new trade for the rest of the trading day. */
-export const TREND_DAY_STOP_R = 0.9;
-/** The trading day ends at this hour in New York (the daily candle's close). */
-export const TREND_DAY_END_NY_HOUR = 17;
 
 export const TREND_SR_DAYS = 30;
 /** … grouped into zones no taller than this share of a day's average range (daily ATR) … */
@@ -262,39 +255,6 @@ export function reentryBlock(last: LastEntry | null, next: { direction: SignalDi
   if (apart > TREND_REENTRY_R * last.risk) return null;
   const side = last.direction === "long" ? "buy" : "sell";
   return `a ${side} was entered at ${last.entry.toFixed(2)} ${Math.round(minutes)} min ago — no new ${side} within ${TREND_REENTRY_R}R of it (${(last.entry - TREND_REENTRY_R * last.risk).toFixed(2)}–${(last.entry + TREND_REENTRY_R * last.risk).toFixed(2)}) for ${TREND_REENTRY_MINUTES} minutes`;
-}
-
-/** Is New York on summer time at `t` (epoch seconds)? Second Sunday of March to the first Sunday of November. */
-function newYorkSummer(t: number): boolean {
-  const year = new Date(t * 1000).getUTCFullYear();
-  const sunday = (month: number, nth: number) => {
-    const first = new Date(Date.UTC(year, month, 1)).getUTCDay();
-    return Date.UTC(year, month, 1 + ((7 - first) % 7) + 7 * (nth - 1), 7) / 1000;
-  };
-  return t >= sunday(2, 2) && t < sunday(10, 1);
-}
-
-/** The trading day `t` (epoch seconds) falls in, as a day number: a day runs from 17:00 New York to 17:00 New York. */
-export function tradingDay(t: number): number {
-  return Math.floor((t - (TREND_DAY_END_NY_HOUR + (newYorkSummer(t) ? 4 : 5)) * 3600) / 86400);
-}
-
-/** How the last closed trade ended, as the day-stop rule needs it. */
-export interface LastResult {
-  /** when it was closed (epoch seconds) */
-  exitTime: number;
-  /** its result in R, before costs */
-  r: number;
-}
-
-/**
- * Why no new trade is taken after a full loss, or null when one may be: the
- * last trade lost TREND_DAY_STOP_R or more and closed in the trading day the
- * new trade would be entered in. `time` is when the new trade would be entered.
- */
-export function dayStopBlock(last: LastResult | null, time: number): string | null {
-  if (!last || !(last.r <= -TREND_DAY_STOP_R) || tradingDay(last.exitTime) !== tradingDay(time)) return null;
-  return `the last trade was a full loss (${last.r.toFixed(1)}R) — no new trade until the trading day ends at ${TREND_DAY_END_NY_HOUR}:00 New York`;
 }
 
 /** No trade when the spread and slippage are more than this share of the risk. */

@@ -36,10 +36,7 @@ import {
   TREND_SR_TOUCHES,
   TREND_SR_WIDTH_ATR,
   lateEntry,
-  dayStopBlock,
   pullbackAt,
-  tradingDay,
-  TREND_DAY_STOP_R,
   TREND_PULLBACK_BARS,
   TREND_PULLBACK_TOUCH_ATR,
   structureMarks,
@@ -56,7 +53,7 @@ import {
 import { tradeCost } from "../lib/analysis/instruments";
 import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES } from "../lib/backtest/trend";
 import { followTrade, LIVE_LOCK, settleSignal } from "../lib/engine/outcomes";
-import { lastEntryOf, lastResultOf, scanLogKey, sendBlock, type EarlierSignal } from "../lib/engine/scanner";
+import { lastEntryOf, scanLogKey, sendBlock, type EarlierSignal } from "../lib/engine/scanner";
 import { isLiveSignal, strategyOf, TREND_STRATEGY, type Candle } from "../lib/types";
 
 let failed = 0;
@@ -537,11 +534,6 @@ console.log("\nbacktest");
 const trades = runTrendBacktest({ pair: "XAU_USD", m15, h1, daily });
 {
   check("the generated market is traded", trades.length >= 100, `${trades.length} trades`);
-  // the day stop: after a full loss, nothing more that trading day
-  const priceR = (t: (typeof trades)[number]) => ((t.direction === "long" ? 1 : -1) * (t.exitPrice - t.entry)) / Math.abs(t.entry - t.stopLoss);
-  const afterFullLoss = (list: typeof trades) => list.filter((t, k) => k > 0 && priceR(list[k - 1]) <= -TREND_DAY_STOP_R && tradingDay(list[k - 1].exitTime) === tradingDay(t.entryTime)).length;
-  const free = runTrendBacktest({ pair: "XAU_USD", m15, h1, daily, dayStop: false });
-  check("after a full loss no trade is entered for the rest of that trading day — and without the rule there would be", afterFullLoss(trades) === 0 && afterFullLoss(free) > 0 && trades.some((t) => priceR(t) <= -TREND_DAY_STOP_R), `${afterFullLoss(free)} such trades without the rule, ${free.length - trades.length} fewer trades with it`);
   check("one trade at a time: a trade is entered only after the one before it has closed", TREND_MAX_OPEN === 1 && trades.every((t, k) => k === 0 || t.entryTime >= trades[k - 1].exitTime));
   // the re-entry rule: no trade on the same side within an hour of the last entry and within 1R of its price
   const dupes = trades.filter((t, k) => {
@@ -673,15 +665,11 @@ console.log("\nsend rules");
   check("one trade at a time: nothing is sent while a trade is open, the same way or the other", sendBlock([row("long", true)], trade) != null && sendBlock([row("short", true)], trade) != null);
   check("a signal candle is sent once, even after its trade has closed", sendBlock([row("long", false, "trend:1")], trade) != null);
   check("a closed trade of another candle is not in the way", sendBlock([row("long", false, "trend:0", 80)], trade) == null);
-  // the day stop: a full loss closes the trading day (17:00 New York to 17:00 New York)
+  // a loss does not stop the day: the next signal is sent as soon as nothing is open
   const D = Date.UTC(2026, 0, 14, 15) / 1000; // a Wednesday in winter, 10:00 New York
-  const closed = (r: number, at: number): EarlierSignal => ({ ...row("long", false, `trend:${at - 3600}`, 5000, 4990), outcome: r > 0 ? "win" : "loss", outcome_r: r, outcome_at: new Date((at - 900) * 1000).toISOString() });
+  const closed = (lost: boolean, at: number): EarlierSignal => ({ ...row("long", false, `trend:${at - 3600}`, 5000, 4990), outcome: lost ? "loss" : "win", outcome_at: new Date((at - 900) * 1000).toISOString() });
   const next = (at: number) => ({ key: `trend:${at - 900}`, direction: "short" as const, time: at, entry: 100 });
-  check("the trading day runs from 17:00 to 17:00 New York, summer and winter", tradingDay(Date.UTC(2026, 0, 14, 21, 59) / 1000) + 1 === tradingDay(Date.UTC(2026, 0, 14, 22) / 1000) && tradingDay(Date.UTC(2026, 6, 15, 20, 59) / 1000) + 1 === tradingDay(Date.UTC(2026, 6, 15, 21) / 1000) && tradingDay(Date.UTC(2026, 6, 15, 21) / 1000) === tradingDay(Date.UTC(2026, 6, 16, 20, 59) / 1000));
-  check(`after a full loss (${TREND_DAY_STOP_R}R or more) nothing is sent for the rest of that trading day`, TREND_DAY_STOP_R === 0.9 && !!sendBlock([closed(-1, D)], next(D + 900))?.includes("full loss") && !!sendBlock([closed(-0.9, D)], next(D + 6 * 3600))?.includes("full loss"));
-  check("…and trading starts again when the next trading day does", sendBlock([closed(-1, D)], next(D + 7 * 3600)) == null && sendBlock([closed(-1, D)], next(D + 7 * 3600 - 900)) != null);
-  check("a small loss, a trade closed at the moved stop or a win does not stop the day", sendBlock([closed(-0.5, D)], next(D + 900)) == null && sendBlock([closed(0.2, D)], next(D + 900)) == null && sendBlock([closed(3, D)], next(D + 900)) == null);
-  check("the day stop reads the trade that closed last", lastResultOf([closed(-1, D - 7200), closed(0.2, D)])?.r === 0.2 && sendBlock([closed(-1, D - 7200), closed(0.2, D)], next(D + 900)) == null && dayStopBlock(null, D) == null);
+  check("after a losing trade the next signal is sent — a loss does not stop the day", sendBlock([closed(true, D)], next(D + 900)) == null && sendBlock([closed(true, D - 7200), closed(true, D)], next(D + 900)) == null && sendBlock([closed(false, D)], next(D + 900)) == null);
   // re-entry: the last trade, a sell at 100 (1R = 10) whose signal candle closed at T
   const T = 1_800_000_000;
   const last = row("short", false, `trend:${T - 900}`);

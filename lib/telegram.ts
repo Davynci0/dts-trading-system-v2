@@ -91,7 +91,7 @@ export async function sendTrendSignal(opts: {
       `Trend: 1-hour structure ${up ? "bullish (higher highs)" : "bearish (lower lows)"}, daily ${up ? "above" : "below"} its ${opts.trendDays}-day average`,
       `Confirmations: ${opts.confirmed} of 6 — the 1-hour and 15-minute averages, +DI/−DI, the distance from the ${opts.trendDays}-day average, the daily ADX`,
       sizeLine(risk, opts.accountBalance, opts.riskPct),
-      `Close the trade at market if neither level is hit within ${opts.holdHours} hours. One trade at a time: no new signal until this one is closed, and after a full loss none until the trading day ends (17:00 New York). About seven in ten close in profit — most of them at the moved stop, with a small gain.`,
+      `Close the trade at market if neither level is hit within ${opts.holdHours} hours. One trade at a time: no new signal until this one is closed. About seven in ten close in profit — most of them at the moved stop, with a small gain.`,
       `_Signal only — review and execute manually._`,
     ].join("\n")
   );
