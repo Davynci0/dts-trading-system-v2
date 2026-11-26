@@ -1,6 +1,6 @@
 # Standing rules for this trading system
 
-These are the owner's requirements, stated on 23, 24 and 25 November 2026. They apply to every change to
+These are the owner's requirements, stated on 23, 24, 25 and 26 November 2026. They apply to every change to
 the strategy, the backtest and the reports, until the owner says otherwise.
 
 ## What the system must be
@@ -14,6 +14,8 @@ the strategy, the backtest and the reports, until the owner says otherwise.
    If it has reached neither level by then, it is closed.
 3. **The 15-minute chart**, with higher timeframes for confirmation.
 4. **A modest target: about 1:3 risk to reward.** Do not aim for distant targets.
+   (On 26 November 2026 the owner said 1:2 is enough "as long as there are good results". It was
+   tested: with the profit lock a 1:2 target makes less than 1:3 on both systems, so 1:3 stayed.)
 5. **About 2.5 trades a trading day; never fewer than 2.**
    (On 24 and 25 November 2026 the owner chose fewer, better trades over this number more than
    once — losing three to five in a row matters more to them than how many trades there are.
@@ -35,8 +37,14 @@ the strategy, the backtest and the reports, until the owner says otherwise.
 
 ## How results are tested and reported
 
-9. **Backtest on 5 years, and show the last 3 years next to it.** Nothing longer.
-10. **Never show 15-year results** — not in answers, the README, the dashboard or the Backtests
-   page.
+9. **Backtest on 5 years, and show the last 3 years next to it.**
+10. **Long and short windows as well, since 26 November 2026:** the owner asked for results on
+    15, 10 and 5 years and on 3 months, 1 month and 1 week, for each system. (Until then the
+    rule was never to show 15-year results. The owner changed it.) Where the data does not go
+    back that far, say so.
 11. **Be consistent**: the same window, the same costs and the same measures every time, so
     one result can be compared with the next.
+12. **No sugarcoating, and nothing goes live unless it beats what is live** (26 November 2026):
+    report the real numbers, the bad years included; a new system or rule is deployed only if
+    its results beat the current one's on those windows, and it has to be something that can
+    perform live as it was backtested.

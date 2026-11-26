@@ -414,6 +414,92 @@ npx tsx --env-file=.env.local scripts/backtest-btc.ts          # five years, wit
 npx tsx --env-file=.env.local scripts/backtest-btc.ts --save   # …and written to lib/backtest/btc-results.json for the page
 ```
 
+## Fifteen years, and 49 kinds of strategy (26 November 2026)
+
+The owner asked for every well-known strategy to be tested on both markets, on long and short
+windows, and for nothing to go live unless it beats what is live. **Nothing did, so the rules did
+not change.** What the test showed is below, the bad parts included.
+
+**The gold scalp on every window** (to 2026-11-26, $0.35 an ounce):
+
+| | Trades | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
+| --- | --- | --- | --- | --- | --- | --- |
+| 15 years | 651 | 69% | +143.7R | +119.4R | 13.4R | 5 |
+| 10 years | 599 | 70% | +140.9R | +119.1R | 9.6R | 5 |
+| 5 years | 515 | 72% | +146.0R | +128.1R | 5.7R | 4 |
+| 3 months | 55 | 71% | +12.5R | +10.8R | 4.1R | 4 |
+| 1 month | 42 | 67% | +5.6R | +4.4R | 4.1R | 4 |
+| 1 week | 17 | 71% | +4.7R | +4.2R | 2.0R | 2 |
+
+By calendar year: 2011 +6.8R (48 trades) · 2012 0.0R (15) · 2013 −4.5R (22) · 2014–2019 −0.6R
+(16 trades in six years) · 2020 +1.0R (58) · 2021 −5.1R (20) · 2022 +11.4R (39) · 2023 −0.5R (24)
+· 2024 +19.5R (54) · 2025 +55.8R (164) · 2026 +59.8R (234).
+
+- **Almost all of the profit is from 2024 to 2026.** In the thirteen years before, the rules made
+  +8.5R from 242 trades — nothing. They were tuned on the last five years; the years before
+  that are the only ones they had never seen, and there they show no edge.
+- **When gold is quiet the system does not trade** (the cost limit): 16 trades from 2014 to 2019.
+  It sat out; it did not lose.
+- **The same is true of nearly every 15-minute method.** Of the 49 strategy types tested, almost
+  all made money on gold in the last five-year block. On the 15-minute chart only the New York
+  opening-range breakout did in all three with enough trades, and it wins 40% of the time with
+  losing runs of 9 to 12. The last two years have been a strong trend with large candles, and
+  following it paid.
+
+**What was tested.** 49 strategy types — breaks of structure, pullbacks, fair value gaps, order
+blocks, liquidity sweeps, Donchian, Keltner and Bollinger breakouts, session and opening-range
+breakouts, the 10–11 New York "silver bullet", moving-average, MACD, DI and Ichimoku crosses,
+Supertrend, Parabolic SAR, Heikin-Ashi, EMA, VWAP, pivot and Fibonacci pullbacks, RSI(14),
+RSI(2), Bollinger and stochastic reversion, range fades, engulfing, pin bar, inside bar, NR7,
+three-bar reversal, double top/bottom — on the 15-minute, 1-hour and 4-hour charts, with five
+trend filters and up to six exits (1:2 and 1:3, with and without the lock, 5 to 48 hours):
+3,695 variants a market, each on the whole history with costs and costs doubled.
+
+**What held on gold in every five-year block:** only slow breakouts with the daily trend on the
+4-hour chart (Donchian, Keltner, Bollinger squeeze, Supertrend) — the Bitcoin page's rule. That
+rule had been chosen on Bitcoin; on gold it had never been fitted to anything:
+
+| 4-hour Donchian 20, daily trend, 1:2, lock, 48 h | Trades | Win rate | Total | Costs doubled | Worst drawdown |
+| --- | --- | --- | --- | --- | --- |
+| 15 years | 810 | 73% | +67.4R | +46.4R | 10.2R |
+| by five-year block | 253 / 244 / 313 | | +10.6R / +15.7R / +41.1R | | |
+
+About one trade a week and +4.5R a year, with losing years (2015 about −7R, 2023 about −6R). It does not
+replace the scalp (five years: +41R against +143R). **Taken one trade at a time with the scalp
+it does not beat the scalp alone** on the recent windows (one year +60.6R against +68.4R, one
+week +1.7R against +4.7R): its long trades keep scalps out. **Run side by side — one scalp and
+one breakout open at once — the two together beat the scalp on every window** (15 years +208R,
+5 years +184R, one year +93R, three months +19.4R, one month +12.0R, one week +6.9R; worst
+drawdown 16.8R against 13.4R). That breaks the one-trade-at-a-time rule, so it was not deployed.
+
+**A 1:2 target** (asked for by the owner) with the profit lock makes less than 1:3: +103R
+against +141R on gold over 15 years, and less on Bitcoin too. Without the lock 1:2 makes more
+(+161R) but wins only 51% of the time, with 13 runs of four or more losses and a 21R drawdown.
+
+**Bitcoin** (data from 2016; there is no 15-year window): the page's rules on 10 years made
++19.8R from 290 trades (68% won, drawdown 11.3R) — 2017 to 2023 lost 6.5R between them, 2024 to
+2026 made +26R. At $45 a coin the early years could hardly trade. With costs as the same share
+of price as today (5.5 per 10,000) the same rules made +116R from 597 trades over the ten years
+and lost in one year of eleven, so the pattern is old — but nobody could have traded it at that
+cost then. One variant in 3,695 beat the page's rules on every window, which is what chance
+gives. Nothing was changed.
+
+**The challenge in one week** ($50,000, +$5,000 to pass, out at −$2,000 in a day or $3,000
+under the peak), counted on the backtest's own trades from every starting day:
+
+| Risk a trade | Passed within 1 week | Lost within 1 week | Passed in the end | Lost in the end |
+| --- | --- | --- | --- | --- |
+| $250, last 12 months | 0% | 0% | 60% (40% still open; median 82 days) | 0% |
+| $500 | 0% | 0% | 93% (median 54 days) | 0% |
+| $1,000 | 13% | 6% | 77% | 23% |
+| $1,500 | 24% | 12% | 80% | 20% |
+| $1,900 | 34% | 17% | 70% | 30% |
+| $1,000, last 5 years | 4% | 2% | 88% | 12% |
+| $1,900, last 5 years | 13% | 9% | 53% | 47% |
+
+The last twelve months are the best the system has had. From any starting day before late 2023
+it almost never passed at any size. A week of +5R or more happened 4 times in the last 54.
+
 ## Scanning
 
 - A scheduler (cron-job.org) calls `/api/scan` every 15 minutes with
@@ -451,7 +537,7 @@ npx tsx --env-file=.env.local scripts/backtest.ts            # five years, with 
 npx tsx --env-file=.env.local scripts/backtest.ts --save     # …and stored for the Backtests page
 ```
 
-The window is always the same — **five years, with the last three shown next to them** — and
+The window of the stored runs is always the same — **five years, with the last three shown next to them** (longer and shorter windows are in [Fifteen years, and forty kinds of strategy](#fifteen-years-and-49-kinds-of-strategy-26-november-2026)) — and
 so are the costs and the measures. The backtest uses the scanner's own detection: a signal on a
 closed 15-minute candle fills at the next candle's open, the full spread + slippage ($0.35 per
 ounce) is charged once, and the open trade is followed candle by candle — stop first, then the
