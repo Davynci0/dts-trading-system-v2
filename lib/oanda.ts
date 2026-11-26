@@ -30,7 +30,11 @@ interface OandaCandle {
 }
 
 /** Retry helper with exponential backoff. Used for transient OANDA 5xx/network errors.
- *  Practice environments regularly emit 504s — retrying usually recovers within 2–5s. */
+ *  Practice environments regularly emit 504s — retrying usually recovers within 2–5s.
+ *  OANDA also now and then answers a valid request with 401 "Insufficient authorization"
+ *  and accepts the same request a moment later (2 of 97 scheduled scans on 25–26 November
+ *  2026), so a 401 is asked again too; a key that really is wrong fails the same way, a
+ *  few seconds later. */
 async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 4): Promise<T> {
   let lastErr: unknown;
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
@@ -40,6 +44,7 @@ async function withRetry<T>(fn: () => Promise<T>, maxAttempts = 4): Promise<T> {
       lastErr = e;
       const msg = (e as Error).message;
       const isRetryable = /OANDA 5\d\d/.test(msg) ||
+        /OANDA 401/.test(msg) ||
         /fetch failed/i.test(msg) ||
         /ECONNRESET|ETIMEDOUT|ENOTFOUND/i.test(msg) ||
         /socket/i.test(msg);

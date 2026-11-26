@@ -484,6 +484,50 @@ and lost in one year of eleven, so the pattern is old — but nobody could have 
 cost then. One variant in 3,695 beat the page's rules on every window, which is what chance
 gives. Nothing was changed.
 
+### Each market tuned on its own, then examined on years it had never seen
+
+The owner asked for a strategy and settings found separately for each market — gold, Bitcoin and
+eight forex pairs — by tuning, studying the losing trades and tuning again. Done the only way
+that says anything about live trading: everything was chosen on **the years up to November 2021**
+(TRAIN) and the finished rules were then run once on **the five years after** (TEST).
+
+For each market: all 49 strategy types on three charts with every trend filter and exit → the
+six best types → each one's stop limits, target (1:1.5, 1:2, 1:3), profit lock, time limit and
+trend filter tuned (about 1,500 settings a type) → its losing trades studied, and a condition
+that lost in both halves of TRAIN filtered out, up to three times. Every choice was made with
+costs doubled.
+
+| Market | Best on TRAIN | TRAIN | TEST (the five years after) |
+| --- | --- | --- | --- |
+| Gold | 4-hour Keltner breakout, daily trend, 1:3, lock | +57.5R, 323 trades, 78% won | **+27.5R, 198 trades, 76% won** (first half −8R, second +36R) |
+| Bitcoin¹ | 4-hour Donchian 20, 4-hour 200-EMA, 1:3, lock +0.6R | +135.9R, 345 trades, 66% | **+47.3R, 264 trades, 64%** |
+| Bitcoin¹ | 4-hour close beyond yesterday's high/low, 200-EMA | +173.2R, 437 trades, 68% | **+45.9R, 387 trades, 60%** |
+| EUR/USD | 1-hour RSI(14), trend filters | +19.4R, 60 trades, 67% | −3.4R, 24 trades — all six failed |
+| GBP/USD | 1-hour RSI(2) | +36.4R, 63 trades, 56% | +1.6R, 20 trades — four of six failed |
+| USD/JPY | 1-hour Ichimoku cross | +78.9R, 382 trades, 46% | +9.7R, 366 trades, negative with costs doubled — all six failed |
+| AUD/USD | 1-hour change of character | +29.6R, 169 trades, 81% | −7.5R, 42 trades — all six failed |
+| USD/CAD | 15-minute DI cross | +20.6R, 71 trades, 85% | +0.1R, 17 trades — three failed, three near zero |
+| USD/CHF | 4-hour EMA 20/50 cross | +31.0R, 141 trades, 72% | +9.6R, 70 trades, 67% — the other five failed |
+| NZD/USD | 4-hour range fade | +25.0R, 74 trades, 76% | −2.3R, 31 trades — five of six failed |
+| GBP/JPY | 4-hour change of character | +42.8R, 221 trades, 73% | −0.4R, 114 trades — four of six failed |
+
+¹ Bitcoin with costs as a share of price (5.5 per 10,000), so the early years can trade at all.
+
+**Of the 60 tuned systems, all 60 made money on TRAIN (+4.5R to +179R). On TEST 43 failed, 11
+were near zero, 5 held at a lower level and 1 held.** Tuning a market until its backtest looks
+best mostly finds what happened to work in those years. The win rates of 67% to 85% found on the
+forex pairs fell to 24% to 57% on the years after.
+
+- **Forex:** nothing to trade. Two small survivors out of 48 (USD/CHF +9.6R and GBP/JPY +9.4R
+  in five years) is what chance leaves.
+- **Gold:** the 4-hour breakout again — the same finding as the test above, now from rules
+  chosen without the last five years.
+- **Bitcoin:** 4-hour breakouts held. At the real $45 a coin the second one beats the page's
+  rules on ten years (+55.2R against +19.8R), five (+33.6R against +22.8R), one year (+15.4R
+  against +8.7R) and three months (+9.5R against +5.7R), with a smaller drawdown (8.8R against
+  11.3R) — and is behind on the last month (+2.1R against +4.8R, 7 trades) and week. By the
+  owner's rule — live only if it beats the current one on every window — it was not deployed.
+
 **The challenge in one week** ($50,000, +$5,000 to pass, out at −$2,000 in a day or $3,000
 under the peak), counted on the backtest's own trades from every starting day:
 
@@ -514,8 +558,15 @@ it almost never passed at any size. A week of +5R or more happened 4 times in th
   still lose a signal.
 - **A slow candle.** If the candle that has just closed is not there yet, the scan asks again
   (twice, four seconds apart) instead of reading the old one.
+- **A refused request.** The data provider now and then answers a valid request with
+  "401 Insufficient authorization" and accepts the same request a moment later (2 of 97 scans on
+  25–26 November 2026). The request is asked again, up to four times, like a server error.
 - **The scan log.** Every scan writes a row to `market_state` (`scan:schedule:<slot>`) when it
-  starts and when it is done, with the candle it read and what it did; a week is kept.
+  starts and when it is done, with the candle it read and what it did. The slots cover a week;
+  in practice rows older than about a day are being removed, most likely by the old site that
+  still shares the database. Audited on 26 November 2026: 97 scans in 24 hours, no 15-minute
+  slot missed, a scan starting 8 seconds after the candle close in the middle case (175 at
+  worst) and taking 1.5 seconds.
 - A signal is only sent within 20 minutes of its candle's close (`MAX_ENTRY_AGE_MIN`). A scan
   that runs later — after an outage, or at the weekend — does not send a trade at a price that
   is no longer there.
@@ -575,6 +626,10 @@ XAU/USD, to 2026-11-24, in R (1R = the risk of one trade):
 
 **Read this before trusting it.**
 
+- **A gap through the target is booked at the target.** When a candle opens beyond the
+  take-profit (a weekend gap), a real order fills at the better opening price; the backtest and
+  the trade record book the target itself. It happened once on gold and twice on Bitcoin in the
+  whole history, and understates the result by about 2R and 0.4R.
 - **A high win rate is not a high profit.** Most wins are the moved stop at +0.2R; the losses
   are mostly a full 1R. It averages 0.29R a trade — 0.25R with costs doubled — and the same
   entries without the lock make about twice as much. Three or more losses in a row have happened
@@ -599,6 +654,7 @@ XAU/USD, to 2026-11-24, in R (1R = the risk of one trade):
 ## Verification
 
 ```bash
+npx tsx --tsconfig tsconfig.json --env-file=.env.local scripts/audit-live.ts   # the LIVE site against the provider's raw candles and a calculation written from scratch: candles, swings and labels, breaks of structure, moving averages, day levels, entry and stop levels, the Bitcoin page (51 checks)
 npx tsx --tsconfig tsconfig.json scripts/verify-btc.ts     # the Bitcoin system: the 4-hour chart, range, trend, entry, stop, exits, one trade at a time, and that the page reads what the backtest reads
 npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, filters, support/resistance, supply/demand, oversized candles, entries (the pullback among them), stop, profit lock, backtest, settlement, send rules, duplicates
 ```
