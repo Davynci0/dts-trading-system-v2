@@ -360,53 +360,61 @@ shows what they are waiting for, the trades they would have taken over the last 
 backtest.
 
 **Why it is a different system.** The gold rules lose on Bitcoin (five years: −7.9R from 120 trades
-at a $45 spread, −70.6R from 552 at $20). So do the usual intraday methods, each tested on five
-years of 15-minute and 1-hour candles with the trend filters and the scalp's exit: breaks of
-structure, momentum candles, channel breakouts of 3 to 24 hours, pullbacks to the broken level and
-to moving averages, session breakouts (Asian range, New York open), liquidity sweeps, and RSI and
-Bollinger reversions. With the scalp's five-hour exit none held up: the best made about 15R in
-five years with a drawdown as large, and under 4R with costs doubled. What works on Bitcoin is
-slower: **a breakout of a multi-day range, with the daily trend** — the Donchian channel
-breakout that trend followers use on Bitcoin.
+at a $45 spread, −70.6R from 552 at $20). So do the usual intraday methods with the scalp's
+five-hour exit. What works on Bitcoin is slower: **a 4-hour breakout with the trend.**
+
+**Where these rules come from.** Each market was tuned on its own on the years up to November
+2021 and the result run once on the five years after ([Each market tuned on its own](#each-market-tuned-on-its-own-then-examined-on-years-it-had-never-seen)).
+On Bitcoin the rules below came out of that and held on the unseen years. On 26 November 2026
+the owner chose them over the first rules (a close beyond the last 20 candles' range, with the
+50-day trend), which they beat on ten, five, three and one year and on three months, and trail
+on the last month and week.
 
 | | |
 | --- | --- |
-| Trend | the last closed daily candle against the average of the last 50 daily closes: above it only buys, below it only sells |
-| Entry | the first 4-hour candle that closes beyond the high (buy) or low (sell) of the 20 four-hour candles before it; entered at market at that close. 4-hour candles are built on the UTC clock (00:00, 04:00, …) |
-| Stop loss | 0.2 ATR beyond the low (buy) / high (sell) of the last two 4-hour candles; never closer than 0.75 ATR and never further than 2 ATR (4-hour ATR) |
+| Trend | the 4-hour close against the 200-EMA of the 4-hour chart: above it only buys, below it only sells |
+| Entry | the first 4-hour candle of the day that closes above yesterday's high (buy) or below yesterday's low (sell); entered at market at that close. "Yesterday" is the last daily candle closed (17:00 New York). If that first close is against the trend, that side is not traded that day. 4-hour candles are built on the UTC clock (00:00, 04:00, …) |
+| Stop loss | 0.2 ATR beyond the low (buy) / high (sell) of the last two 4-hour candles; never closer than 1.5 ATR and never further than 2 ATR (4-hour ATR) |
 | Take profit | 3 × the risk (1:3) |
-| Profit lock | once price has gone 0.4R the trade's way, the stop is moved to 0.2R in profit |
-| Time limit | closed at market after 48 hours of trading |
+| Profit lock | once price has gone 0.6R the trade's way, the stop is moved to 0.2R in profit |
+| Time limit | closed at market after 72 hours of trading |
 | Positions | one trade at a time |
 | No trade | when costs ($45 a coin) are more than 6% of the risk, or when the market is closed at the 4-hour close |
 
-BTC/USD, to 2026-11-24, in R, after $45 a coin (the spread the data provider quoted in November 2026):
+BTC/USD, to 2026-11-26, in R, after $45 a coin (the spread the data provider quoted in November 2026):
 
 | | Trades | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
 | --- | --- | --- | --- | --- | --- | --- |
-| **5 years** | **215** | **68%** | **+22.8R** | **+17.0R** | **10.0R** | **5** |
-| **Last 3 years** | 164 | 72% | +29.2R | +25.3R | 7.4R | 5 |
+| 10 years | 416 | 62% | +55.2R | +43.8R | 8.8R | 4 |
+| **5 years** | **319** | **60%** | **+33.6R** | **+25.0R** | **8.8R** | **4** |
+| **Last 3 years** | 230 | 60% | +32.5R | +27.2R | 8.8R | 4 |
+| 1 year | 75 | 60% | +15.4R | | 6.4R | 4 |
+| 3 months | 15 | 80% | +9.5R | | 2.9R | 2 |
+| 1 month | 7 | 86% | +2.1R | | 1.0R | 1 |
+| 1 week | 1 | | +0.2R | | | |
 
-By year from November 2021: −4.4R (39 trades), −2.0R (12), +13.8R (54), +6.7R (56), +8.7R (54).
-Buys +18.7R (110 trades, 75% won), sells +4.1R (105, 61%). 59 trades ended at the first stop, 117
-at the moved stop, 18 at the target, 21 at the time limit; the average win is 0.60R, the average
-loss 0.96R. Three or more losses in a row five times, four or more once.
+By calendar year: 2017 −2.6R (7 trades) · 2018 +1.8R (8) · 2019 −2.1R (5) · 2020 +6.1R (11) ·
+2021 +20.8R (75) · 2022 +2.0R (58) · 2023 −1.2R (26) · 2024 +16.4R (84) · 2025 −4.0R (73) ·
+2026 +17.9R (69). Over five years 116 trades ended at the first stop, 131 at the moved stop, 33
+at the target and 39 at the time limit; the average win is 0.83R, the average loss 0.97R.
 
 **Read this before trusting it.**
 
-- **The edge is small** — 0.11R a trade against 0.29R for gold, about one trade a week, and the
-  first two years lost. On 215 trades that is not far from what chance could give.
-- **It is not a scalp.** Half the trades are over within about 11 hours, but some run the full
-  48: this departs from the standing rules for gold (the 15-minute chart, one to five hours),
-  because nothing faster had an edge on Bitcoin.
-- **The lock buys the win rate.** Without it the same entries made +30.2R but won only 42% of
-  the time, with eight runs of four or more losses. The neighbours of the rules — a range of 10
-  to 55 candles, the 2-hour chart, a 20-, 50- or 100-day trend, other stops, targets and time
-  limits — all made money (+14R to +45R), which is why this idea was kept.
+- **The edge is small** — 0.11R a trade against 0.29R for gold, a little over one trade a week.
+  Four of the ten years lost, 2025 among them.
+- **It is the buys.** Over five years buys made +33.5R (157 trades, 62% won) and sells +0.2R
+  (162 trades, 57% won); over ten, +54.3R and +0.9R. Bitcoin rose over the period.
+- **Losing runs.** Three or more losses in a row twelve times in five years, four in a row three
+  times. The win rate is 60%, lower than the first rules' 68%: the lock is later (+0.6R).
+- **It is not a scalp.** Half the trades last a day (23 hours), some the full 72: this departs
+  from the standing rules for gold (the 15-minute chart, one to five hours), because nothing
+  faster had an edge on Bitcoin.
+- **Chosen with some hindsight.** Two settings came out of the tuning years and held on the
+  unseen ones; this is the one that did better there and on the recent windows.
 - **The data has no weekends** (the provider's Bitcoin market is closed then) and the spread is
   the provider's; a broker's spread, its weekend trading and its overnight charges will differ.
-  In 2022 the provider's spread was about $89.
-- **The stop is wide in dollars:** $938 to $4,155 a coin in the last twelve months, $2,041 in
+  Before 2021 a $45 cost left few trades (31 in 2017–2020).
+- **The stop is wide in dollars:** $938 to $3,281 a coin in the last twelve months, $1,855 in
   the middle.
 
 ```bash
@@ -456,7 +464,7 @@ trend filters and up to six exits (1:2 and 1:3, with and without the lock, 5 to 
 3,695 variants a market, each on the whole history with costs and costs doubled.
 
 **What held on gold in every five-year block:** only slow breakouts with the daily trend on the
-4-hour chart (Donchian, Keltner, Bollinger squeeze, Supertrend) — the Bitcoin page's rule. That
+4-hour chart (Donchian, Keltner, Bollinger squeeze, Supertrend) — the Bitcoin page's first rule. That
 rule had been chosen on Bitcoin; on gold it had never been fitted to anything:
 
 | 4-hour Donchian 20, daily trend, 1:2, lock, 48 h | Trades | Win rate | Total | Costs doubled | Worst drawdown |
@@ -525,8 +533,8 @@ forex pairs fell to 24% to 57% on the years after.
 - **Bitcoin:** 4-hour breakouts held. At the real $45 a coin the second one beats the page's
   rules on ten years (+55.2R against +19.8R), five (+33.6R against +22.8R), one year (+15.4R
   against +8.7R) and three months (+9.5R against +5.7R), with a smaller drawdown (8.8R against
-  11.3R) — and is behind on the last month (+2.1R against +4.8R, 7 trades) and week. By the
-  owner's rule — live only if it beats the current one on every window — it was not deployed.
+  11.3R) — and is behind on the last month (+2.1R against +4.8R, 7 trades) and week. Shown
+  both, the owner chose to replace the page's rules with it (26 November 2026).
 
 **The challenge in one week** ($50,000, +$5,000 to pass, out at −$2,000 in a day or $3,000
 under the peak), counted on the backtest's own trades from every starting day:
@@ -655,7 +663,7 @@ XAU/USD, to 2026-11-24, in R (1R = the risk of one trade):
 
 ```bash
 npx tsx --tsconfig tsconfig.json --env-file=.env.local scripts/audit-live.ts   # the LIVE site against the provider's raw candles and a calculation written from scratch: candles, swings and labels, breaks of structure, moving averages, day levels, entry and stop levels, the Bitcoin page (51 checks)
-npx tsx --tsconfig tsconfig.json scripts/verify-btc.ts     # the Bitcoin system: the 4-hour chart, range, trend, entry, stop, exits, one trade at a time, and that the page reads what the backtest reads
+npx tsx --tsconfig tsconfig.json scripts/verify-btc.ts     # the Bitcoin system: the 4-hour chart, yesterday's levels, the trend line, entry, stop, exits, one trade at a time, and that the page reads what the backtest reads
 npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, filters, support/resistance, supply/demand, oversized candles, entries (the pullback among them), stop, profit lock, backtest, settlement, send rules, duplicates
 ```
 
@@ -663,7 +671,7 @@ npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, 
 
 - **On the chart:** to begin with only the next entry (shown only while a trade is possible), the open trade and the closed trades. The other layers are switched on with a click and the choice is remembered in the browser: the 15-minute market structure the entries are read from — each swing labelled HH, HL, LH or LL, and each close beyond a swing drawn as BOS (the structure continues) or CHoCH (it turns) — support and resistance, supply and demand, the moving averages, yesterday's high and low, and a shaded band over the hours in which no new trade is taken. The chart can also show the **1-hour** candles (with the 1-hour structure the trend is read from) and the **4-hour** candles (context only); the system's read and its signals are the same whichever is shown.
 - `/` — dashboard: the 15-minute chart with the nearest level an entry has to close beyond, the level a stop would go beyond, the open trade (with its stop once the profit lock has moved it) and past results; a line above the chart says which side is traded and why, and the panel says what the system is waiting for and which conditions are still missing (the ones already met, the levels and the rules are folded away). `/?asOf=2026-10-27T16:30Z` shows the chart as it stood at that moment
-- `/btc` — the Bitcoin system: the 4-hour chart with the level the next trade needs, what the rules are waiting for, the trades they would have taken, and the backtest. Read only — no signals are sent
+- `/btc` — the Bitcoin system: the 4-hour chart with its trend line, yesterday's high and low and the level the next trade needs, what the rules are waiting for, the trades they would have taken, and the backtest. Read only — no signals are sent
 - `/backtests` — stored backtest runs of the live rules and the quick run
 - `/login` — Supabase auth
 - `/api/candles` — OANDA candle proxy (key stays server-side)

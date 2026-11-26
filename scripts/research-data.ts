@@ -42,10 +42,11 @@ async function fetchRange(instrument: string, granularity: string, end: number, 
 }
 
 /** The backtest window of 15-minute and 1-hour candles plus the warm-up before it, and the daily candles behind the 50-day average. */
-export async function loadPairData(pair: string): Promise<PairData> {
+export async function loadPairData(pair: string, warmupDays: number = WARMUP_DAYS): Promise<PairData> {
   const end = windowEnd();
-  const span = BACKTEST_YEARS * 365 + WARMUP_DAYS;
-  const file = `${CACHE_DIR}/${pair}-${BACKTEST_YEARS}y-${new Date(end).toISOString().slice(0, 10)}.json`;
+  const span = BACKTEST_YEARS * 365 + warmupDays;
+  // a longer warm-up (a slow average that needs more history) gets its own cache file
+  const file = `${CACHE_DIR}/${pair}-${BACKTEST_YEARS}y${warmupDays === WARMUP_DAYS ? "" : `-w${warmupDays}`}-${new Date(end).toISOString().slice(0, 10)}.json`;
   if (existsSync(file)) return JSON.parse(readFileSync(file, "utf8")) as PairData;
   const data: PairData = {
     m15: await fetchRange(pair, "M15", end, span, 40),

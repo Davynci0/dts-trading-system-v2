@@ -1,8 +1,8 @@
 /**
  * Checks of the Bitcoin system (lib/analysis/btc.ts, lib/backtest/btc.ts) on a
- * generated market: the 4-hour chart, the range, the trend, the entry, the
- * stop, the exits and the one-trade-at-a-time rule, each recomputed here from
- * the candles and compared with what the code did.
+ * generated market: the 4-hour chart, yesterday's high and low, the trend, the
+ * entry, the stop, the exits and the one-trade-at-a-time rule, each recomputed
+ * here from the candles and compared with what the code did.
  *
  *   npx tsx --tsconfig tsconfig.json scripts/verify-btc.ts
  */
@@ -20,11 +20,10 @@ import {
   BTC_MAX_RISK_ATR,
   BTC_MIN_CANDLES,
   BTC_MIN_RISK_ATR,
-  BTC_RANGE_CANDLES,
   BTC_STOP_BUFFER_ATR,
   BTC_STOP_CANDLES,
   BTC_TARGET_R,
-  BTC_TREND_DAYS,
+  BTC_TREND_EMA,
 } from "../lib/analysis/btc";
 import { btcStats, runBtcBacktest } from "../lib/backtest/btc";
 import type { Candle } from "../lib/types";
@@ -98,17 +97,37 @@ const h4 = fourHour(h1);
 
 console.log("\nthe series");
 const s = buildBtcSeries({ h1, daily });
+const weekdays = daily.filter((d) => ![5, 6].includes(new Date(d.time * 1000).getUTCDay()));
+/** yesterday for the 4-hour candle j, worked out here: the last daily candle closed a quarter of an hour before the candle's last hour ended */
+const yesterdayOf = (j: number) => {
+  const inside = h1.filter((c) => c.time >= s.h4[j].time && c.time < s.h4[j].time + BTC_CHART_SECONDS);
+  const known = inside[inside.length - 1].time + 3600 - 900;
+  let p = -1;
+  while (p + 1 < weekdays.length && weekdays[p + 1].time + 86400 <= known) p++;
+  return p;
+};
 {
   const j = s.n - 7;
-  const before = s.h4.slice(j - BTC_RANGE_CANDLES, j);
-  check(`the range is the high and low of the ${BTC_RANGE_CANDLES} candles BEFORE a candle`, near(s.rangeHigh[j], Math.max(...before.map((c) => c.high))) && near(s.rangeLow[j], Math.min(...before.map((c) => c.low))));
+  const p = yesterdayOf(j);
+  check("yesterday's high and low are the last daily candle CLOSED when the 4-hour candle closed", s.day[j] === p && near(s.prevHigh[j], weekdays[p].high) && near(s.prevLow[j], weekdays[p].low));
   check("the ATR is known and positive once there is enough history", s.atr.slice(BTC_MIN_CANDLES).every((x) => x > 0));
-  // the daily trend at a 4-hour close uses only daily candles closed by then
-  const closed = s.h4[j].time + BTC_CHART_SECONDS;
-  const days = daily.filter((d) => ![5, 6].includes(new Date(d.time * 1000).getUTCDay()) && d.time + 86400 <= closed);
-  const avg = days.slice(-BTC_TREND_DAYS).reduce((x, d) => x + d.close, 0) / BTC_TREND_DAYS;
-  const last = days[days.length - 1].close;
-  check(`the daily trend is the last CLOSED daily candle against the average of ${BTC_TREND_DAYS} closes`, near(s.dailyAverage[j], avg) && s.dailyTrend[j] === (last > avg ? 1 : last < avg ? -1 : 0));
+  const k = 2 / (BTC_TREND_EMA + 1);
+  let e = s.h4[0].close;
+  for (let q = 1; q <= j; q++) e = s.h4[q].close * k + e * (1 - k);
+  check(`the trend line is the ${BTC_TREND_EMA}-EMA of the 4-hour closes`, near(s.ema[j], e, 1e-9));
+  // the first close beyond yesterday's high / low of each day, counted here with a set
+  const seen = new Set<string>();
+  let same = true;
+  for (let q = 0; q < s.n; q++) {
+    const d = yesterdayOf(q);
+    if (d < 0) continue;
+    const up = s.h4[q].close > weekdays[d].high && !seen.has(d + "u");
+    const down = s.h4[q].close < weekdays[d].low && !seen.has(d + "d");
+    if (up) seen.add(d + "u");
+    if (down) seen.add(d + "d");
+    if (!!s.firstAbove[q] !== up || !!s.firstBelow[q] !== down) same = false;
+  }
+  check("the first close beyond yesterday's high or low is marked once a day on each side", same && s.firstAbove.some((x) => x === 1) && s.firstBelow.some((x) => x === 1));
   const cut = buildBtcSeries({ h1, daily, now: s.h4[s.n - 1].time + 3600 });
   check("a 4-hour candle that has not closed yet is not read", cut.n === s.n - 1);
 }
@@ -119,33 +138,40 @@ const setups = states.map((x, j) => ({ x, j })).filter((q) => q.x?.setup);
 {
   check("the generated market gives setups on both sides", setups.some((q) => q.x!.setup!.direction === "long") && setups.some((q) => q.x!.setup!.direction === "short"), `${setups.length} setups`);
   check(
-    "every setup is with the daily trend",
-    setups.every((q) => (q.x!.setup!.direction === "long" ? 1 : -1) === s.dailyTrend[q.j])
+    `every setup is with the trend: a buy closes above the ${BTC_TREND_EMA}-EMA, a sell below it`,
+    setups.every((q) => (q.x!.setup!.direction === "long" ? s.h4[q.j].close > s.ema[q.j] : s.h4[q.j].close < s.ema[q.j]))
   );
   check(
-    "every setup is a 4-hour close beyond the range of the candles before it",
-    setups.every((q) => (q.x!.setup!.direction === "long" ? s.h4[q.j].close > s.rangeHigh[q.j] : s.h4[q.j].close < s.rangeLow[q.j]))
+    "every setup is a 4-hour close beyond yesterday's high (buy) or low (sell)",
+    setups.every((q) => (q.x!.setup!.direction === "long" ? s.h4[q.j].close > s.prevHigh[q.j] && near(q.x!.setup!.level, s.prevHigh[q.j]) : s.h4[q.j].close < s.prevLow[q.j] && near(q.x!.setup!.level, s.prevLow[q.j])))
   );
   check(
-    "…and the first one: the candle before it had not closed beyond its own range",
-    setups.every((q) => (q.x!.setup!.direction === "long" ? !(s.h4[q.j - 1].close > s.rangeHigh[q.j - 1]) : !(s.h4[q.j - 1].close < s.rangeLow[q.j - 1])))
+    "…and the first one of its day: no earlier candle of that day had closed beyond it",
+    setups.every((q) => {
+      const up = q.x!.setup!.direction === "long";
+      for (let k = q.j - 1; k >= 0 && s.day[k] === s.day[q.j]; k--) if (up ? s.h4[k].close > s.prevHigh[q.j] : s.h4[k].close < s.prevLow[q.j]) return false;
+      return true;
+    })
   );
-  const later = states.filter((x, j) => x && !x.setup && j >= 1 && s.dailyTrend[j] !== 0 && (s.dailyTrend[j] === 1 ? s.h4[j].close > s.rangeHigh[j] && s.h4[j - 1].close > s.rangeHigh[j - 1] : s.h4[j].close < s.rangeLow[j] && s.h4[j - 1].close < s.rangeLow[j - 1]));
-  check("a second close beyond the range is not traded", later.length > 0 && later.every((x) => x!.waiting?.includes("already broken out")), `${later.length} such candles`);
+  const later = states.filter((x, j) => x && !x.setup && x.trend !== 0 && (x.trend === 1 ? s.h4[j].close > s.prevHigh[j] && !s.firstAbove[j] : s.h4[j].close < s.prevLow[j] && !s.firstBelow[j]));
+  check("a later close beyond the same level is not traded", later.length > 0 && later.every((x) => x!.waiting?.includes("already closed")), `${later.length} such candles`);
+  const against = states.filter((x, j) => x && ((s.firstAbove[j] && s.h4[j].close < s.ema[j]) || (s.firstBelow[j] && s.h4[j].close > s.ema[j])));
+  check("a first close beyond the level against the trend is not traded", against.length > 0 && against.every((x) => !x!.setup && x!.waiting?.includes("against the trend")), `${against.length} such candles`);
   check(
     `the risk is between ${BTC_MIN_RISK_ATR} and ${BTC_MAX_RISK_ATR} ATR`,
     setups.every((q) => q.x!.setup!.risk >= BTC_MIN_RISK_ATR * s.atr[q.j] - 1e-6 && q.x!.setup!.risk <= BTC_MAX_RISK_ATR * s.atr[q.j] + 1e-6)
   );
   check(
-    `a stop inside the limits sits ${BTC_STOP_BUFFER_ATR} ATR beyond the last ${BTC_STOP_CANDLES} candles`,
-    setups
-      .filter((q) => q.x!.setup!.stopBasis === "candles")
-      .every((q) => {
-        const dir = q.x!.setup!.direction === "long" ? 1 : -1;
-        const two = s.h4.slice(q.j - BTC_STOP_CANDLES + 1, q.j + 1);
-        const extreme = dir === 1 ? Math.min(...two.map((c) => c.low)) : Math.max(...two.map((c) => c.high));
-        return near(q.x!.setup!.stopLoss, extreme - dir * BTC_STOP_BUFFER_ATR * s.atr[q.j]);
-      }) && setups.some((q) => q.x!.setup!.stopBasis === "candles")
+    `a stop inside the limits sits ${BTC_STOP_BUFFER_ATR} ATR beyond the last ${BTC_STOP_CANDLES} candles; one outside is brought to the limit`,
+    setups.every((q) => {
+      const u = q.x!.setup!;
+      const dir = u.direction === "long" ? 1 : -1;
+      const two = s.h4.slice(q.j - BTC_STOP_CANDLES + 1, q.j + 1);
+      const extreme = dir === 1 ? Math.min(...two.map((c) => c.low)) : Math.max(...two.map((c) => c.high));
+      const raw = dir * (u.entry - (extreme - dir * BTC_STOP_BUFFER_ATR * s.atr[q.j]));
+      const want = Math.min(Math.max(raw, BTC_MIN_RISK_ATR * s.atr[q.j]), BTC_MAX_RISK_ATR * s.atr[q.j]);
+      return near(u.risk, want) && u.stopBasis === (raw > BTC_MAX_RISK_ATR * s.atr[q.j] ? "limit" : raw < BTC_MIN_RISK_ATR * s.atr[q.j] ? "minimum" : "candles");
+    })
   );
   check(
     `the take-profit is ${BTC_TARGET_R} times the risk, the lock at +${BTC_LOCK_AT_R}R moves the stop to +${BTC_LOCK_TO_R}R`,
@@ -158,11 +184,24 @@ const setups = states.map((x, j) => ({ x, j })).filter((q) => q.x?.setup);
   check(`no setup when costs are more than ${BTC_MAX_COST_SHARE * 100}% of the risk`, setups.every((q) => BTC_COST / q.x!.setup!.risk <= BTC_MAX_COST_SHARE + 1e-9));
   const waitingOnes = states.filter((x) => x && !x.setup);
   check("a candle without a trade says what it is waiting for", waitingOnes.length > 0 && waitingOnes.every((x) => !!x!.waiting) && setups.every((q) => q.x!.waiting == null));
-  const armed = states.map((x, j) => ({ x, j })).filter((q) => q.x && q.x.nextArmed && q.j + 1 < s.n);
+  // the level shown for the next candle, where the next candle is a whole one (not cut by the weekend)
+  // (candles cut short by the weekend are left out: by their clock's end the day has already closed)
+  const whole = (j: number) => j + 2 < s.n && s.h4[j + 2].time - s.h4[j + 1].time === BTC_CHART_SECONDS && s.h4[j + 1].time - s.h4[j].time === BTC_CHART_SECONDS;
+  const shown = states.map((x, j) => ({ x, j })).filter((q) => q.x && q.x.nextLevel != null && q.x.nextLevelFinal && whole(q.j));
   check(
-    "the level shown for the next candle is the one that candle is read against",
-    armed.length > 0 && armed.every((q) => near(q.x!.nextLevel!, s.dailyTrend[q.j] === 1 ? s.rangeHigh[q.j + 1] : s.rangeLow[q.j + 1]))
+    "the level shown for the next candle is yesterday's high or low as that candle will be read",
+    shown.length > 0 && shown.every((q) => near(q.x!.nextLevel!, q.x!.trend === 1 ? s.prevHigh[q.j + 1] : s.prevLow[q.j + 1]))
   );
+  check(
+    "the level is shown as still open only while that side has not been used today",
+    shown.every((q) => q.x!.nextArmed === !(q.x!.trend === 1 ? s.usedAbove[q.j] : s.usedBelow[q.j]))
+  );
+  // a level that will be replaced before the next candle closes is marked as such: the next candle belongs to a new day
+  const provisional = states.map((x, j) => ({ x, j })).filter((q) => q.x && q.x.nextLevel != null && !q.x.nextLevelFinal && whole(q.j));
+  check("when the day closes before the next 4-hour candle does, the level shown is marked as not final", provisional.length > 0 && provisional.every((q) => s.day[q.j + 1] !== s.day[q.j]) && shown.every((q) => s.day[q.j + 1] === s.day[q.j]), `${provisional.length} such candles`);
+  // once that day has closed, the page (read later) shows the new level
+  const after = provisional.slice(0, 40).map((q) => btcStateAt(s, q.j, undefined, s.h4[q.j].time + 2 * BTC_CHART_SECONDS - 900));
+  check("…and once the day has closed, the level shown is the new day's", after.every((x, k) => near(x.nextLevel!, x.trend === 1 ? s.prevHigh[provisional[k].j + 1] : s.prevLow[provisional[k].j + 1]) && x.nextArmed && x.nextLevelFinal));
 }
 
 console.log("\nthe backtest");
@@ -209,13 +248,13 @@ console.log("\nthe page reads what the backtest reads");
   let total = 0;
   for (let j = s.n - 200; j < s.n; j += 3) {
     const closed = s.h4[j].time + BTC_CHART_SECONDS;
-    const win = buildBtcSeries({ h1: h1.filter((c) => c.time + 3600 <= closed).slice(-2000), daily: daily.filter((d) => d.time + 86400 <= closed).slice(-150), now: closed });
+    const win = buildBtcSeries({ h1: h1.filter((c) => c.time + 3600 <= closed).slice(-5000), daily: daily.filter((d) => d.time + 86400 <= closed).slice(-120), now: closed });
     const got = btcStateAt(win, win.n - 1);
     const want = states[j]!;
     total++;
-    if ((got.setup == null) === (want.setup == null) && got.dailyTrend === want.dailyTrend && near(got.nextLevel ?? 0, want.nextLevel ?? 0) && (!got.setup || near(got.setup.stopLoss, want.setup!.stopLoss, 1e-4))) same++;
+    if ((got.setup == null) === (want.setup == null) && got.trend === want.trend && near(got.nextLevel ?? 0, want.nextLevel ?? 0) && got.nextArmed === want.nextArmed && got.nextLevelFinal === want.nextLevelFinal && (!got.setup || near(got.setup.stopLoss, want.setup!.stopLoss, 1e-4))) same++;
   }
-  check("a window of 2,000 one-hour and 150 daily candles reads a candle as the full history does", same === total, `${same} of ${total}`);
+  check("a window of 5,000 one-hour and 120 daily candles reads a candle as the full history does", same === total, `${same} of ${total}`);
 }
 
 console.log(`\n${passed} passed, ${failed} failed`);

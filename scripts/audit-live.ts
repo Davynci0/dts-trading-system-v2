@@ -87,24 +87,40 @@ async function gold(view: "M15" | "H1" | "H4") {
 
 async function btc() {
   console.log("\nBitcoin page");
-  const j = (await (await fetch(SITE + "/api/btc")).json()) as { candles: Candle[]; state: { readAt: number; candleTime: number; dailyTrend: number; dailyAverage: number; dailyClose: number; rangeHigh: number; rangeLow: number; nextLevel: number | null; close: number }; trades: { entryTime: number; entry: number; stopLoss: number; takeProfit: number; direction: string; exitTime: number; exitPrice: number; outcome: string }[] };
+  const j = (await (await fetch(SITE + "/api/btc")).json()) as {
+    candles: Candle[];
+    ema: { time: number; value: number }[];
+    state: { readAt: number; candleTime: number; trend: number; ema: number; prevHigh: number; prevLow: number; nextLevel: number | null; nextLevelFinal: boolean; close: number };
+    trades: { entryTime: number; entry: number; stopLoss: number; takeProfit: number; direction: string; exitTime: number; exitPrice: number; outcome: string }[];
+  };
   const m15 = await fetchCandles({ instrument: "BTC_USD", granularity: "M15", count: 5000 });
-  // 4-hour candles from scratch, from the 15-minute candles
-  const agg = new Map<number, Candle>();
-  for (const x of m15) { const t = Math.floor(x.time / 14400) * 14400; const a = agg.get(t); if (!a) agg.set(t, { ...x, time: t }); else { a.high = Math.max(a.high, x.high); a.low = Math.min(a.low, x.low); a.close = x.close; } }
+  const h1 = await fetchCandles({ instrument: "BTC_USD", granularity: "H1", count: 5000 });
+  // 4-hour candles from scratch
+  const add = (src: Candle[]) => {
+    const agg = new Map<number, Candle>();
+    for (const x of src) { const t = Math.floor(x.time / 14400) * 14400; const a = agg.get(t); if (!a) agg.set(t, { ...x, time: t }); else { a.high = Math.max(a.high, x.high); a.low = Math.min(a.low, x.low); a.close = x.close; } }
+    return agg;
+  };
+  const agg = add(m15);
   const full = j.candles.filter((x) => agg.has(x.time) && x.time + 14400 <= j.state.readAt && x.time > m15[0].time);
   check("the 4-hour candles drawn are the 15-minute candles added up", full.length > 150 && full.every((x) => { const a = agg.get(x.time)!; return near(a.open, x.open) && near(a.high, x.high) && near(a.low, x.low) && near(a.close, x.close); }), full.length + " candles compared");
   const closed = j.candles.filter((x) => x.time + 14400 <= j.state.readAt);
   const last = closed[closed.length - 1];
   check("the system reads the last CLOSED 4-hour candle", last.time === j.state.candleTime && near(last.close, j.state.close));
-  const before = closed.slice(-21, -1);
-  check("the range it had to break is the high and low of the 20 candles before it", near(j.state.rangeHigh, Math.max(...before.map((x) => x.high))) && near(j.state.rangeLow, Math.min(...before.map((x) => x.low))));
-  const next = closed.slice(-20);
-  const want = j.state.dailyTrend === 1 ? Math.max(...next.map((x) => x.high)) : Math.min(...next.map((x) => x.low));
-  check("the level drawn for the next trade is the extreme of the last 20 closed candles", j.state.nextLevel == null || near(j.state.nextLevel, want), String(j.state.nextLevel));
-  const days = (await fetchCandles({ instrument: "BTC_USD", granularity: "D", count: 90 })).filter((d) => ![5, 6].includes(new Date(d.time * 1000).getUTCDay()) && d.time + 86400 <= j.state.readAt);
-  const avg = days.slice(-50).reduce((s, d) => s + d.close, 0) / 50;
-  check("the daily trend is the last closed daily candle against its 50-day average", near(j.state.dailyAverage, avg, 1e-6) && near(j.state.dailyClose, days[days.length - 1].close) && j.state.dailyTrend === Math.sign(days[days.length - 1].close - avg), "close " + days[days.length - 1].close + ", average " + avg.toFixed(0));
+  // the 200-EMA of the 4-hour closes, from scratch, over all the history the provider gives at once
+  const long = [...add(h1).values()].filter((x) => x.time + 14400 <= j.state.readAt).sort((x, y) => x.time - y.time);
+  const k = 2 / 201;
+  const fresh = new Map<number, number>();
+  let e = long[0].close;
+  for (const x of long) { e = x === long[0] ? e : x.close * k + e * (1 - k); fresh.set(x.time, e); }
+  check("the trend line is the 200-EMA of the 4-hour closes, and the trend is the close against it", near(j.state.ema, e, 1e-6) && j.state.trend === Math.sign(last.close - e), j.state.ema.toFixed(1) + " against " + e.toFixed(1));
+  check("every point of the trend line drawn is that average", j.ema.length > 100 && j.ema.every((p) => fresh.has(p.time) && near(p.value, fresh.get(p.time)!, 1e-6)), j.ema.length + " points");
+  const weekdays = (await fetchCandles({ instrument: "BTC_USD", granularity: "D", count: 12 })).filter((d) => ![5, 6].includes(new Date(d.time * 1000).getUTCDay()));
+  const dayAt = (t: number) => [...weekdays].reverse().find((d) => d.time + 86400 <= t)!;
+  const y = dayAt(j.state.readAt - 900);
+  check("yesterday's high and low are the last daily candle closed when the 4-hour candle closed", near(j.state.prevHigh, y.high) && near(j.state.prevLow, y.low), y.high + " / " + y.low);
+  const nextDay = dayAt(Math.min(Date.now() / 1000, j.state.readAt + 14400 - 900));
+  check("the level shown for the next trade is the last closed day's high (buys) or low (sells)", j.state.nextLevel == null || near(j.state.nextLevel, j.state.trend === 1 ? nextDay.high : nextDay.low), String(j.state.nextLevel) + (j.state.nextLevelFinal ? "" : " (not final: the day closes first)"));
   const byT = new Map(m15.map((x) => [x.time, x]));
   check("every trade listed was entered at a real 15-minute open, right after a 4-hour close", j.trades.every((t) => { const x = byT.get(t.entryTime); return !!x && near(x.open, t.entry) && t.entryTime % 14400 === 0; }), j.trades.length + " trades");
   check("every trade's target is three times its risk", j.trades.every((t) => near(Math.abs(t.takeProfit - t.entry), 3 * Math.abs(t.entry - t.stopLoss), 1e-6)));

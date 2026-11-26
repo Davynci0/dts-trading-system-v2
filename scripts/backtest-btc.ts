@@ -39,14 +39,15 @@ function line(name: string, g: BtcTrade[], k: BtcStats = btcStats(g)) {
 async function main() {
   const end = windowEnd() / 1000;
   const start = end - BACKTEST_YEARS * YEAR;
-  const data = await loadPairData(BTC_PAIR);
+  // the 200-EMA of the 4-hour chart needs more than a year of candles before the window to have settled
+  const data = await loadPairData(BTC_PAIR, 400);
   const run = (costMultiplier: number) => runBtcBacktest({ m15: data.m15, h1: data.h1, daily: data.daily, from: start, costMultiplier });
   const g = run(1);
   const g2 = run(2);
   const recent = (q: BtcTrade[], years: number) => q.filter((t) => t.entryTime >= end - years * YEAR);
   const endDate = new Date(end * 1000).toISOString().slice(0, 10);
 
-  console.log(`\nBitcoin range breakout on 4-hour candles, 1:3 target, one trade at a time, ${BACKTEST_YEARS} years to ${endDate}, R multiples after $${BTC_COST} a coin`);
+  console.log(`\nBitcoin break of yesterday's high/low on 4-hour candles, with the 200-EMA, 1:3 target, one trade at a time, ${BACKTEST_YEARS} years to ${endDate}, R multiples after $${BTC_COST} a coin`);
   line(`${BACKTEST_YEARS} YEARS`, g);
   line("…costs doubled", g2);
   line(`LAST ${RECENT_YEARS} YEARS`, recent(g, RECENT_YEARS));

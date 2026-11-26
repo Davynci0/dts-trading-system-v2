@@ -28,8 +28,7 @@ interface Results {
   stop: { low: number; high: number; median: number };
 }
 interface Rules {
-  rangeCandles: number;
-  trendDays: number;
+  trendEma: number;
   targetR: number;
   lockAtR: number;
   lockToR: number;
@@ -42,6 +41,8 @@ interface Rules {
 }
 interface Payload {
   candles: Candle[];
+  /** the 200-EMA of the closed 4-hour candles: the trend line the rules read */
+  ema: { time: number; value: number }[];
   state: BtcState;
   price: number | null;
   trades: BtcTrade[];
@@ -62,9 +63,10 @@ const when = (sec: number) => new Date(sec * 1000).toLocaleString(undefined, { w
 const OUTCOME: Record<BtcTrade["outcome"], string> = { target: "target", stop: "stop", lock: "moved stop", time: "time limit", open: "open" };
 
 /**
- * The Bitcoin system's page: the 4-hour chart with the level the next trade
- * needs, what the rules are waiting for, the trades they would have taken over
- * the last weeks, and the five-year backtest. Nothing here is a sent signal.
+ * The Bitcoin system's page: the 4-hour chart with the trend line, yesterday's
+ * high and low and the level the next trade needs, what the rules are waiting
+ * for, the trades they would have taken over the last weeks, and the five-year
+ * backtest. Nothing here is a sent signal.
  */
 export default function BtcDashboard() {
   const [data, setData] = useState<Payload | null>(null);
@@ -139,11 +141,14 @@ export default function BtcDashboard() {
     const first = candles[0].time;
     return {
       trend:
-        state.dailyTrend !== 0 && state.nextLevel != null && !open
-          ? { direction: state.dailyTrend === 1 ? "long" : "short", levels: [{ label: "range", price: state.nextLevel, armed: state.nextArmed }], ready: true, candleName: "4-hour" }
+        state.trend !== 0 && state.nextLevel != null && state.nextArmed && state.nextLevelFinal && !open
+          ? { direction: state.trend === 1 ? "long" : "short", levels: [{ label: "yesterday", price: state.nextLevel, armed: true }], ready: true, candleName: "4-hour" }
           : null,
+      // what the rules read: the 200-EMA (the trend) and yesterday's high and low (the levels)
+      emas: [{ period: 200, points: data.ema.filter((p) => p.time >= first) }],
+      dayLevels: state.prevHigh != null && state.prevLow != null ? { high: state.prevHigh, low: state.prevLow } : null,
       positions: open
-        ? [{ label: "BTC BREAKOUT (simulated)", direction: open.direction, entry: open.entry, stopLoss: open.stopLoss, takeProfit: open.takeProfit, startTime: barAt(open.entryTime).time, rMultiple: data.rules.targetR }]
+        ? [{ label: "BTC DAY-BREAK (simulated)", direction: open.direction, entry: open.entry, stopLoss: open.stopLoss, takeProfit: open.takeProfit, startTime: barAt(open.entryTime).time, rMultiple: data.rules.targetR }]
         : [],
       history: data.trades
         .filter((t) => t.outcome !== "open" && t.exitTime >= first)
@@ -152,12 +157,12 @@ export default function BtcDashboard() {
     };
   }, [data, state, candles, open]);
 
-  const sell = state?.dailyTrend === -1;
+  const sell = state?.trend === -1;
   const sideLine = !state
     ? null
-    : state.dailyTrend === 0
-      ? { side: "No trades", tone: "text-amber-400", why: "the daily trend is not clear" }
-      : { side: sell ? "Sells only" : "Buys only", tone: sell ? "text-rose-400" : "text-emerald-400", why: `Bitcoin is ${sell ? "below" : "above"} its ${rules?.trendDays ?? 50}-day average, and trades are only taken with it` };
+    : state.trend === 0
+      ? { side: "No trades", tone: "text-amber-400", why: "the trend is not clear" }
+      : { side: sell ? "Sells only" : "Buys only", tone: sell ? "text-rose-400" : "text-emerald-400", why: `Bitcoin is ${sell ? "below" : "above"} its ${rules?.trendEma ?? 200}-EMA on the 4-hour chart, and trades are only taken with it` };
   const headline = !state
     ? null
     : open
@@ -217,7 +222,7 @@ export default function BtcDashboard() {
       <aside className="flex w-full shrink-0 flex-col gap-4 overflow-y-auto lg:w-80">
         <div className="rounded-lg border border-neutral-800 bg-neutral-900 p-4">
           <div className="mb-2 flex items-baseline justify-between">
-            <h2 className="text-sm font-semibold text-neutral-100">Bitcoin breakout (4-hour)</h2>
+            <h2 className="text-sm font-semibold text-neutral-100">Bitcoin day-break (4-hour)</h2>
             <span className="text-xs text-neutral-500">{state ? `${done.length} of ${state.checks.length} conditions met` : ""}</span>
           </div>
           {!state || !headline || !rules ? (
@@ -242,7 +247,7 @@ export default function BtcDashboard() {
                     SL {usd(open.stopLoss)} · TP {usd(open.takeProfit)}
                   </div>
                   <div className="mt-0.5 text-[10px] text-neutral-400">
-                    Simulated, not a sent signal. Closed at market after {rules.holdHours} hours of trading if neither is hit.
+                    Simulated, not a sent signal. At +{rules.lockAtR}R the stop moves to +{rules.lockToR}R; closed at market after {rules.holdHours} hours of trading if neither level is hit.
                   </div>
                 </div>
               )}
@@ -273,8 +278,8 @@ export default function BtcDashboard() {
               <details className="border-t border-neutral-800 pt-2 text-xs">
                 <summary className="cursor-pointer text-neutral-400 hover:text-neutral-200">How the rules work</summary>
                 <p className="mt-2 text-[11px] leading-relaxed text-neutral-500">
-                  Trend: the last daily close against its {rules.trendDays}-day average — above it only buys, below it only sells. Entry: the first 4-hour candle that closes beyond the high (buy) or low (sell) of the {rules.rangeCandles} four-hour candles before it,
-                  entered at that close. Stop: just beyond the last two 4-hour candles, between {rules.minRiskAtr} and {rules.maxRiskAtr} ATR away
+                  Trend: the 4-hour close against the {rules.trendEma}-EMA of the 4-hour chart — above it only buys, below it only sells. Entry: the first 4-hour candle of the day that closes above yesterday&apos;s high (buy) or below yesterday&apos;s low (sell),
+                  entered at that close; yesterday is the last daily candle closed (17:00 New York). Stop: just beyond the last two 4-hour candles, between {rules.minRiskAtr} and {rules.maxRiskAtr} ATR away
                   {state.minRisk != null && state.maxRisk != null ? ` (now ${usd(state.minRisk)} to ${usd(state.maxRisk)} a coin)` : ""}. Take-profit 1:{rules.targetR}; at +{rules.lockAtR}R the stop moves to +{rules.lockToR}R; closed at market after{" "}
                   {rules.holdHours} hours of trading. One trade at a time. No trade when costs (${rules.cost} a coin) are more than {rules.maxCostShare * 100}% of the risk, or when the market is closed at the 4-hour close.
                 </p>
@@ -321,13 +326,13 @@ export default function BtcDashboard() {
             </p>
             <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] leading-relaxed text-neutral-400">
               <li>
-                A small edge: {res.all.avgR.toFixed(2)}R a trade, about one trade a week. The first two years lost.
+                A small edge: {res.all.avgR.toFixed(2)}R a trade, a little over one trade a week. Almost all of it comes from buys; sells about break even.
               </li>
               <li>
-                Most wins are the moved stop (+{rules?.lockToR ?? 0.2}R); the average win is {res.averageWin.toFixed(2)}R, the average loss {Math.abs(res.averageLoss).toFixed(2)}R.
+                About four trades in ten end at the moved stop (+{rules?.lockToR ?? 0.2}R); the average win is {res.averageWin.toFixed(2)}R, the average loss {Math.abs(res.averageLoss).toFixed(2)}R.
               </li>
               <li>
-                Trades last longer than the gold scalp: half are over within {Math.round(res.medianHours)} hours, some run the full {rules?.holdHours ?? 48}.
+                Trades last far longer than the gold scalp: half are over within {Math.round(res.medianHours)} hours, some run the full {rules?.holdHours ?? 72}.
               </li>
               <li>
                 The stop was ${usd(res.stop.low)} to ${usd(res.stop.high)} a coin in the last year (${usd(res.stop.median)} in the middle). Check the spread your broker charges; ${res.cost} is assumed.
