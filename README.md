@@ -536,6 +536,49 @@ forex pairs fell to 24% to 57% on the years after.
   11.3R) — and is behind on the last month (+2.1R against +4.8R, 7 trades) and week. Shown
   both, the owner chose to replace the page's rules with it (26 November 2026).
 
+### Where the entry, the stop and the target go
+
+The owner asked whether each system enters, stops and takes profit in the right place — a stop
+not so near that a good trade is knocked out first, a target neither too far nor too short. Two
+things were measured for the gold scalp, the gold 4-hour breakout and the Bitcoin rules.
+
+**How far price goes against a trade before it works, and how far with it** (from the entry at
+the close, in ATR of the signal chart, within the time limit):
+
+| | Gold scalp | Gold 4-hour breakout | Bitcoin |
+| --- | --- | --- | --- |
+| Setups that reach +2 ATR | 52% | 45% | 51% |
+| …before that, half went against by no more than | 0.55 ATR | 0.51 ATR | 0.43 ATR |
+| …three in four by no more than | 0.99 ATR | 0.98 ATR | 0.98 ATR |
+| …nine in ten by no more than | 1.71 ATR | 1.58 ATR | 1.59 ATR |
+| A stop 1 ATR away keeps this share of them | 75% | 75% | 75% |
+| A stop 1.5 ATR away | 86% | 89% | 89% |
+| A stop 2 ATR away | 94% | 95% | 94% |
+| Where the stop is now (middle case) | 1.77 ATR | 1.96 ATR | 1.83 ATR |
+| Furthest with the trade: half reach / one in four / one in ten | 2.2 / 3.9 / 6.3 ATR | 1.7 / 3.3 / 5.0 ATR | 2.1 / 4.6 / 8.7 ATR |
+
+The three markets say the same thing: a stop under 1 ATR throws away a third of the trades that
+would have worked, and from about 2 ATR on little more is saved. The stops are where that puts
+them. A 1:3 target is some 5 ATR away and only about one trade in ten gets there within the time
+limit — which is why the profit lock, not the target, closes most winners.
+
+**Every placement, chosen on the earlier years and run on the later ones.** Six ways to enter (at
+the close; a limit order 0.25, 0.5 or 1 ATR back; a stop order 0.1 or 0.5 ATR beyond the signal
+candle) × eight stops (the rule, beyond the last swing, 0.75 to 3 ATR) × nine targets (1:1 to
+1:3, 1.5 to 6 ATR) × three locks: 1,296 combinations a system.
+
+| | Now, on the later years | The 20 best of the earlier years, on the later years |
+| --- | --- | --- |
+| Gold scalp (split a year ago) | +70.5R, 70% won | middle +73.3R; 11 of 20 ahead, most by dropping the lock (50–60% won, losing runs of 7) |
+| Gold 4-hour breakout (split five years ago) | +41.1R, 75% won | middle +13.6R; none ahead |
+| Bitcoin (split five years ago) | +33.6R, 60% won | middle +15.9R; none ahead |
+
+- **Entering at the close is the best entry on all three.** A limit order waiting for a pullback
+  gets a better price but misses the trades that run; a stop order waiting for more movement
+  enters late. Both made less on the later years.
+- **Nothing was changed.** On the scalp the only way found to make more is to drop the lock,
+  which the owner has turned down before for its losing runs.
+
 **The challenge in one week** ($50,000, +$5,000 to pass, out at −$2,000 in a day or $3,000
 under the peak), counted on the backtest's own trades from every starting day:
 
