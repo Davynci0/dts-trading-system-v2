@@ -86,12 +86,12 @@ export async function sendTrendSignal(opts: {
       `*Entry:* \`${px(opts.entry)}\` (at market)`,
       `*Stop loss:* \`${px(opts.stopLoss)}\` — ${px(risk)} away, ${opts.stopWhy}`,
       `*Take profit:* \`${px(opts.takeProfit)}\` — ${px(reward)} away (1:${opts.targetR})`,
-      `*Profit lock:* when price reaches \`${px(opts.lockTrigger)}\` (+${opts.lockAtR}R), move the stop to \`${px(opts.lockStop)}\` (+${opts.lockToR}R). You will get a message when it does.`,
+      `*Profit lock:* when price reaches \`${px(opts.lockTrigger)}\` (+${opts.lockAtR}R), move the stop to \`${px(opts.lockStop)}\` (+${opts.lockToR}R) straight away — the sooner it is moved, the more trades end in profit. A message follows as soon as the check sees the touch.`,
       `Entry: ${opts.why}`,
       `Trend: 1-hour structure ${up ? "bullish (higher highs)" : "bearish (lower lows)"}, daily ${up ? "above" : "below"} its ${opts.trendDays}-day average`,
       `Confirmations: ${opts.confirmed} of 6 — the 1-hour and 15-minute averages, +DI/−DI, the distance from the ${opts.trendDays}-day average, the daily ADX`,
       sizeLine(risk, opts.accountBalance, opts.riskPct),
-      `Close the trade at market if neither level is hit within ${opts.holdHours} hours. One trade at a time: no new signal until this one is closed. About seven in ten close in profit — most of them at the moved stop, with a small gain.`,
+      `Close the trade at market if neither level is hit within ${opts.holdHours} hours. One trade at a time: no new signal until this one is closed. About three in four close in profit when the stop is moved within a few minutes — most of them at the moved stop, with a small gain.`,
       `_Signal only — review and execute manually._`,
     ].join("\n")
   );
@@ -102,7 +102,8 @@ export async function sendStopMoved(opts: { pair: string; direction: "long" | "s
   const px = (n: number) => n.toFixed(2);
   await sendTelegramMessage(
     [
-      `🔒 *MOVE YOUR STOP: ${pairLabel(opts.pair)} ${opts.direction === "long" ? "BUY" : "SELL"}* from \`${px(opts.entry)}\``,
+      `🔒 *MOVE YOUR STOP NOW: ${pairLabel(opts.pair)} ${opts.direction === "long" ? "BUY" : "SELL"}* from \`${px(opts.entry)}\``,
+      `Price has touched the profit-lock level.`,
       `*New stop loss:* \`${px(opts.stop)}\` — ${px(Math.abs(opts.stop - opts.entry))} in profit (+${opts.lockedR}R)`,
       `Take profit stays at \`${px(opts.takeProfit)}\`.`,
       `If price is already back beyond the new stop, close the trade at market.`,

@@ -14,7 +14,9 @@ import {
   TREND_ADX_MAX,
   TREND_BREAKOUT_BARS,
   TREND_DAYS,
+  TREND_LOCK_ACT_SECONDS,
   TREND_LOCK_AT_R,
+  TREND_LOCK_DELAY_SECONDS,
   TREND_LOCK_TO_R,
   TREND_MAX_COST_SHARE,
   TREND_MAX_HOLD_BARS,
@@ -51,8 +53,8 @@ import {
   TREND_TARGET_R,
 } from "../lib/analysis/trend";
 import { tradeCost } from "../lib/analysis/instruments";
-import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES } from "../lib/backtest/trend";
-import { followTrade, LIVE_LOCK, settleSignal } from "../lib/engine/outcomes";
+import { entryTypeOf, runTrendBacktest, trendSetupWindows, TREND_ENTRY_TYPES } from "../lib/backtest/trend";
+import { followTrade, followTradeMinutes, LIVE_LOCK, settleSignal } from "../lib/engine/outcomes";
 import { lastEntryOf, scanLogKey, sendBlock, type EarlierSignal } from "../lib/engine/scanner";
 import { isLiveSignal, strategyOf, TREND_STRATEGY, type Candle } from "../lib/types";
 
@@ -647,6 +649,64 @@ console.log("\nsettlement");
   check("a trade that has not reached +0.4R keeps its first stop", near(followTrade(buy, [bar(0, 100, 103.9, 99, 103)], { lock: LIVE_LOCK }).stop, 90));
   const run = followTrade(buy, [bar(0, 100, 105, 99, 104.5), bar(1, 104.5, 131, 104, 130)], { lock: LIVE_LOCK });
   check("a locked trade that keeps going still reaches the 1:3 target", run.settlement?.outcome === "win" && run.settlement.hitPrice === 130 && near(run.settlement.r, 3));
+}
+
+// ───────────── the fast stop: a trade followed minute by minute ─────────────
+console.log("\nthe stop moved within minutes");
+{
+  const t0 = WEEK_OPEN;
+  const min = (k: number, open: number, high: number, low: number, close: number) => ({ time: t0 + k * 60, open, high, low, close });
+  const flat = (k: number) => min(k, 103, 103.5, 102.5, 103);
+  // the same buy: entry 100, stop 90, target 130; the trigger is 104 (+0.4R) and the moved stop 102 (+0.2R)
+  const buy = { direction: "long" as const, entry: 100, stop_loss: 90, take_profit: 130, firedAt: t0 * 1000 + 8000 };
+  const delay = { lock: LIVE_LOCK, delaySeconds: TREND_LOCK_DELAY_SECONDS };
+  check("the settings: one confirmation is enough, and the stop counts as moved three minutes after the touch", TREND_CONFIRMATIONS_MIN === 1 && TREND_LOCK_ACT_SECONDS === 120 && TREND_LOCK_DELAY_SECONDS === 180);
+  const touch = followTradeMinutes(buy, [min(0, 100, 101, 99.5, 101), min(1, 101, 104.2, 100.8, 103.8)], delay);
+  check("the minute price first touches +0.4R is reported, and the stop has not moved yet", touch.settlement == null && touch.touchedAt === t0 + 60 && near(touch.stop, 90));
+  // touched in minute 1; the moved stop is in force from minute 4 (180 seconds after the start of minute 1)
+  const fallBack = [min(0, 100, 101, 99.5, 101), min(1, 101, 104.2, 100.8, 103.8), min(2, 103.8, 104, 103, 103.2), min(3, 103.2, 103.4, 102.6, 103), min(4, 103, 103.1, 101.8, 101.9), min(5, 101.9, 102, 95, 95.5)];
+  const saved = followTradeMinutes(buy, fallBack, delay);
+  check("a trade that touches +0.4R and falls back closes at +0.2R once the stop has been moved — a win, not the loss it becomes on 15-minute candles", saved.settlement?.outcome === "win" && saved.settlement.hitPrice === 102 && near(saved.settlement.r, 0.2) && saved.how === "lock" && saved.settlement.hitTime === t0 + 240);
+  const quarter = followTrade(buy, [{ time: t0, open: 100, high: 104.2, low: 95, close: 95.5 }, { time: t0 + M15, open: 95.5, high: 96, low: 95, close: 95.5 }], { lock: LIVE_LOCK });
+  check("…the same price path on 15-minute candles: the stop is moved a candle late and the trade closes at a loss", quarter.settlement?.outcome === "loss" && near(quarter.settlement.r, -0.45));
+  const tooFast = followTradeMinutes(buy, [min(0, 100, 101, 99.5, 101), min(1, 101, 104.2, 100.8, 103.8), min(2, 103.8, 104, 89, 89.5)], delay);
+  check("a fall that comes before the stop could be moved still ends at the first stop", tooFast.settlement?.outcome === "loss" && tooFast.settlement.hitPrice === 90 && tooFast.how === "stop");
+  const gapped = followTradeMinutes(buy, [min(0, 100, 104.2, 99.5, 103.8), min(1, 103.8, 104, 103, 103.2), min(2, 103.2, 103.4, 101, 101.2), min(3, 101.2, 101.5, 100.5, 101)], delay);
+  check("if price is already beyond the moved stop when it comes into force, the trade closes at the open of that minute", gapped.settlement?.hitPrice === 101.2 && near(gapped.settlement.r, 0.12) && gapped.how === "lock");
+  const ran = followTradeMinutes(buy, [min(0, 100, 104.2, 99.5, 104), ...[1, 2, 3, 4].map((k) => min(k, 104, 106, 103.5, 105)), min(5, 105, 131, 104.8, 130)], delay);
+  check("a locked trade that keeps going still reaches the 1:3 target", ran.settlement?.outcome === "win" && ran.settlement.hitPrice === 130 && ran.how === "target");
+  check("a minute touching the stop and the target counts as the stop", followTradeMinutes(buy, [min(0, 100, 131, 89, 120)], delay).how === "stop");
+  // live: the stop is only moved once the message has gone out
+  const untold = followTradeMinutes(buy, fallBack, { lock: LIVE_LOCK });
+  check("live, a trade whose message has not gone out keeps its first stop, whatever price has touched", untold.touchedAt === t0 + 60 && untold.settlement == null && near(untold.stop, 90));
+  const told = followTradeMinutes(buy, fallBack, { lock: LIVE_LOCK, movedAt: t0 + 60 + TREND_LOCK_ACT_SECONDS });
+  check("live, the moved stop counts from the message plus the time to act — the same minute the backtest uses", told.settlement?.hitPrice === 102 && told.settlement.hitTime === saved.settlement?.hitTime);
+  // the clock: the close of the 20th 15-minute candle, counted on the candles that exist
+  const hours = Array.from({ length: TREND_MAX_HOLD_BARS * 15 + 30 }, (_, k) => flat(k));
+  const timed = followTradeMinutes(buy, hours, delay);
+  check("a trade that reaches neither level closes at the close of its 20th 15-minute candle", timed.settlement?.outcome === "expired" && timed.how === "time" && timed.settlement.hitTime === t0 + (TREND_MAX_HOLD_BARS - 1) * M15 && near(timed.settlement.r, 0.3));
+  const lastMinute = hours.slice(0, TREND_MAX_HOLD_BARS * 15);
+  check("…it is still open while that candle is forming, and closed once the candle has ended", followTradeMinutes(buy, lastMinute, { ...delay, now: t0 + TREND_MAX_HOLD_BARS * M15 - 20 }).settlement == null && followTradeMinutes(buy, lastMinute, { ...delay, now: t0 + TREND_MAX_HOLD_BARS * M15 }).settlement?.outcome === "expired");
+  const weekend = [...hours.slice(0, 30), ...hours.slice(30).map((c) => ({ ...c, time: c.time + 49 * 3600 }))];
+  const held = followTradeMinutes(buy, weekend, delay);
+  check("hours the market is shut do not count towards the five hours", held.settlement?.outcome === "expired" && held.settlement.hitTime === t0 + 49 * 3600 + (TREND_MAX_HOLD_BARS - 1) * M15);
+
+  // the backtest's two ways of following a trade are one rule: fed the 15-minute candles as if they were minutes, with the stop moved one candle later, the minute path gives the 15-minute result
+  const at = new Map(m15.map((c, k) => [c.time, k]));
+  const asMinutes = runTrendBacktest({ pair: "XAU_USD", m15, h1, daily, lockDelaySeconds: M15, minutes: (t) => m15.slice(at.get(t)!, at.get(t)! + TREND_MAX_HOLD_BARS + 1) });
+  const same = asMinutes.length === trades.length && asMinutes.every((t, k) => t.entryTime === trades[k].entryTime && t.outcome === trades[k].outcome && near(t.exitPrice, trades[k].exitPrice) && t.bars === trades[k].bars && near(t.rAchieved, trades[k].rAchieved));
+  check("followed through the minute path on the same candles, every backtest trade ends at the same candle, price and outcome", same, `${asMinutes.length} against ${trades.length} trades`);
+  const windows = trendSetupWindows({ pair: "XAU_USD", m15, h1, daily });
+  check(
+    "the minute candles are asked for every setup, from the open of its entry candle to the close of its 20th",
+    windows.length >= trades.length && trades.every((t) => windows.some((w) => w.entry === t.entryTime)) && windows.every((w) => { const e = at.get(w.entry)!; return w.until === m15[Math.min(e + TREND_MAX_HOLD_BARS - 1, m15.length - 1)].time + M15; }),
+    `${windows.length} setups, ${trades.length} trades`
+  );
+  // minute candles cut from the 15-minute ones (four of the fifteen minutes carry the candle's open, low, high and close): the fast stop can only add small wins and take away larger ones
+  const split = (c: Candle) => { const up = c.close >= c.open; const a = up ? c.low : c.high; const b = up ? c.high : c.low; const pts = [c.open, a, b, c.close]; return pts.map((p, q) => ({ time: c.time + q * 60 * 4, open: q === 0 ? c.open : pts[q - 1], high: Math.max(q === 0 ? c.open : pts[q - 1], p), low: Math.min(q === 0 ? c.open : pts[q - 1], p), close: p, volume: 1 })); };
+  const fast = runTrendBacktest({ pair: "XAU_USD", m15, h1, daily, minutes: (t) => m15.slice(at.get(t)!, at.get(t)! + TREND_MAX_HOLD_BARS).flatMap(split) });
+  const rate = (g: { rAchieved: number }[]) => g.filter((t) => t.rAchieved > 0).length / g.length;
+  check("on the generated market the fast stop is traded one at a time and wins at least as often", fast.length >= 100 && fast.every((t, k) => k === 0 || t.entryTime >= fast[k - 1].exitTime) && rate(fast) >= rate(trades) && fast.every((t) => t.bars <= TREND_MAX_HOLD_BARS), `${(rate(fast) * 100).toFixed(0)}% against ${(rate(trades) * 100).toFixed(0)}% won`);
 }
 
 // ───────────── what may be sent ─────────────

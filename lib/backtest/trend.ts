@@ -1,6 +1,20 @@
 import type { Candle } from "@/lib/types";
 import { tradeCost } from "@/lib/analysis/instruments";
-import { buildTrendSeries, reentryBlock, trendStateAt, TREND_MAX_HOLD_BARS, TREND_MAX_OPEN, TREND_MIN_CANDLES, type LastEntry, type TrendTrigger } from "@/lib/analysis/trend";
+import {
+  buildTrendSeries,
+  reentryBlock,
+  trendStateAt,
+  TREND_LOCK_AT_R,
+  TREND_LOCK_DELAY_SECONDS,
+  TREND_LOCK_TO_R,
+  TREND_MAX_HOLD_BARS,
+  TREND_MAX_OPEN,
+  TREND_MIN_CANDLES,
+  type LastEntry,
+  type TrendTrigger,
+} from "@/lib/analysis/trend";
+import { followTradeMinutes } from "@/lib/engine/outcomes";
+import type { MinuteWindow } from "@/lib/backtest/minutes";
 
 /**
  * Backtest of the system (lib/analysis/trend.ts) with the scanner's own
@@ -10,6 +24,13 @@ import { buildTrendSeries, reentryBlock, trendStateAt, TREND_MAX_HOLD_BARS, TREN
  * tested first, then the take-profit, then the profit lock moves the stop for
  * the candles that follow, then the time limit. One trade at a time
  * (TREND_MAX_OPEN) and no duplicate entry of the last one (reentryBlock).
+ *
+ * With `minutes` — the 1-minute candles of a trade's life — the trade is
+ * followed minute by minute instead (followTradeMinutes): the same order of
+ * tests, but the stop is moved TREND_LOCK_DELAY_SECONDS after price first
+ * touched the lock trigger, as the one-minute check and a hand on the order
+ * do it, not at the next 15-minute candle. A trade without minute candles is
+ * followed on the 15-minute candles as before.
  */
 export interface TrendTrade {
   direction: "long" | "short";
@@ -46,8 +67,12 @@ export function runTrendBacktest(opts: {
   /** only trades entered at or after this time are kept (epoch seconds) */
   from?: number;
   costMultiplier?: number;
+  /** the 1-minute candles of the trade entered at this time (the open of its entry candle), when they are known */
+  minutes?: (entryTime: number) => Candle[] | undefined;
+  /** seconds from the minute of the touch to the moved stop; TREND_LOCK_DELAY_SECONDS unless a test says otherwise */
+  lockDelaySeconds?: number;
 }): TrendTrade[] {
-  const { pair, m15, from = 0, costMultiplier = 1 } = opts;
+  const { pair, m15, from = 0, costMultiplier = 1, lockDelaySeconds = TREND_LOCK_DELAY_SECONDS } = opts;
   const s = buildTrendSeries(opts);
   const cost = tradeCost(pair) * Math.max(0, costMultiplier);
   const trades: TrendTrade[] = [];
@@ -75,7 +100,25 @@ export function runTrendBacktest(opts: {
     let exitPrice = NaN;
     let outcome: TrendTrade["outcome"] = "open";
     let k = e;
-    for (; k < s.n; k++) {
+    /** when the trade closed, when that is known to the minute */
+    let closedAt: number | null = null;
+    const minute = opts.minutes?.(m15[e].time);
+    if (minute?.length) {
+      const followed = followTradeMinutes(
+        { direction: setup.direction, entry: setup.entry, stop_loss: setup.stopLoss, take_profit: setup.takeProfit, firedAt: m15[e].time * 1000 + 1 },
+        minute,
+        { lock: { at: TREND_LOCK_AT_R, to: TREND_LOCK_TO_R }, delaySeconds: lockDelaySeconds, now: m15[s.n - 1].time + 900 }
+      );
+      const res = followed.settlement;
+      if (res && followed.how) {
+        exitPrice = res.hitPrice!;
+        outcome = followed.how;
+        // the 15-minute candle the trade closed in
+        while (k + 1 < s.n && m15[k + 1].time <= res.hitTime!) k++;
+        closedAt = followed.how === "time" ? m15[k].time + 900 : res.hitTime! + 60;
+      } else k = s.n;
+    }
+    for (; !minute?.length && k < s.n; k++) {
       const c = m15[k];
       if (dir === 1 ? c.low <= stop : c.high >= stop) {
         // a gap through the stop fills at the open, not at the stop
@@ -104,7 +147,7 @@ export function runTrendBacktest(opts: {
     trades.push({
       direction: setup.direction,
       entryTime: m15[e].time,
-      exitTime: m15[k].time + 900,
+      exitTime: closedAt ?? m15[k].time + 900,
       entry: setup.entry,
       stopLoss: setup.stopLoss,
       takeProfit: setup.takeProfit,
@@ -120,4 +163,22 @@ export function runTrendBacktest(opts: {
     if (open.length >= TREND_MAX_OPEN) busyUntil = Math.min(...open.map((t) => t.exitIndex));
   }
   return trades;
+}
+
+/**
+ * The life of every setup of the rules, whether or not a trade was open when
+ * it came: which of them become trades depends on how the trades before them
+ * ended, so the minute candles are fetched for all of them first.
+ */
+export function trendSetupWindows(opts: { pair: string; m15: Candle[]; h1: Candle[]; daily: Candle[]; from?: number }): MinuteWindow[] {
+  const { pair, m15, from = 0 } = opts;
+  const s = buildTrendSeries(opts);
+  const out: MinuteWindow[] = [];
+  for (let i = TREND_MIN_CANDLES; i < s.n - 1; i++) {
+    if (m15[i + 1].time < from) continue;
+    if (s.dailyTrend[i] === 0 || s.dailyTrend[i] !== s.h1Trend[i]) continue;
+    if (!trendStateAt(s, i, pair, m15[i + 1].open).setup) continue;
+    out.push({ entry: m15[i + 1].time, until: m15[Math.min(i + TREND_MAX_HOLD_BARS, s.n - 1)].time + 900 });
+  }
+  return out;
 }

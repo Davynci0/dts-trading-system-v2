@@ -3,15 +3,17 @@
 Signal-only gold (XAU/USD) trading system: a **market-structure scalp on the 15-minute chart**
 ("the trend scalp"). One trade at a time, a **1:3** target with a **profit lock**, every trade
 closed within **five hours**, with **support and resistance zones** deciding where not to enter
-and where the stop goes, **supply and demand zones** it will not trade into, and no duplicate
-entries, and **five of six trend confirmations** before any trade. About **seven trades in ten
-close in profit**, at about **one trade a trading day**: 505 trades in five years, 72% won,
-+144.5R, worst drawdown 5.7R, three or more losses in a row eight times and four in a row three
-times ([backtest](#backtesting)).
+and where the stop goes, **supply and demand zones** it will not trade into, no duplicate
+entries, and at least **one of six trend confirmations** before any trade. The profit lock is
+moved **within minutes**: a one-minute check says when. About **three trades in four close in
+profit**, at about **one and a half trades a trading day** over the last year: 783 trades in five
+years, 76% won, +170.1R, worst drawdown 5.1R, three losses in a row seven times and never four
+([backtest](#backtesting)).
 
 The scanner reads the chart every 15 minutes; when a candle completes an entry, the trade —
-entry, stop loss and take profit — is sent to Telegram. The user reviews each signal and
-executes manually — the system never places trades.
+entry, stop loss and take profit — is sent to Telegram. While a trade is open, a one-minute
+check follows it and sends "move your stop now" as soon as price touches +0.4R. The user
+reviews each signal and executes manually — the system never places trades.
 
 A second, separate system for **Bitcoin** is shown on its own page and does not send signals
 ([Bitcoin](#bitcoin-btcusd-a-separate-system-shown-on-its-own-page)).
@@ -39,7 +41,8 @@ database needs the files in `supabase/migrations/` that it has not had yet).
 | --- | --- |
 | Daily | the bias: last closed day above its 50-day average → buys only; below → sells only |
 | 1-hour | the trend: its market structure (bullish or bearish) has to agree with the daily bias |
-| 15-minute (`EXECUTION_TIMEFRAME`) | the chart, the entries, the stop and the candles the open trade is followed on |
+| 15-minute (`EXECUTION_TIMEFRAME`) | the chart, the entries and the stop |
+| 1-minute | the open trade is followed on it, so the stop is moved within minutes of +0.4R |
 
 A higher-timeframe candle is only read once it has closed.
 
@@ -71,7 +74,7 @@ lapses after ten days.
 | 3 | Trend not exhausted | the 1-hour ADX under 40 |
 | 4 | A real daily trend | price at least 1% beyond the 50-day average, on the trend's side |
 | 5 | Not the London morning or the US data hour | on a candle that closes between 07:00 and 14:00 UTC only the pullback entry is traded |
-| 5b | Five of six trend confirmations | on the 1-hour chart price, the 20-EMA and the 50-EMA lined up · the 1-hour 50-EMA beyond the 200-EMA with price beyond it · 1-hour +DI/−DI on the trade's side · on the 15-minute chart price and the 20-, 50- and 200-EMA lined up · price 2% or more beyond the 50-day average · the daily ADX at 25 or more ([why](#what-the-losing-trades-had-in-common)) |
+| 5b | One of six trend confirmations | on the 1-hour chart price, the 20-EMA and the 50-EMA lined up · the 1-hour 50-EMA beyond the 200-EMA with price beyond it · 1-hour +DI/−DI on the trade's side · on the 15-minute chart price and the 20-, 50- and 200-EMA lined up · price 2% or more beyond the 50-day average · the daily ADX at 25 or more. Five were needed until 27 November 2026 ([why five](#what-the-losing-trades-had-in-common), [why one](#one-confirmation-instead-of-five-27-november-2026)) |
 | 6 | The right half of the range | a buy only in the upper half of the last 24 hours' range, a sell only in the lower half |
 | 7 | Costs | spread + slippage at most 6% of the trade's risk |
 | 8 | Not through a zone | no trade on a candle that has just closed through a support/resistance zone — price usually comes back to test it |
@@ -88,7 +91,7 @@ Conditions 3 to 6 and 9 come from the losing trades, 8 from the support and resi
 | Entry | at market, at the close of the 15-minute candle |
 | Stop loss | just beyond the support (buy) or resistance (sell) zone behind the entry, plus 0.2 ATR, when there is one and that puts the stop between 0.75 and 2 ATR away. Otherwise just beyond the high of the last two candles for a sell (their low for a buy) — the small pullback the trade is leaving behind — plus 0.2 ATR, never closer than 0.75 ATR or further than 2 ATR. The distance is 1R. A pullback entry's stop goes 0.2 ATR beyond the pullback's own low (buy) or high (sell), never closer than 0.75 ATR; a pullback whose stop would be more than 2 ATR away is not traded |
 | Take profit | 3 × the risk (1:3) |
-| Profit lock | once price has gone 0.4R the trade's way, the stop is moved to 0.2R in profit. It applies from the next 15-minute candle; a second Telegram message says when to move it |
+| Profit lock | once price has gone 0.4R the trade's way, the stop is moved to 0.2R in profit, straight away: a one-minute check sends the Telegram message as soon as price touches the level. The backtest counts the moved stop from three minutes after the minute of the touch — one minute for the message, two to move it ([why](#the-stop-moved-within-minutes-27-november-2026)) |
 | Time limit | closed at market at the close of the 20th candle — five hours |
 | Positions | **one trade at a time**; no new signal until it has closed |
 | No duplicates | within 60 minutes of the last trade's entry, no new trade on the same side within 1R of that entry's price |
@@ -285,6 +288,61 @@ cannot avoid them altogether.
 These were chosen by looking at the same five years they are measured on, so this is the best
 case, not a forecast — the test that counts is live trading.
 
+### One confirmation instead of five (27 November 2026)
+
+Five of six held back about a third of the trades without choosing better ones. The number was
+changed on its own, over five years (the rules of 26 November, trades followed on 15-minute
+candles):
+
+| Confirmations needed | Trades | Won | Total | Longest losing run |
+| --- | --- | --- | --- | --- |
+| 0 of 6 | 771 | 70% | +189.5R | 4 |
+| **1 of 6 (now)** | **766** | **70%** | **+190.0R** | **4** |
+| 3 of 6 | 708 | 71% | +174.4R | 4 |
+| 5 of 6 (until 27 November) | 515 | 72% | +146.0R | 4 |
+| 6 of 6 | 287 | 71% | +81.2R | 5 |
+
+As a [live backtest](#live-backtesting-27-november-2026) — the number chosen every three months
+from the two to four years before — the past chose 0 or 1 almost every time, and the result was
++174R to +190R. One is kept so a trade still has something on the higher timeframes behind it.
+The cost, on its own: a worst drawdown of 6.4R instead of 5.7R, and runs of three losses 14 times
+instead of 8 — which the faster stop below takes back.
+
+### The stop moved within minutes (27 November 2026)
+
+The owner asked for the losing trades to be studied and turned into winners. Over five years the
+rules of 26 November had 148 losing trades: 100 full stops, 37 small losses after the stop had
+been moved, and 11 at the five-hour limit.
+
+- **The full stops are fast and never get going:** 41% are stopped within half an hour, and 95%
+  never reach +0.4R. No reading at the entry tells them apart — 18 were checked, and none lost in
+  both halves of the five years.
+- **The 37 small losses had reached +0.4R**, and fell back before the next 15-minute check moved
+  the stop.
+- **What did not help:** a wider, tighter or differently placed stop; waiting for a better price
+  with a limit order; closing a trade that is not moving; a pause after a loss; entering again
+  after a stop; a trailing stop. Each made less, and none was chosen when the choice was made
+  from the past only.
+
+**What did:** following every trade on 1-minute candles and moving the stop within minutes of the
+touch. A one-minute check (`/api/watch`) sends the message; the backtest counts the moved stop
+from three minutes after the minute of the touch. With one confirmation (the rules now), five
+years:
+
+| Stop moved | Trades | Won | Total | Costs doubled | Worst drawdown | Longest losing run | Three losses in a row |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| At the next 15-minute check (before) | 766 | 70.5% | +190.0R | +163.0R | 6.4R | 4 | 14 times |
+| 1 minute after the touch | 787 | 78.4% | +164.2R | +136.4R | 5.6R | 3 | 5 times |
+| **3 minutes after (the backtest)** | **783** | **75.9%** | **+170.1R** | **+142.4R** | **5.1R** | **3** | **7 times** |
+| 5 minutes after | 780 | 73.3% | +165.9R | +138.3R | 5.2R | 3 | 9 times |
+| 10 minutes after | 771 | 69.3% | +182.6R | +155.3R | 6.1R | 4 | 16 times |
+
+**It trades profit for win rate.** A trade that touches +0.4R, dips back to +0.2R and then runs
+to the target is now closed at +0.2R: 14 fewer full targets in five years and about 20R less than
+moving the stop at the 15-minute check — for three trades in four won instead of seven in ten,
+and no run of four losses in five years. It only works if the stop is moved: ten minutes late,
+it is back where it was.
+
 ## Four ways gold is usually traded, tested
 
 On 25 November 2026 the four methods gold traders most often describe were each looked up, built
@@ -367,7 +425,7 @@ five-hour exit. What works on Bitcoin is slower: **a 4-hour breakout with the tr
 2021 and the result run once on the five years after ([Each market tuned on its own](#each-market-tuned-on-its-own-then-examined-on-years-it-had-never-seen)).
 On Bitcoin the rules below came out of that and held on the unseen years. On 26 November 2026
 the owner chose them over the first rules (a close beyond the last 20 candles' range, with the
-50-day trend), which they beat on ten, five, three and one year and on three months, and trail
+50-day trend), which they beat on five, three and one year and on three months, and trail
 on the last month and week.
 
 | | |
@@ -385,7 +443,6 @@ BTC/USD, to 2026-11-26, in R, after $45 a coin (the spread the data provider quo
 
 | | Trades | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
 | --- | --- | --- | --- | --- | --- | --- |
-| 10 years | 416 | 62% | +55.2R | +43.8R | 8.8R | 4 |
 | **5 years** | **319** | **60%** | **+33.6R** | **+25.0R** | **8.8R** | **4** |
 | **Last 3 years** | 230 | 60% | +32.5R | +27.2R | 8.8R | 4 |
 | 1 year | 75 | 60% | +15.4R | | 6.4R | 4 |
@@ -393,17 +450,16 @@ BTC/USD, to 2026-11-26, in R, after $45 a coin (the spread the data provider quo
 | 1 month | 7 | 86% | +2.1R | | 1.0R | 1 |
 | 1 week | 1 | | +0.2R | | | |
 
-By calendar year: 2017 −2.6R (7 trades) · 2018 +1.8R (8) · 2019 −2.1R (5) · 2020 +6.1R (11) ·
-2021 +20.8R (75) · 2022 +2.0R (58) · 2023 −1.2R (26) · 2024 +16.4R (84) · 2025 −4.0R (73) ·
-2026 +17.9R (69). Over five years 116 trades ended at the first stop, 131 at the moved stop, 33
+By calendar year: 2022 +2.0R (58 trades) · 2023 −1.2R (26) · 2024 +16.4R (84) · 2025 −4.0R (73)
+· 2026 +17.9R (69). Over five years 116 trades ended at the first stop, 131 at the moved stop, 33
 at the target and 39 at the time limit; the average win is 0.83R, the average loss 0.97R.
 
 **Read this before trusting it.**
 
-- **The edge is small** — 0.11R a trade against 0.29R for gold, a little over one trade a week.
-  Four of the ten years lost, 2025 among them.
+- **The edge is small** — 0.11R a trade against 0.22R for gold, a little over one trade a week.
+  Two of the last five calendar years lost, 2025 among them.
 - **It is the buys.** Over five years buys made +33.5R (157 trades, 62% won) and sells +0.2R
-  (162 trades, 57% won); over ten, +54.3R and +0.9R. Bitcoin rose over the period.
+  (162 trades, 57% won). Bitcoin rose over the period.
 - **Losing runs.** Three or more losses in a row twelve times in five years, four in a row three
   times. The win rate is 60%, lower than the first rules' 68%: the lock is later (+0.6R).
 - **It is not a scalp.** Half the trades last a day (23 hours), some the full 72: this departs
@@ -413,7 +469,6 @@ at the target and 39 at the time limit; the average win is 0.83R, the average lo
   unseen ones; this is the one that did better there and on the recent windows.
 - **The data has no weekends** (the provider's Bitcoin market is closed then) and the spread is
   the provider's; a broker's spread, its weekend trading and its overnight charges will differ.
-  Before 2021 a $45 cost left few trades (31 in 2017–2020).
 - **The stop is wide in dollars:** $938 to $3,281 a coin in the last twelve months, $1,855 in
   the middle.
 
@@ -422,37 +477,31 @@ npx tsx --env-file=.env.local scripts/backtest-btc.ts          # five years, wit
 npx tsx --env-file=.env.local scripts/backtest-btc.ts --save   # …and written to lib/backtest/btc-results.json for the page
 ```
 
-## Fifteen years, and 49 kinds of strategy (26 November 2026)
+## 49 kinds of strategy (26 November 2026)
 
 The owner asked for every well-known strategy to be tested on both markets, on long and short
 windows, and for nothing to go live unless it beats what is live. **Nothing did, so the rules did
-not change.** What the test showed is below, the bad parts included.
+not change.** What the test showed is below, the bad parts included. (Since 27 November 2026
+results are given on five years and shorter only — SOUL.md.)
 
 **The gold scalp on every window** (to 2026-11-26, $0.35 an ounce):
 
 | | Trades | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
 | --- | --- | --- | --- | --- | --- | --- |
-| 15 years | 651 | 69% | +143.7R | +119.4R | 13.4R | 5 |
-| 10 years | 599 | 70% | +140.9R | +119.1R | 9.6R | 5 |
 | 5 years | 515 | 72% | +146.0R | +128.1R | 5.7R | 4 |
 | 3 months | 55 | 71% | +12.5R | +10.8R | 4.1R | 4 |
 | 1 month | 42 | 67% | +5.6R | +4.4R | 4.1R | 4 |
 | 1 week | 17 | 71% | +4.7R | +4.2R | 2.0R | 2 |
 
-By calendar year: 2011 +6.8R (48 trades) · 2012 0.0R (15) · 2013 −4.5R (22) · 2014–2019 −0.6R
-(16 trades in six years) · 2020 +1.0R (58) · 2021 −5.1R (20) · 2022 +11.4R (39) · 2023 −0.5R (24)
-· 2024 +19.5R (54) · 2025 +55.8R (164) · 2026 +59.8R (234).
+By calendar year: 2022 +11.4R (39 trades) · 2023 −0.5R (24) · 2024 +19.5R (54) · 2025 +55.8R
+(164) · 2026 +59.8R (234).
 
-- **Almost all of the profit is from 2024 to 2026.** In the thirteen years before, the rules made
-  +8.5R from 242 trades — nothing. They were tuned on the last five years; the years before
-  that are the only ones they had never seen, and there they show no edge.
-- **When gold is quiet the system does not trade** (the cost limit): 16 trades from 2014 to 2019.
-  It sat out; it did not lose.
+- **Almost all of the profit is from 2024 to 2026**, and the rules were tuned on these same five
+  years. Before them they show no edge.
+- **When gold is quiet the system does not trade** (the cost limit). It sits out; it does not lose.
 - **The same is true of nearly every 15-minute method.** Of the 49 strategy types tested, almost
-  all made money on gold in the last five-year block. On the 15-minute chart only the New York
-  opening-range breakout did in all three with enough trades, and it wins 40% of the time with
-  losing runs of 9 to 12. The last two years have been a strong trend with large candles, and
-  following it paid.
+  all made money on gold in the last five years. The last two years have been a strong trend
+  with large candles, and following it paid.
 
 **What was tested.** 49 strategy types — breaks of structure, pullbacks, fair value gaps, order
 blocks, liquidity sweeps, Donchian, Keltner and Bollinger breakouts, session and opening-range
@@ -461,109 +510,49 @@ Supertrend, Parabolic SAR, Heikin-Ashi, EMA, VWAP, pivot and Fibonacci pullbacks
 RSI(2), Bollinger and stochastic reversion, range fades, engulfing, pin bar, inside bar, NR7,
 three-bar reversal, double top/bottom — on the 15-minute, 1-hour and 4-hour charts, with five
 trend filters and up to six exits (1:2 and 1:3, with and without the lock, 5 to 48 hours):
-3,695 variants a market, each on the whole history with costs and costs doubled.
+3,695 variants a market, each with costs and costs doubled.
 
-**What held on gold in every five-year block:** only slow breakouts with the daily trend on the
-4-hour chart (Donchian, Keltner, Bollinger squeeze, Supertrend) — the Bitcoin page's first rule. That
-rule had been chosen on Bitcoin; on gold it had never been fitted to anything:
+**What held on gold:** only slow breakouts with the daily trend on the 4-hour chart (Donchian,
+Keltner, Bollinger squeeze, Supertrend) — the Bitcoin page's first rule, which on gold had never
+been fitted to anything. The 4-hour Donchian 20 with the daily trend, 1:2, the lock and 48 hours
+made +41.1R over five years from 313 trades, about one a week, with a losing year (2023, about
+−6R). It does not replace the scalp. **Taken one trade at a time with the scalp it does not beat
+the scalp alone** on the recent windows (one year +60.6R against +68.4R, one week +1.7R against
++4.7R): its long trades keep scalps out. **Run side by side — one scalp and one breakout open at
+once — the two together beat the scalp on every window** (5 years +184R, one year +93R, three
+months +19.4R, one month +12.0R, one week +6.9R). That breaks the one-trade-at-a-time rule, so it
+was not deployed.
 
-| 4-hour Donchian 20, daily trend, 1:2, lock, 48 h | Trades | Win rate | Total | Costs doubled | Worst drawdown |
-| --- | --- | --- | --- | --- | --- |
-| 15 years | 810 | 73% | +67.4R | +46.4R | 10.2R |
-| by five-year block | 253 / 244 / 313 | | +10.6R / +15.7R / +41.1R | | |
+**A 1:2 target** (asked for by the owner) with the profit lock makes less than 1:3: +112R
+against +146R on gold over five years (the rules of 26 November), and less on Bitcoin too.
+Without the lock the scalp makes more (+216R with 1:3) but wins only 54% of the time, with losing
+runs of seven.
 
-About one trade a week and +4.5R a year, with losing years (2015 about −7R, 2023 about −6R). It does not
-replace the scalp (five years: +41R against +143R). **Taken one trade at a time with the scalp
-it does not beat the scalp alone** on the recent windows (one year +60.6R against +68.4R, one
-week +1.7R against +4.7R): its long trades keep scalps out. **Run side by side — one scalp and
-one breakout open at once — the two together beat the scalp on every window** (15 years +208R,
-5 years +184R, one year +93R, three months +19.4R, one month +12.0R, one week +6.9R; worst
-drawdown 16.8R against 13.4R). That breaks the one-trade-at-a-time rule, so it was not deployed.
-
-**A 1:2 target** (asked for by the owner) with the profit lock makes less than 1:3: +103R
-against +141R on gold over 15 years, and less on Bitcoin too. Without the lock 1:2 makes more
-(+161R) but wins only 51% of the time, with 13 runs of four or more losses and a 21R drawdown.
-
-**Bitcoin** (data from 2016; there is no 15-year window): the page's rules on 10 years made
-+19.8R from 290 trades (68% won, drawdown 11.3R) — 2017 to 2023 lost 6.5R between them, 2024 to
-2026 made +26R. At $45 a coin the early years could hardly trade. With costs as the same share
-of price as today (5.5 per 10,000) the same rules made +116R from 597 trades over the ten years
-and lost in one year of eleven, so the pattern is old — but nobody could have traded it at that
-cost then. One variant in 3,695 beat the page's rules on every window, which is what chance
-gives. Nothing was changed.
+**Bitcoin:** the page's first rules made +22.8R over five years from 215 trades (68% won). One
+variant in 3,695 beat them on every window, which is what chance gives. Nothing was changed.
 
 ### Each market tuned on its own, then examined on years it had never seen
 
 The owner asked for a strategy and settings found separately for each market — gold, Bitcoin and
-eight forex pairs — by tuning, studying the losing trades and tuning again. Done the only way
-that says anything about live trading: everything was chosen on **the years up to November 2021**
-(TRAIN) and the finished rules were then run once on **the five years after** (TEST).
+eight forex pairs (26 November 2026). Each market's best strategies and settings were chosen on
+the years before the five-year window, their losing trades studied and filtered, and the
+finished rules run once on the five years. **Of the 60 tuned systems, all 60 had made money where
+they were chosen; on the five years 43 failed, 11 were near zero, 5 held at a lower level and 1
+held.** Tuning a market until its backtest looks best mostly finds what happened to work in
+those years; win rates of 67% to 85% on the forex pairs fell to 24% to 57%.
 
-For each market: all 49 strategy types on three charts with every trend filter and exit → the
-six best types → each one's stop limits, target (1:1.5, 1:2, 1:3), profit lock, time limit and
-trend filter tuned (about 1,500 settings a type) → its losing trades studied, and a condition
-that lost in both halves of TRAIN filtered out, up to three times. Every choice was made with
-costs doubled.
+- **Forex:** nothing to trade — in a second, wider round as well (eight more strategy types that
+  belong to currencies, the daily chart, and a raw-spread cost about half the standard one).
+  **No forex system was added.**
+- **Gold:** the 4-hour breakout again.
+- **Bitcoin:** 4-hour breakouts held. At the real $45 a coin, the first 4-hour close beyond
+  yesterday's high or low with the 200-EMA beat the page's first rules on five years (+33.6R
+  against +22.8R), one year (+15.4R against +8.7R) and three months (+9.5R against +5.7R), with a
+  smaller drawdown — and was behind on the last month (+2.1R against +4.8R, 7 trades) and week.
+  Shown both, the owner chose to replace the page's rules with it (26 November 2026).
 
-| Market | Best on TRAIN | TRAIN | TEST (the five years after) |
-| --- | --- | --- | --- |
-| Gold | 4-hour Keltner breakout, daily trend, 1:3, lock | +57.5R, 323 trades, 78% won | **+27.5R, 198 trades, 76% won** (first half −8R, second +36R) |
-| Bitcoin¹ | 4-hour Donchian 20, 4-hour 200-EMA, 1:3, lock +0.6R | +135.9R, 345 trades, 66% | **+47.3R, 264 trades, 64%** |
-| Bitcoin¹ | 4-hour close beyond yesterday's high/low, 200-EMA | +173.2R, 437 trades, 68% | **+45.9R, 387 trades, 60%** |
-| EUR/USD | 1-hour RSI(14), trend filters | +19.4R, 60 trades, 67% | −3.4R, 24 trades — all six failed |
-| GBP/USD | 1-hour RSI(2) | +36.4R, 63 trades, 56% | +1.6R, 20 trades — four of six failed |
-| USD/JPY | 1-hour Ichimoku cross | +78.9R, 382 trades, 46% | +9.7R, 366 trades, negative with costs doubled — all six failed |
-| AUD/USD | 1-hour change of character | +29.6R, 169 trades, 81% | −7.5R, 42 trades — all six failed |
-| USD/CAD | 15-minute DI cross | +20.6R, 71 trades, 85% | +0.1R, 17 trades — three failed, three near zero |
-| USD/CHF | 4-hour EMA 20/50 cross | +31.0R, 141 trades, 72% | +9.6R, 70 trades, 67% — the other five failed |
-| NZD/USD | 4-hour range fade | +25.0R, 74 trades, 76% | −2.3R, 31 trades — five of six failed |
-| GBP/JPY | 4-hour change of character | +42.8R, 221 trades, 73% | −0.4R, 114 trades — four of six failed |
-
-¹ Bitcoin with costs as a share of price (5.5 per 10,000), so the early years can trade at all.
-
-**Of the 60 tuned systems, all 60 made money on TRAIN (+4.5R to +179R). On TEST 43 failed, 11
-were near zero, 5 held at a lower level and 1 held.** Tuning a market until its backtest looks
-best mostly finds what happened to work in those years. The win rates of 67% to 85% found on the
-forex pairs fell to 24% to 57% on the years after.
-
-- **Forex:** nothing to trade. Two small survivors out of 48 (USD/CHF +9.6R and GBP/JPY +9.4R
-  in five years) is what chance leaves.
-- **Gold:** the 4-hour breakout again — the same finding as the test above, now from rules
-  chosen without the last five years.
-- **Bitcoin:** 4-hour breakouts held. At the real $45 a coin the second one beats the page's
-  rules on ten years (+55.2R against +19.8R), five (+33.6R against +22.8R), one year (+15.4R
-  against +8.7R) and three months (+9.5R against +5.7R), with a smaller drawdown (8.8R against
-  11.3R) — and is behind on the last month (+2.1R against +4.8R, 7 trades) and week. Shown
-  both, the owner chose to replace the page's rules with it (26 November 2026).
-
-**A second, wider round on the eight forex pairs** (asked for by the owner, 26 November 2026):
-eight more strategy types that belong to currencies — reversals after the Tokyo, Frankfurt and
-London fixes and the New York 10:00 cut, a fade of the Asian move at the London open, a fade of a
-day that has travelled its average range, a fade of a price stretched from its average, last
-week's high and low (break and sweep), round numbers — the daily chart added to the other three,
-each pair's best two and three strategies traded together, and everything run twice: at the
-standard cost and at a raw-spread cost about half of it.
-
-| Pair | Best on TRAIN → on TEST | Best survivor, picked with hindsight (TEST) |
-| --- | --- | --- |
-| EUR/USD | 1-hour RSI(14): +19.4R → −3.4R | daily NR7 breakout: +7.8R, 72 trades |
-| GBP/USD | daily MACD cross: +25.6R → +1.6R | daily NR7 breakout with the trend: +11.8R, 53 trades |
-| USD/JPY | 15-minute New York breakout: +42.9R → −12.3R | none |
-| AUD/USD | daily inside-bar breakout: +34.7R → −5.1R | none |
-| USD/CAD | 15-minute DI cross: +20.6R → +0.1R | daily EMA 9/21 cross: +4.7R, 32 trades |
-| USD/CHF | 1-hour round-number bounce: +28.9R → −1.2R | 4-hour EMA 20/50 cross: +9.6R, 70 trades |
-| NZD/USD | daily change of character: +28.2R → −8.4R | none |
-| GBP/JPY | 4-hour change of character: +42.8R → −0.4R | daily Parabolic SAR: +13.0R, 82 trades |
-
-Of 48 tuned systems at the standard cost 33 failed on TEST, 10 were near zero and 5 held; at the
-lower cost 32, 12 and 4. Taking each pair's best strategy on TRAIN — the only choice that could
-have been made at the time — the eight together lost 29R on TEST (10R at the lower cost), and
-each pair's best three together lost 41R. The survivors in the right-hand column were picked
-knowing how they ended, add up to about +47R in five years from some 310 trades, and are slow
-(daily and 4-hour charts, trades held for days). One result depends entirely on the cost: a
-15-minute break of last week's high or low on EUR/USD made +33.5R on TEST at a 0.8-pip cost and
-−1.5R at 1.5 pips, and lost on the 1-hour and 4-hour charts and on the other pairs. **No forex
-system was added.**
+The owner then asked for every test to be run as if live (27 November 2026) — see
+[Live backtesting](#live-backtesting-27-november-2026).
 
 ### Where the entry, the stop and the target go
 
@@ -624,11 +613,40 @@ under the peak), counted on the backtest's own trades from every starting day:
 The last twelve months are the best the system has had. From any starting day before late 2023
 it almost never passed at any size. A week of +5R or more happened 4 times in the last 54.
 
+## Live backtesting (27 November 2026)
+
+Since 27 November 2026 every result is a **live backtest**: whatever is chosen — a strategy, a
+setting, a filter — is chosen only from the candles before the day it is traded, and chosen
+again every three months from the three years before. Nothing from after the day of a choice is
+used for it. Results are given on **five years, one year, three months, two weeks and one week**
+(SOUL.md).
+
+- **All ten markets** (gold, Bitcoin and the eight forex pairs), each re-choosing its own strategy
+  every three months from 61 strategy types: +66.9R over five years from 756 trades on one
+  account, 60% won, worst drawdown 10R — about +13R a year. Studying the losing trades inside
+  the test (switching off conditions that had lost) made it worse every time. Not deployed.
+- **Gold and Bitcoin, trading only when three strategies agree:** gold +45.7R over five years
+  (about one trade a week), Bitcoin +20.7R, most of it in the last twelve months. Not deployed.
+- **The two strategies of a gold trading guide** (LearnPriceAction): the 1-hour 50/200-EMA
+  pullback made about +45R over five years at a 34–39% win rate with losing runs of up to 17;
+  the 15-minute Fibonacci 50% scalp about broke even. Not deployed.
+- **The gold scalp:** two changes held and went live on 27 November 2026 — [one confirmation
+  instead of five](#one-confirmation-instead-of-five-27-november-2026) and [the stop moved within
+  minutes](#the-stop-moved-within-minutes-27-november-2026).
+
 ## Scanning
 
 - A scheduler (cron-job.org) calls `/api/scan` every 15 minutes with
-  `Authorization: Bearer $CRON_SECRET`. Each scan first settles the open trade on 15-minute
-  candles, then reads the last closed 15-minute candle.
+  `Authorization: Bearer $CRON_SECRET`. Each scan first settles the open trade, then reads the
+  last closed 15-minute candle.
+- **The one-minute check.** While a trade is open, `/api/watch` follows it on 1-minute candles:
+  as soon as price touches +0.4R the "move your stop now" message goes to Telegram, and a trade
+  that reaches its stop, target or time limit is closed in the feed. The trade is scored with the
+  moved stop from two minutes after that message, so the feed shows what moving it then gives.
+  It needs a second scheduler job, **every minute**, with the same bearer secret; with no trade
+  open it only reads the database. Without that job the check runs with each scan, and the
+  message can come up to 15 minutes late. A trade whose stop was moved before 27 November 2026
+  is followed on 15-minute candles, as it was.
 - **A missed scan.** Each scan also reads the candle before the newest one. A signal that candle
   gave and that was never sent is recovered while it is under 20 minutes old, marked ⏰ LATE: the
   original stop, the entry at the current price, the target re-worked to 1:3 from there — unless
@@ -666,43 +684,49 @@ it almost never passed at any size. A week of +5R or more happened 4 times in th
 ```bash
 npx tsx --env-file=.env.local scripts/backtest.ts            # five years, with the last three next to them
 npx tsx --env-file=.env.local scripts/backtest.ts --save     # …and stored for the Backtests page
+npx tsx --env-file=.env.local scripts/backtest.ts --15min    # trades followed on 15-minute candles, the stop moved at the next candle (as before 27 November 2026)
 ```
 
-The window of the stored runs is always the same — **five years, with the last three shown next to them** (longer and shorter windows are in [Fifteen years, and forty kinds of strategy](#fifteen-years-and-49-kinds-of-strategy-26-november-2026)) — and
+The window of the stored runs is always the same — **five years, with the last three shown next to them** (the shorter windows are below it) — and
 so are the costs and the measures. The backtest uses the scanner's own detection: a signal on a
 closed 15-minute candle fills at the next candle's open, the full spread + slippage ($0.35 per
-ounce) is charged once, and the open trade is followed candle by candle — stop first, then the
-target, then the time limit. Candles are cached in `.cache/`. The `/backtests` page shows the
+ounce) is charged once, and the open trade is followed on 1-minute candles (fetched for every
+setup and cached) — stop first, then the target, then the profit lock, then the time limit —
+with the moved stop in force from three minutes after the minute price touched +0.4R. Candles are cached in `.cache/`. The `/backtests` page shows the
 stored runs of the live rules and its **Quick run** button backtests the last six months on
 the server.
 
-XAU/USD, to 2026-11-24, in R (1R = the risk of one trade):
+XAU/USD, to 2026-11-27, in R (1R = the risk of one trade):
 
 | | Trades | A week | Win rate | Total | Costs doubled | Worst drawdown | Longest losing run |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| **5 years** | **505** | **1.9** | **72%** | **+144.5R** | **+126.8R** | **5.7R** | **4** |
-| **Last 3 years** | 445 | 2.8 | 71% | +135.5R | +120.8R | 5.7R | 4 |
+| **5 years** | **783** | **3.0** | **76%** | **+170.1R** | **+142.4R** | **5.1R** | **3** |
+| Last 3 years | 700 | 4.5 | 76% | +159.2R | +135.7R | 5.1R | 3 |
+| 1 year | 387 | 7.4 | 77% | +96.4R | +85.8R | 5.1R | 3 |
+| 3 months | 91 | 7.0 | 74% | +17.7R | +14.9R | 4.4R | 3 |
+| 2 weeks | 31 | 15.5 | 77% | +10.1R | +9.1R | 2.3R | 2 |
+| 1 week | 10 | 10.0 | 70% | +1.7R | +1.5R | 1.7R | 1 |
 
 | Year from | Trades | A week | Win rate | Total |
 | --- | --- | --- | --- | --- |
-| Nov 2021 | 35 | 0.7 | 77% | +9.9R |
-| Nov 2022 | 25 | 0.5 | 72% | −0.9R |
-| Nov 2023 | 55 | 1.1 | 73% | +21.0R |
-| Nov 2024 | 133 | 2.6 | 73% | +49.5R |
-| Nov 2025 | 257 | 4.9 | 70% | +65.0R |
+| Nov 2021 | 47 | 0.9 | 79% | +8.1R |
+| Nov 2022 | 36 | 0.7 | 72% | +2.9R |
+| Nov 2023 | 78 | 1.5 | 74% | +23.3R |
+| Nov 2024 | 235 | 4.5 | 74% | +39.5R |
+| Nov 2025 | 387 | 7.4 | 77% | +96.4R |
 
-- **How trades end:** 96 at the first stop (a full loss), 301 at the moved stop (a small gain,
-  or a little less after a gap), 50 at the 1:3 target, 58 at the five-hour limit.
-- **What a win and a loss are worth:** the average win is 0.71R, the average loss 0.79R.
-- **How long they last:** half are over within an hour. None is held longer than five.
-- **By entry:** momentum candles +57.5R (202 trades, 71% won), pullbacks +37.0R (81, 75%),
-  breakouts on a momentum candle +27.4R (72, 82%), breaks of structure +22.6R (150, 66%). Buys
-  +100.5R (73%), sells +44.1R (70%).
-- **The last twelve months:** 257 trades — 1.0 a trading day; 70% closed in profit. The last six
-  months 136 trades, +34.6R; the last month 32 trades, +4.1R.
-- **Losing runs and bad days:** three or more losses in a row eight times, three of them four
-  long — one of those in the last month of the test. Four days lost 2R or more; the worst lost
-  3.1R.
+- **How trades end:** 149 at the first stop (a full loss), 494 at the moved stop (a small gain,
+  or a little less when price was already through it), 55 at the 1:3 target, 85 at the five-hour
+  limit.
+- **What a win and a loss are worth:** the average win is 0.57R, the average loss 0.88R.
+- **How long they last:** half are over within 45 minutes. None is held longer than five hours.
+- **By entry:** momentum candles +62.3R (312 trades, 77% won), pullbacks +45.4R (132, 83%),
+  breaks of structure +33.4R (240, 70%), breakouts on a momentum candle +29.0R (99, 79%). Buys
+  +106.0R (541 trades, 76%), sells +64.1R (242, 76%).
+- **Weeks:** 178 of the 261 weeks had trades; in 119 of them 70% or more won, and 125 ended in
+  profit.
+- **Losing runs and bad days:** three losses in a row seven times in five years, never four. Five
+  days lost 2R or more; the worst lost 2.4R.
 
 **Read this before trusting it.**
 
@@ -711,32 +735,31 @@ XAU/USD, to 2026-11-24, in R (1R = the risk of one trade):
   the trade record book the target itself. It happened once on gold and twice on Bitcoin in the
   whole history, and understates the result by about 2R and 0.4R.
 - **A high win rate is not a high profit.** Most wins are the moved stop at +0.2R; the losses
-  are mostly a full 1R. It averages 0.29R a trade — 0.25R with costs doubled — and the same
-  entries without the lock make about twice as much. Three or more losses in a row have happened
-  eight times in the five years, and four in a row three times.
-- **The lock needs you to act.** The backtest moves the stop from the 15-minute candle after
-  price reaches +0.4R. Live, that is a second Telegram message; if the stop is moved late, or
-  not at all, the result is not the one in the table.
+  are mostly a full 1R. It averages 0.22R a trade — 0.18R with costs doubled. Without the lock
+  the same entries make more, but only about half of them win.
+- **The lock needs you to act, within minutes.** The table counts the moved stop from three
+  minutes after price touched +0.4R. That needs the one-minute check running (a scheduler job
+  every minute) and the stop moved within two minutes of the message. Moved ten minutes late,
+  the win rate falls back to about 69%; not moved at all, the result is not the one in the table.
 - **It trades often only while gold is this active.** The cost limit keeps it out when
-  15-minute candles are small: about one trade in two weeks in the first two years, five a week
-  in the last. If gold goes quiet, it will too.
-- **Most of the evidence is two years old or less.** 390 of the 505 trades, and four-fifths of
-  the profit, are from the last two years. The filters and the lock were chosen by looking
-  at these same five years, so expect less than the table.
+  15-minute candles are small: about one trade a week in the first two years, seven a week in
+  the last. If gold goes quiet, it will too.
+- **Most of the evidence is two years old or less.** 622 of the 783 trades, and four-fifths of
+  the profit, are from the last two years. The filters and the lock were chosen by looking at
+  these same five years, so expect less than the table.
 - **Check the spread you actually pay.** Everything above assumes $0.35 an ounce a trade. At
-  twice that the five-year result falls from +145R to +127R.
+  twice that the five-year result falls from +170R to +142R.
 - **Size.** In the last twelve months the stop was $6 to $74 an ounce, $14 in the middle. The
   usual minimum trade (0.01 lot = 1 oz) then risks about 3% of a $500 account per trade — six
-  times the 0.5% the system assumes. At 0.5% a trade, $500 became $1,021 over the five years with
-  a worst drop of 3%; at 1% it became $2,052 with a worst drop of 6%. The Telegram message
-  gives the size for both.
+  times the 0.5% the system assumes. At 0.5% a trade, $500 became $1,158 over the five years;
+  at 1% it became $2,627. The Telegram message gives the size for both.
 
 ## Verification
 
 ```bash
 npx tsx --tsconfig tsconfig.json --env-file=.env.local scripts/audit-live.ts   # the LIVE site against the provider's raw candles and a calculation written from scratch: candles, swings and labels, breaks of structure, moving averages, day levels, entry and stop levels, the Bitcoin page (51 checks)
 npx tsx --tsconfig tsconfig.json scripts/verify-btc.ts     # the Bitcoin system: the 4-hour chart, yesterday's levels, the trend line, entry, stop, exits, one trade at a time, and that the page reads what the backtest reads
-npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, filters, support/resistance, supply/demand, oversized candles, entries (the pullback among them), stop, profit lock, backtest, settlement, send rules, duplicates
+npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, filters, support/resistance, supply/demand, oversized candles, entries (the pullback among them), stop, profit lock, the stop moved within minutes, backtest, settlement, send rules, duplicates
 ```
 
 ## Routes
@@ -750,6 +773,7 @@ npx tsx --tsconfig tsconfig.json scripts/verify-trend.ts   # swings, structure, 
 - `/api/analysis` — everything the chart draws, from the same code the scanner runs (`&to=<ISO time>` for a past moment)
 - `/api/btc` — everything the Bitcoin page shows, from the code its backtest runs
 - `/api/scan` — run a scan (GET = scheduled, POST = dashboard)
+- `/api/watch` — the one-minute check of the open trade (GET, scheduled every minute)
 - `/api/signals` — the signal feed
 - `/api/backtest/run`, `/api/backtests/latest` — backtesting
 - `/api/ask-ai` — a vision model's read of the chart, on request

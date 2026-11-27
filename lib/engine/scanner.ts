@@ -39,8 +39,8 @@ export interface ScanSummary {
 }
 
 /** Share of the account one trade risks. One trade is open at a time; the
- *  five-year backtest's worst drawdown was 6 times the risk of one trade and
- *  its longest losing run 4 trades, so the default is half a percent.
+ *  five-year backtest's worst drawdown was about 5 times the risk of one trade
+ *  and its longest losing run 3 trades, so the default is half a percent.
  *  Override with RISK_PCT (e.g. 0.01 for one percent); the older name
  *  FIB_RISK_PCT is still read. */
 export const RISK_PCT = (() => {
@@ -329,7 +329,7 @@ export async function runScan(opts: {
           take_profit: setup.takeProfit,
           r_multiple: TREND_TARGET_R,
           sl_basis: stopWhy,
-          tp_basis: `${TREND_TARGET_R} × the risk; the stop moves to +${TREND_LOCK_TO_R}R once price reaches +${TREND_LOCK_AT_R}R (${setup.lockTrigger.toFixed(2)}); closed at market after ${holdHours} hours if neither is hit`,
+          tp_basis: `${TREND_TARGET_R} × the risk; the stop moves to +${TREND_LOCK_TO_R}R as soon as price touches +${TREND_LOCK_AT_R}R (${setup.lockTrigger.toFixed(2)}); closed at market after ${holdHours} hours if neither is hit`,
           confidence: state.checks.filter((x) => x.met).length,
           confirmations: { ...Object.fromEntries(state.checks.map((x) => [x.label, x.met])), [`Entry: ${setup.trigger}`]: true },
         },

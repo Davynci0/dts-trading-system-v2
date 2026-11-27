@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { fetchCandles } from "@/lib/oanda";
 import { computeMetrics } from "@/lib/backtest/metrics";
-import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES, type TrendTrade } from "@/lib/backtest/trend";
+import { entryTypeOf, runTrendBacktest, trendSetupWindows, TREND_ENTRY_TYPES, type TrendTrade } from "@/lib/backtest/trend";
+import { fetchMinuteWindows } from "@/lib/backtest/minutes";
 import { createAdminClient } from "@/lib/supabase/admin";
 import { isAuthorizedMutation } from "@/lib/apiGuard";
 import { EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
@@ -51,7 +52,9 @@ export async function POST(req: NextRequest) {
       fetchCandles({ instrument: pair, granularity: "D", count: 400 }),
     ]);
     if (m15.length < 1000) throw new Error("not enough candles returned");
-    trades = runTrendBacktest({ pair, m15, h1, daily, from: from / 1000 });
+    // followed minute by minute, like the five-year run: the minute candles of every setup's life
+    const minutes = await fetchMinuteWindows(pair, trendSetupWindows({ pair, m15, h1, daily, from: from / 1000 }));
+    trades = runTrendBacktest({ pair, m15, h1, daily, from: from / 1000, minutes: (t) => minutes.get(t) });
   } catch (e) {
     return NextResponse.json({ error: (e as Error).message }, { status: 502 });
   }

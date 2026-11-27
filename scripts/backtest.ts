@@ -10,17 +10,24 @@ import { WebSocket } from "ws";
  * The window is always the same: FIVE YEARS, with the LAST THREE printed next
  * to it, and a second pass that doubles the costs (see SOUL.md).
  *
- * Usage: npx tsx --env-file=.env.local scripts/backtest.ts [--save]
+ * Each trade is followed MINUTE BY MINUTE, with the stop moved a few minutes
+ * after price touches the profit-lock trigger (TREND_LOCK_DELAY_SECONDS) — the
+ * way the one-minute check and a hand on the order do it.
+ *
+ * Usage: npx tsx --env-file=.env.local scripts/backtest.ts [--save] [--15min]
  *   --save     store the run in Supabase so it appears on the Backtests page
+ *   --15min    follow trades on 15-minute candles, the stop moved at the next candle (how it was before 27 November 2026)
  * The first run of a day downloads the candles; later runs read the cache.
  */
 import { computeMetrics, type ScopedMetrics } from "@/lib/backtest/metrics";
-import { entryTypeOf, runTrendBacktest, TREND_ENTRY_TYPES, type TrendTrade } from "@/lib/backtest/trend";
+import { entryTypeOf, runTrendBacktest, trendSetupWindows, TREND_ENTRY_TYPES, type TrendTrade } from "@/lib/backtest/trend";
 import {
   TREND_ADX_MAX,
   TREND_BREAKOUT_BARS,
   TREND_DAYS,
+  TREND_CONFIRMATIONS_MIN,
   TREND_LOCK_AT_R,
+  TREND_LOCK_DELAY_SECONDS,
   TREND_LOCK_TO_R,
   TREND_MAX_COST_SHARE,
   TREND_MAX_HOLD_BARS,
@@ -35,9 +42,10 @@ import { EXECUTION_TIMEFRAME } from "@/lib/analysis/execution";
 import { ENGINE_VERSION } from "@/lib/engine/version";
 import { createAdminClient } from "@/lib/supabase/admin";
 import type { Candle } from "@/lib/types";
-import { BACKTEST_YEARS, loadPairData, RECENT_YEARS, windowEnd } from "./research-data";
+import { BACKTEST_YEARS, loadMinuteCandles, loadPairData, RECENT_YEARS, windowEnd } from "./research-data";
 
 const SAVE = process.argv.slice(2).some((a) => a.startsWith("--save"));
+const COARSE = process.argv.slice(2).includes("--15min");
 const PAIR = "XAU_USD";
 
 const END = windowEnd() / 1000;
@@ -102,7 +110,7 @@ async function save(trades: T[]): Promise<void> {
       range_end: new Date(END * 1000).toISOString(),
       pairs: [PAIR],
       timeframes: [EXECUTION_TIMEFRAME],
-      notes: `${BACKTEST_YEARS} years · market-structure scalp, 1:${TREND_TARGET_R} with a profit lock, one trade at a time · XAU/USD`,
+      notes: `${BACKTEST_YEARS} years · market-structure scalp, 1:${TREND_TARGET_R} with a profit lock moved within ${TREND_LOCK_DELAY_SECONDS / 60} minutes, one trade at a time · XAU/USD`,
       config: {
         engine: ENGINE_VERSION,
         years: BACKTEST_YEARS,
@@ -116,6 +124,8 @@ async function save(trades: T[]): Promise<void> {
           riskAtr: [TREND_MIN_RISK_ATR, TREND_MAX_RISK_ATR],
           targetR: TREND_TARGET_R,
           lock: [TREND_LOCK_AT_R, TREND_LOCK_TO_R],
+          lockDelaySeconds: TREND_LOCK_DELAY_SECONDS,
+          confirmationsMin: TREND_CONFIRMATIONS_MIN,
           adxMax: TREND_ADX_MAX,
           maxHoldBars: TREND_MAX_HOLD_BARS,
           maxOpen: TREND_MAX_OPEN,
@@ -136,12 +146,16 @@ async function save(trades: T[]): Promise<void> {
 
 async function main() {
   const data = await loadPairData(PAIR);
-  const run = (costMultiplier: number) =>
-    runTrendBacktest({ pair: PAIR, m15: data.m15 as Candle[], h1: data.h1 as Candle[], daily: data.daily as Candle[], from: START, costMultiplier });
+  const candles = { pair: PAIR, m15: data.m15 as Candle[], h1: data.h1 as Candle[], daily: data.daily as Candle[], from: START };
+  // the minute candles of every setup's life: which setups become trades depends on how the trades before them ended
+  const minutes = COARSE ? null : await loadMinuteCandles(PAIR, trendSetupWindows(candles));
+  if (SAVE && COARSE) throw new Error("--save stores the run the site shows: it cannot be combined with --15min");
+  const run = (costMultiplier: number) => runTrendBacktest({ ...candles, costMultiplier, minutes: minutes ? (t) => minutes.get(t) : undefined });
   const base = run(1);
   const stressed = run(2);
 
-  console.log(`\nMarket-structure scalp on ${EXECUTION_TIMEFRAME} candles, 1:${TREND_TARGET_R} target, one trade at a time, ${BACKTEST_YEARS} years to ${new Date(END * 1000).toISOString().slice(0, 10)}, R multiples after full spread + slippage`);
+  console.log(COARSE ? "\nTrades followed on 15-minute candles, the stop moved at the next candle (--15min)." : `\nTrades followed minute by minute (${minutes!.size} setups), the stop moved ${TREND_LOCK_DELAY_SECONDS / 60} minutes after price touches +${TREND_LOCK_AT_R}R.`);
+  console.log(`Market-structure scalp on ${EXECUTION_TIMEFRAME} candles, 1:${TREND_TARGET_R} target, one trade at a time, ${BACKTEST_YEARS} years to ${new Date(END * 1000).toISOString().slice(0, 10)}, R multiples after full spread + slippage`);
   console.log(line(`  ${BACKTEST_YEARS} YEARS`, base));
   console.log(line("  …costs doubled", stressed));
   console.log(line(`  LAST ${RECENT_YEARS} YEARS`, base.filter(between(RECENT, END)), RECENT, END));
@@ -163,10 +177,12 @@ async function main() {
   for (const type of TREND_ENTRY_TYPES) console.log(line(`  ${type}`, base.filter((t) => entryTypeOf(t) === type)));
   console.log(line("  buys", base.filter((t) => t.direction === "long")));
   console.log(line("  sells", base.filter((t) => t.direction === "short")));
-  console.log("\nrecent windows (trades entered inside the window)");
-  for (const [name, days] of [["1 year", 365], ["6 months", 182], ["3 months", 91], ["1 month", 30], ["1 week", 7]] as const) {
+  // the owner's windows (SOUL.md): five years above, then one year, three months, two weeks and one week
+  console.log("\nthe other windows (trades entered inside the window)");
+  for (const [name, days] of [["1 year", 365], ["3 months", 91], ["2 weeks", 14], ["1 week", 7]] as const) {
     const g = base.filter((t) => t.entryTime >= END - days * 86400);
     console.log(`${line(`  ${name}`, g, END - days * 86400, END)}  still open ${g.filter((t) => t.outcome === "open").length}`);
+    console.log(line("  …costs doubled", stressed.filter((t) => t.entryTime >= END - days * 86400), END - days * 86400, END));
   }
   if (SAVE) await save(base);
 }

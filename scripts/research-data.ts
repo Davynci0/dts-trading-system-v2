@@ -5,6 +5,7 @@
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { fetchCandles } from "@/lib/oanda";
+import { fetchMinuteWindows, type MinuteWindow } from "@/lib/backtest/minutes";
 import type { Candle } from "@/lib/types";
 
 export const DAY_MS = 86_400_000;
@@ -56,6 +57,24 @@ export async function loadPairData(pair: string, warmupDays: number = WARMUP_DAY
   mkdirSync(CACHE_DIR, { recursive: true });
   writeFileSync(file, JSON.stringify(data));
   return data;
+}
+
+/**
+ * The 1-minute candles of each setup's life, cached under .cache/candles by the
+ * open of the entry candle. A window that had not ended two days before the
+ * cache was last written may be incomplete in it, so recent ones are read again.
+ */
+export async function loadMinuteCandles(pair: string, windows: MinuteWindow[]): Promise<Map<number, Candle[]>> {
+  const file = `${CACHE_DIR}/${pair}-m1-setups.json`;
+  const stored: Record<string, number[][]> = existsSync(file) ? JSON.parse(readFileSync(file, "utf8")) : {};
+  const recent = Date.now() / 1000 - 2 * 86400;
+  const missing = windows.filter((w) => !stored[w.entry] || w.until >= recent);
+  if (missing.length) {
+    for (const [entry, candles] of await fetchMinuteWindows(pair, missing)) stored[entry] = candles.map((c) => [c.time, c.open, c.high, c.low, c.close]);
+    mkdirSync(CACHE_DIR, { recursive: true });
+    writeFileSync(file, JSON.stringify(stored));
+  }
+  return new Map(windows.map((w) => [w.entry, (stored[w.entry] ?? []).map(([time, open, high, low, close]) => ({ time, open, high, low, close, volume: 0 }))]));
 }
 
 /** Candles of `seconds` length built from shorter ones (OANDA aligns 30-minute and 1-hour candles to the clock, so these match its own). */

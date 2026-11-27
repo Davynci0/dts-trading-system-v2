@@ -43,7 +43,10 @@ import { tradeCost } from "./instruments";
  *  - THE PROFIT LOCK: once price has gone 0.4R the trade's way, the stop is
  *    moved to 0.2R in profit. Half of all trades end there with a small gain
  *    instead of coming back to the stop; the ones that keep going still have
- *    the 1:3 target.
+ *    the 1:3 target. The move is asked for WITHIN A MINUTE of the touch (a
+ *    one-minute check sends the message), not at the next 15-minute scan: a
+ *    trade that touches +0.4R and falls straight back then ends as a small
+ *    win instead of a loss (see TREND_LOCK_DELAY_SECONDS).
  *  - NO TRADE when the spread and slippage would be more than 6% of the risk.
  *  - SUPPORT AND RESISTANCE: zones where at least three 1-hour swing highs or
  *    lows of the last 30 days sit within 0.15 of a day's average range. They
@@ -69,12 +72,13 @@ import { tradeCost } from "./instruments";
  *    is the one entry that works then, and is taken), an entry in the
  *    wrong half of the last 24 hours' range, and a price within 1% of the
  *    50-day average (no real daily trend).
- *  - SIX CONFIRMATIONS, OF WHICH FIVE ARE NEEDED — what the trades that made
- *    money had in common, in both halves of the test: on the 1-hour chart
- *    price, the 20-EMA and the 50-EMA lined up; the 50-EMA beyond the 200-EMA
- *    with price beyond it; +DI/−DI on the trade's side; on the 15-minute
- *    chart price and the 20-, 50- and 200-EMA lined up; price 2% or more
- *    beyond the 50-day average; the daily ADX at 25 or more.
+ *  - SIX CONFIRMATIONS, OF WHICH ONE IS NEEDED: on the 1-hour chart price, the
+ *    20-EMA and the 50-EMA lined up; the 50-EMA beyond the 200-EMA with price
+ *    beyond it; +DI/−DI on the trade's side; on the 15-minute chart price and
+ *    the 20-, 50- and 200-EMA lined up; price 2% or more beyond the 50-day
+ *    average; the daily ADX at 25 or more. Five were needed until 27 November
+ *    2026; that held back about a third of the trades without choosing better
+ *    ones (see TREND_CONFIRMATIONS_MIN).
  *
  * Tested on five years of gold (scripts/backtest.ts); see the README for what
  * was tried and what the numbers are.
@@ -102,12 +106,35 @@ export const TREND_MAX_HOLD_BARS = 20;
 /** Profit lock: once price has gone this many R the trade's way, the stop is moved to this many R in profit. */
 export const TREND_LOCK_AT_R = 0.4;
 export const TREND_LOCK_TO_R = 0.2;
+/**
+ * How fast the stop is moved. A one-minute check sends the "move your stop"
+ * message as soon as the trigger has been touched, and the stop is then moved
+ * by hand: the moved stop counts from TREND_LOCK_ACT_SECONDS after the message
+ * (live), which the backtest takes as TREND_LOCK_DELAY_SECONDS after the start
+ * of the minute in which price first touched the trigger — up to a minute for
+ * the message, two more to act. Followed minute by minute over five years (27
+ * November 2026), moving the stop within a minute of the touch instead of at
+ * the next 15-minute check turned 36 small losses and 5 full stops into small
+ * wins (71% → 79% won, runs of three losses 8 → 2) and cost 14 of the 51 full
+ * targets (+144R → +120R): a faster hand means more winners and fewer runners.
+ */
+export const TREND_LOCK_ACT_SECONDS = 120;
+export const TREND_LOCK_DELAY_SECONDS = 60 + TREND_LOCK_ACT_SECONDS;
 /** No new trade once the 1-hour ADX is at or above this — the move is exhausted. */
 export const TREND_ADX_MAX = 40;
 /** No new trade on a candle that closes in these UTC hours, from the first up to the second: the London morning and the hour of the US data releases. */
 export const TREND_QUIET_HOURS_UTC = [7, 14] as const;
-/** The trend confirmations a trade needs, out of the six (see trendStateAt). */
-export const TREND_CONFIRMATIONS_MIN = 5;
+/**
+ * The trend confirmations a trade needs, out of the six (see trendStateAt).
+ * Five until 27 November 2026. The whole curve was then measured (five years,
+ * one rule changed): 0 or 1 of 6 +190R, 3 of 6 +174R, 5 of 6 +146R, 6 of 6
+ * +81R, with 70-72% of trades won and the same longest losing run throughout —
+ * the rule was holding trades back without choosing better ones. Chosen from
+ * the past only (the number picked each quarter from the two to four years
+ * before it), the answer was 0 or 1 almost every time and made +174R to +190R.
+ * One is kept so a trade still has something on the higher timeframes behind it.
+ */
+export const TREND_CONFIRMATIONS_MIN = 1;
 /** Confirmation: price at least this far beyond the 50-day average, in percent. */
 export const TREND_FAR_PCT = 2;
 /** Confirmation: the daily ADX at or above this. */
